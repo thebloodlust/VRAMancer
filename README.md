@@ -69,3 +69,55 @@ N’hésitez pas à ouvrir une issue ou une pull request pour proposer une amél
 ## 📜 Licence
 
 MIT — libre d’utilisation, modification et distribution.
+
+
+
+### 🔧 Options Premium Disponibles
+
+Voici les modules et fonctionnalités avancées disponibles en option pour les utilisateurs premium :
+
+#### 🚀 Protocoles & Réseaux
+
+- **VRAMancer Link**  
+  Protocole réseau ultra-léger et optimisé pour les échanges inter-machines (GPU ↔ GPU, machine ↔ machine), utilisant les ports SFP+ ou Ethernet sans passer par TCP/IP. Idéal pour les architectures cloud distribuées ou les clusters IA.
+
+- **ZeroStack TCP-Free Mode**  
+  Permet de bypasser complètement la stack TCP/IP pour des communications directes entre nœuds, réduisant la latence et augmentant le débit.
+
+- **Cloud Fabric Custom**  
+  Stack réseau propriétaire pour cloud distribué, avec gestion intelligente des flux, priorisation des tâches IA, et isolation des workloads.
+
+- **SFP Protocol Override**  
+  Firmware dédié pour cartes réseau et switchs compatibles, permettant de remplacer le protocole Ethernet par un protocole custom (VRAMancer Link).
+
+#### 🧠 Mémoire & GPU
+
+- **VRAMancer Memory Sync**  
+  Synchronisation directe des blocs mémoire entre machines sans copie intermédiaire, via le protocole VRAMancer.
+
+- **GPU Direct Dispatch**  
+  Envoi direct de tâches entre GPU distants via le protocole custom, sans passer par le CPU ou le système d’exploitation.
+
+- **Cloud Bridge**  
+  Extension de la mémoire GPU via le réseau, permettant à plusieurs machines de partager dynamiquement leur VRAM.
+
+#### ⚙️ Modules Optionnels
+
+- **VRAMancer Lite**  
+  Version allégée du protocole pour les machines modestes ou configurations edge.
+
+- **Auto Tuner**  
+  Optimisation dynamique des paramètres système et réseau en fonction de la charge et des performances observées.
+
+- **Hugging Face Bridge**  
+  Compatibilité native avec les modèles Hugging Face, incluant le chargement, l’inférence et la conversion.
+
+- **Scheduler Intelligent**  
+  Système de préchargement adaptatif des modèles et des données, basé sur les patterns d’usage et les prédictions de charge.
+
+#### 🔐 Sécurité & Monitoring
+
+- **Secure Fabric Layer**  
+  Chiffrement natif des échanges sur le protocole VRAMancer, avec authentification par clé publique et gestion des sessions.
+
+
