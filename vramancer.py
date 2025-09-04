@@ -1,28 +1,41 @@
 import time
-import importlib.util
 import os
+import importlib.util
 from utils.gpu_utils import get_available_gpus
 from dashboard.dashboard_tk import launch_dashboard as launch_tk
+from dashboard.dashboard_web import launch_web_dashboard
 from dashboard.dashboard_cli import launch_cli_dashboard
 
 def show_intro():
-    modules = [
+    logo = r"""
+██╗   ██╗██████╗ ██████╗  █████╗ ███╗   ███╗ █████╗ ███╗   ██╗ ██████╗███████╗
+██║   ██║██╔══██╗██╔══██╗██╔══██╗████╗ ████║██╔══██╗████╗  ██║██╔════╝██╔════╝
+██║   ██║██████╔╝██████╔╝███████║██╔████╔██║███████║██╔██╗ ██║██║     █████╗  
+██║   ██║██╔═══╝ ██╔═══╝ ██╔══██║██║╚██╔╝██║██╔══██║██║╚██╗██║██║     ██╔══╝  
+╚██████╔╝██║     ██║     ██║  ██║██║ ╚═╝ ██║██║  ██║██║ ╚████║╚██████╗███████╗
+ ╚═════╝ ╚═╝     ╚═╝     ╚═╝  ╚═╝╚═╝     ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝ ╚═════╝╚══════╝
+    """
+    steps = [
         "🧠 Initialisation du noyau neuronal...",
         "🔍 Scan des interfaces GPU...",
-        "📦 Chargement des modules : numpy, torch, tkinter...",
+        "📦 Chargement des modules : numpy, torch, tkinter, flask...",
         "🧬 Synchronisation des threads...",
         "🔐 Vérification des accès VRAM...",
         "🛰️ Connexion au bus PCIe...",
         "🧯 Détection des fuites de VRAM... (aucune)",
         "🧭 Calibration des curseurs thermiques...",
-        "🧪 Analyse spectrale des shaders...",
         "✅ Système prêt."
     ]
 
     os.system("cls" if os.name == "nt" else "clear")
-    for line in modules:
+    for line in steps:
         print(line)
         time.sleep(0.3)
+
+    print("\n🎨 Chargement du logo...\n")
+    for line in logo.splitlines():
+        print(line)
+        time.sleep(0.02)
 
     print("\n🔍 Détection des GPU...\n")
     gpus = get_available_gpus()
@@ -41,6 +54,9 @@ def auto_mode():
     if has_module("tkinter"):
         print("🎨 Tkinter détecté. Lancement du dashboard...")
         launch_tk()
+    elif has_module("flask"):
+        print("🌐 Flask détecté. Lancement du dashboard web...")
+        launch_web_dashboard()
     else:
         print("🖥️ Aucun module graphique détecté. Passage en mode terminal.")
         launch_cli_dashboard()
@@ -49,8 +65,9 @@ def main():
     show_intro()
     print("🎛️ Choisissez un mode d’affichage :")
     print("1️⃣  Mode Terminal")
-    print("2️⃣  Mode Tkinter")
-    print("3️⃣  Mode Auto\n")
+    print("2️⃣  Mode Tkinter (graphique)")
+    print("3️⃣  Mode Web (Flask)")
+    print("4️⃣  Mode Auto\n")
 
     choice = input("👉 Entrez le numéro du mode : ").strip()
 
@@ -59,6 +76,8 @@ def main():
     elif choice == "2":
         launch_tk()
     elif choice == "3":
+        launch_web_dashboard()
+    elif choice == "4":
         auto_mode()
     else:
         print("❌ Choix invalide. Veuillez relancer le programme.")
