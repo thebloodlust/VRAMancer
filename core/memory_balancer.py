@@ -1,71 +1,72 @@
+import uuid
 import random
-from core.scheduler import Scheduler
-from core.logger import Logger
-from core.monitor import GPUMonitor
-from core.compressor import Compressor
+
+class MemoryBlock:
+    def __init__(self, size_mb, gpu_id, status="free"):
+        self.id = str(uuid.uuid4())
+        self.size_mb = size_mb
+        self.gpu_id = gpu_id
+        self.status = status  # "free", "reserved", "allocated"
+
+    def reserve(self):
+        if self.status == "free":
+            self.status = "reserved"
+        else:
+            raise RuntimeError(f"Block {self.id} is not free.")
+
+    def allocate(self):
+        if self.status == "reserved":
+            self.status = "allocated"
+        else:
+            raise RuntimeError(f"Block {self.id} must be reserved before allocation.")
+
+    def release(self):
+        self.status = "free"
+
+    def __repr__(self):
+        return f"<Block {self.id[:8]} | {self.size_mb}MB | GPU {self.gpu_id} | {self.status}>"
 
 class MemoryBalancer:
-    def __init__(self, scheduler: Scheduler, logger: Logger = None, verbose=True):
-        self.scheduler = scheduler
-        self.logger = logger or Logger()
-        self.monitor = GPUMonitor()
-        self.compressor = Compressor()
+    def __init__(self, gpu_profiles, verbose=True):
         self.verbose = verbose
+        self.blocks = []
+        for gpu in gpu_profiles:
+            for _ in range(gpu["block_count"]):
+                self.blocks.append(MemoryBlock(size_mb=gpu["block_size_mb"], gpu_id=gpu["id"]))
 
-    def balance(self, active_layers):
-        """
-        Rééquilibre la mémoire entre GPU selon usage et priorité.
-        """
-        for layer in active_layers:
-            gpu_id = self.scheduler.get_gpu_for_layer(layer["name"])
-            usage = self.monitor.vram_usage(gpu_id)
-
-            if usage > 90:
+    def allocate_for_layer(self, layer):
+        for block in self.blocks:
+            if block.status == "free" and block.size_mb >= layer["size_mb"]:
+                block.reserve()
+                block.allocate()
                 if self.verbose:
-                    print(f"🔥 GPU {gpu_id} saturé ({usage}%) → rééquilibrage {layer['name']}")
+                    print(f"✅ Layer {layer['name']} → Block {block.id[:8]} (GPU {block.gpu_id})")
+                return block
+        if self.verbose:
+            print(f"❌ Aucun bloc disponible pour {layer['name']} ({layer['size_mb']}MB)")
+        return None
 
-                # Compression d'urgence
-                new_size = self.compressor.compress(layer["name"], layer["size_mb"])
-                self.scheduler.update_block_size(layer["name"], new_size)
-                self.logger.log(f"Layer {layer['name']} compressé à {new_size}MB")
+    def visualize_blocks(self):
+        print("📊 État des blocs mémoire :")
+        for block in self.blocks:
+            print(block)
 
-                # Swap vers GPU secondaire
-                alt_gpu = self.scheduler.find_alternate_gpu(exclude=gpu_id)
-                if alt_gpu is not None:
-                    self.scheduler.migrate_layer(layer["name"], alt_gpu)
-                    self.logger.log(f"Layer {layer['name']} migré vers GPU {alt_gpu}")
-                    if self.verbose:
-                        print(f"🔄 Swap {layer['name']} → GPU {alt_gpu}")
+    def simulate_overload(self, threshold=90):
+        print("⚠️ Simulation de surcharge VRAM...")
+        usage_by_gpu = {}
+        for block in self.blocks:
+            usage_by_gpu.setdefault(block.gpu_id, 0)
+            if block.status == "allocated":
+                usage_by_gpu[block.gpu_id] += block.size_mb
 
-    def emergency_release(self):
-        """
-        Libère les couches les moins prioritaires en cas de crash imminent.
-        """
-        overloaded = self.monitor.detect_overload()
-        if overloaded:
-            low_priority = self.scheduler.get_low_priority_layers(overloaded)
-            for layer_name in low_priority:
-                self.scheduler.release_layer(layer_name)
-                self.logger.log(f"Layer {layer_name} libéré en urgence (GPU {overloaded})")
-                if self.verbose:
-                    print(f"💣 Libération d’urgence : {layer_name} (GPU {overloaded})")
+        for gpu_id, usage in usage_by_gpu.items():
+            total = sum(b.size_mb for b in self.blocks if b.gpu_id == gpu_id)
+            percent = round((usage / total) * 100, 2)
+            print(f"GPU {gpu_id} → {percent}% utilisé")
+            if percent > threshold:
+                print(f"🔥 GPU {gpu_id} dépasse le seuil ({percent}%)")
 
-    def predictive_balance(self, history):
-        """
-        Utilise l’historique pour anticiper les pics de charge.
-        """
-        predicted_spikes = self._analyze_history(history)
-        for gpu_id in predicted_spikes:
-            if self.verbose:
-                print(f"📈 Pic anticipé sur GPU {gpu_id} → pré-rééquilibrage")
-            self.scheduler.shift_load(gpu_id)
-
-    def _analyze_history(self, history):
-        """
-        Analyse simple : détecte les GPU avec usage > 85% sur 3 cycles consécutifs.
-        """
-        spikes = []
-        for gpu_id, usage_list in history.items():
-            if len(usage_list) >= 3 and all(u > 85 for u in usage_list[-3:]):
-                spikes.append(gpu_id)
-        return spikes
+    def release_all(self):
+        for block in self.blocks:
+            block.release()
+        print("🧹 Tous les blocs ont été libérés.")
