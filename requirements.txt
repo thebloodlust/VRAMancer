@@ -1,4 +1,6 @@
-torch>=2.0
-pyqt5>=5.15
-matplotlib>=3.5
-pytest>=7.0
+torch>=2.0.0
+matplotlib>=3.8.0
+flask>=3.0.0
+tk
+numpy>=1.26.0
+psutil>=5.9.0
