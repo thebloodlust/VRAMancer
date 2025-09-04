@@ -1,5 +1,6 @@
 from transformers import AutoModel, AutoConfig
 import torch
+import json
 
 class ModelSplitter:
     def __init__(self, model_name="bert-base-uncased"):
@@ -10,48 +11,53 @@ class ModelSplitter:
 
     def _extract_layers(self):
         """
-        Retourne une liste des couches du modèle avec leur nom et taille estimée.
+        Retourne une liste des couches du modèle avec leur nom, taille estimée et type.
         """
         layers = []
         for name, param in self.model.named_parameters():
             size_mb = param.numel() * param.element_size() / (1024 ** 2)
+            layer_type = self._classify_layer(name)
             layers.append({
                 "name": name,
                 "size_mb": round(size_mb, 2),
-                "requires_grad": param.requires_grad
+                "requires_grad": param.requires_grad,
+                "type": layer_type
             })
         return layers
 
-    def classify_layers(self):
+    def _classify_layer(self, name):
+        if any(key in name for key in ["attention", "embeddings", "output"]):
+            return "core"
+        return "secondary"
+
+    def estimate_total_memory(self):
         """
-        Classe les couches en 'core' ou 'secondary' selon leur nom.
+        Retourne la mémoire totale estimée du modèle.
         """
-        classified = []
-        for layer in self.layers:
-            if any(key in layer["name"] for key in ["attention", "embeddings", "output"]):
-                layer["type"] = "core"
-            else:
-                layer["type"] = "secondary"
-            classified.append(layer)
-        return classified
+        total = sum(layer["size_mb"] for layer in self.layers)
+        return round(total, 2)
 
     def split_by_gpu(self, gpus):
         """
         Répartit les couches entre GPU selon leur type et VRAM dispo.
         """
-        classified = self.classify_layers()
         allocation = {gpu["id"]: [] for gpu in gpus}
-
-        for layer in classified:
+        for layer in self.layers:
             target_gpu = 0 if layer["type"] == "core" else self._find_secondary_gpu(gpus)
             allocation[target_gpu].append(layer)
-
         return allocation
 
     def _find_secondary_gpu(self, gpus):
-        """
-        Choisit un GPU secondaire (≠ 0) avec le plus de VRAM.
-        """
         secondary_gpus = [gpu for gpu in gpus if gpu["id"] != 0]
         sorted_gpus = sorted(secondary_gpus, key=lambda g: g["total_vram_mb"], reverse=True)
         return sorted_gpus[0]["id"] if sorted_gpus else 0
+
+    def export_allocation(self, allocation, filename="layer_allocation.json"):
+        with open(filename, "w") as f:
+            json.dump(allocation, f, indent=2)
+        print(f"✅ Allocation exportée dans {filename}")
+
+    def visualize_layers(self):
+        print("📊 Couches du modèle :")
+        for layer in self.layers:
+            print(f" - {layer['name']} | {layer['size_mb']}MB | {layer['type']}")
