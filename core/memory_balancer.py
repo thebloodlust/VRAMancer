@@ -1,5 +1,6 @@
 import uuid
 import random
+import shutil
 
 class MemoryBlock:
     def __init__(self, size_mb, gpu_id, status="free"):
@@ -54,17 +55,45 @@ class MemoryBalancer:
     def simulate_overload(self, threshold=90):
         print("⚠️ Simulation de surcharge VRAM...")
         usage_by_gpu = {}
-        for block in self.blocks:
-            usage_by_gpu.setdefault(block.gpu_id, 0)
-            if block.status == "allocated":
-                usage_by_gpu[block.gpu_id] += block.size_mb
+        gpu_totals = {}
 
-        for gpu_id, usage in usage_by_gpu.items():
-            total = sum(b.size_mb for b in self.blocks if b.gpu_id == gpu_id)
-            percent = round((usage / total) * 100, 2)
+        for block in self.blocks:
+            gpu_id = block.gpu_id
+            gpu_totals.setdefault(gpu_id, 0)
+            usage_by_gpu.setdefault(gpu_id, 0)
+            gpu_totals[gpu_id] += block.size_mb
+            if block.status == "allocated":
+                usage_by_gpu[gpu_id] += block.size_mb
+
+        for gpu_id in sorted(gpu_totals.keys()):
+            used = usage_by_gpu[gpu_id]
+            total = gpu_totals[gpu_id]
+            percent = round((used / total) * 100, 2)
             print(f"GPU {gpu_id} → {percent}% utilisé")
             if percent > threshold:
                 print(f"🔥 GPU {gpu_id} dépasse le seuil ({percent}%)")
+
+    def dashboard(self):
+        term_width = shutil.get_terminal_size().columns
+        print("\n🖥️ Dashboard VRAM")
+        usage_by_gpu = {}
+        gpu_total = {}
+
+        for block in self.blocks:
+            gpu_id = block.gpu_id
+            usage_by_gpu.setdefault(gpu_id, 0)
+            gpu_total.setdefault(gpu_id, 0)
+            gpu_total[gpu_id] += block.size_mb
+            if block.status == "allocated":
+                usage_by_gpu[gpu_id] += block.size_mb
+
+        for gpu_id in sorted(gpu_total.keys()):
+            used = usage_by_gpu[gpu_id]
+            total = gpu_total[gpu_id]
+            percent = int((used / total) * 100)
+            bar_length = int((percent / 100) * (term_width - 30))
+            bar = "█" * bar_length + "-" * (term_width - 30 - bar_length)
+            print(f"GPU {gpu_id} [{percent}%] |{bar}| {used}/{total} MB")
 
     def release_all(self):
         for block in self.blocks:
