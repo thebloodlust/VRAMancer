@@ -14,17 +14,43 @@ Faciliter l’exécution locale de modèles LLM ou de génération d’images (t
 
 ```
 VRAMancer/
-├── README.md               # Description du projet
-├── vramancer.py            # Script principal
-├── requirements.txt        # Dépendances Python
-├── data/                   # Données brutes
+├── README.md
+├── vramancer.py
+├── requirements.txt
+
+├── data/
 │   └── raw_data.csv
-├── models/                 # Modèles sauvegardés
+
+├── models/
 │   └── model.pkl
-├── utils/                  # Fonctions utilitaires
+
+├── utils/
 │   └── helpers.py
-└── tests/                  # Tests unitaires
-    └── test_vramancer.py
+
+├── core/
+│   ├── model_splitter.py         # Découpe du modèle en blocs
+│   ├── memory_balancer.py        # Répartition VRAM entre GPU
+│   ├── scheduler.py              # Planification adaptative
+│   ├── secure_layer.py           # Chiffrement & authentification
+
+│   └── network/
+│       ├── packets.py            # Format des paquets réseau
+│       ├── transmission.py       # Logique d’échange inter-GPU
+│       ├── vramancer_link.py     # Protocole custom ultra-léger
+│       ├── cloud_bridge.py       # Extension VRAM via réseau
+│       └── sfp_override.py       # Firmware réseau custom
+
+├── premium/
+│   ├── auto_tuner.py             # Optimisation dynamique
+│   ├── huggingface_bridge.py     # Compatibilité HF
+
+├── dashboard/
+│   ├── app.py                    # Interface graphique (Flask ou PyQt)
+│   └── visualizer.py             # Visualisation VRAM en temps réel
+
+├── tests/
+│   └── test_vramancer.py         # Tests unitaires
+
 ```
 
 ---
