@@ -1,0 +1,24 @@
+# docker-compose.yml
+version: "3.8"
+
+services:
+  inference:
+    build: .
+    environment:
+      - HOST=0.0.0.0
+    ports:
+      - "5000:5000"   # API (à adapter selon votre script)
+    # If you need GPU passthrough
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+  dashboard:
+    image: dash:2.16.1   # image officielle Dash
+    volumes:
+      - ./dashboard:/app/dashboard
+    ports:
+      - "8050:8050"
