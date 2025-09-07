@@ -1,13 +1,12 @@
 # utils/gpu_utils.py
-import os
 import subprocess
 import json
 from typing import List, Dict
 
-def _nvml_query() -> List[Dict]:
+def get_available_gpus() -> List[Dict]:
     """
-    Utilise nvml (via python‑pynvml) pour obtenir
-    l’état de chaque GPU : nom, mémoire totale, mémoire utilisée.
+    Utilise pynvml (ou nvml) pour récupérer les infos GPU.
+    Renvoie une liste de dict : {name, total_vram_mb, used_vram_mb, is_available}
     """
     try:
         import pynvml
@@ -15,23 +14,17 @@ def _nvml_query() -> List[Dict]:
         count = pynvml.nvmlDeviceGetCount()
         gpus = []
         for i in range(count):
-            handle = pynvml.nvmlDeviceGetHandleByIndex(i)
-            name = pynvml.nvmlDeviceGetName(handle).decode()
-            total = pynvml.nvmlDeviceGetMemoryInfo(handle).total // (1024 ** 2)  # MB
-            used  = pynvml.nvmlDeviceGetMemoryInfo(handle).used  // (1024 ** 2)  # MB
+            h = pynvml.nvmlDeviceGetHandleByIndex(i)
+            name = pynvml.nvmlDeviceGetName(h).decode()
+            mem = pynvml.nvmlDeviceGetMemoryInfo(h)
             gpus.append({
                 "name": name,
-                "total_vram_mb": total,
-                "used_vram_mb": used,
-                "is_available": True  # on peut ajouter une logique de disponibilité
+                "total_vram_mb": mem.total // (1024**2),
+                "used_vram_mb": mem.used  // (1024**2),
+                "is_available": True     # on pourra affiner la logique
             })
         pynvml.nvmlShutdown()
         return gpus
-    except Exception as e:
-        # fallback: on retourne une liste vide
-        print(f"[GPU Utils] Erreur lors de la récupération via nvml : {e}")
+    except Exception as exc:
+        print(f"[GPU Utils] Erreur : {exc}")
         return []
-
-def get_available_gpus() -> List[Dict]:
-    """Retourne une liste de dictionnaires GPU."""
-    return _nvml_query()
