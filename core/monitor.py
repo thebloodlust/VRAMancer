@@ -1,46 +1,76 @@
 # core/monitor.py
 """
-Petit monitor d’état GPU (CUDA / ROCm / MPS).
+Simple GPU‑monitor.
 """
 
 import torch
-import torch.backends.mps
-
+from typing import Dict, List, Any
 
 class GPUMonitor:
-    """Récupère les statistiques de mémoire GPU."""
-    def __init__(self):
-        self.gpus = []
+    """
+    Gather a short‑summary of the GPU state.
+    """
 
-        # CUDA / ROCm
+    def __init__(self) -> None:
+        self.gpus: List[Dict[str, Any]] = []
         for i in range(torch.cuda.device_count()):
-            props = torch.cuda.get_device_properties(i)
-            device_type = "rocm" if torch.version.hip else "cuda"
-            self.gpus.append({
+            gpu_info = {
                 "index": i,
-                "name": props.name,
-                "type": device_type,
-                "total": props.total_memory,
-            })
+                "name": torch.cuda.get_device_name(i),
+                "type": "cuda",
+                "total_memory": torch.cuda.get_device_properties(i).total_memory,
+            }
+            self.gpus.append(gpu_info)
 
-        # MPS (Apple Silicon)
-        if torch.backends.mps.is_available():
+        # ROCm/hip
+        if getattr(torch, "hip", None) is not None:
+            for i in range(torch.cuda.device_count()):
+                if torch.cuda.get_device_properties(i).name.startswith("AMD"):
+                    self.gpus[i]["type"] = "rocm"
+
+        # MPS
+        if hasattr(torch, "mps") and torch.mps.is_available():
             self.gpus.append({
                 "index": "mps",
                 "name": "Apple Silicon MPS",
                 "type": "mps",
-                "total": None,
+                "total_memory": None,
             })
 
-    def memory_allocated(self, device_index: int) -> int:
-        """Mémoire allouée (bytes) pour le GPU."""
-        if isinstance(device_index, int) and device_index < torch.cuda.device_count():
-            return torch.cuda.memory_allocated(device_index)
-        # MPS n’expose pas cette API → 0
+    # ----------------------------------------------------------------------
+    # 1️⃣  Memory helpers
+    # ----------------------------------------------------------------------
+    def memory_allocated(self, idx: int | str) -> int:
+        if isinstance(idx, int) and idx < torch.cuda.device_count():
+            return torch.cuda.memory_allocated(idx)
+        if idx == "mps" and hasattr(torch, "mps"):
+            return torch.mps.memory_allocated()
         return 0
 
-    def memory_reserved(self, device_index: int) -> int:
-        """Mémoire réservée par le runtime (CUDA/ROCm)."""
-        if isinstance(device_index, int) and device_index < torch.cuda.device_count():
-            return torch.cuda.memory_reserved(device_index)
+    def memory_reserved(self, idx: int | str) -> int:
+        if isinstance(idx, int) and idx < torch.cuda.device_count():
+            return torch.cuda.memory_reserved(idx)
         return 0
+
+    def total_memory(self, idx: int | str) -> int | None:
+        if isinstance(idx, int) and idx < torch.cuda.device_count():
+            return torch.cuda.get_device_properties(idx).total_memory
+        if idx == "mps" and hasattr(torch, "mps"):
+            return torch.mps.get_total_memory()
+        return None
+
+    # ----------------------------------------------------------------------
+    # 2️⃣  Pretty print
+    # ----------------------------------------------------------------------
+    def __repr__(self) -> str:
+        lines = ["GPUMonitor:"]
+        for gpu in self.gpus:
+            lines.append(
+                f"  [{gpu['index']}] {gpu['name']} ({gpu['type']}) – "
+                f"Total: {gpu['total_memory'] or 'N/A'} bytes, "
+                f"Allocated: {self.memory_allocated(gpu['index'])} bytes"
+            )
+        return "\n".join(lines)
+
+    def __str__(self) -> str:
+        return self.__repr__()
