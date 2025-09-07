@@ -1,47 +1,88 @@
+# core/scheduler.py
+"""
+Module `scheduler` – gestion simple de l’inférence GPU‑par‑GPU.
+
+Classes
+-------
+SimpleScheduler
+    Orchestration Round‑Robin sur les blocs (GPU) d’un modèle.
+"""
+
+from __future__ import annotations
+
 import time
+from typing import List, Iterable, Dict, Any
+
 import torch
-from typing import List, Iterable, Any
+
+# Import local GPUMonitor (si vous l’avez dans `core/monitor.py`).
+# Vous pouvez commenter cette ligne si vous ne l’utilisez pas.
+try:
+    from .monitor import GPUMonitor
+except Exception:   # pragma: no cover
+    GPUMonitor = None  # type: ignore[assignment]
 
 
-# --------------------------------------------------------------------
-# 1️⃣  Planification adaptative – simple “Round‑Robin”
-# --------------------------------------------------------------------
 class SimpleScheduler:
     """
-    Le Scheduler est le cœur de l’orchestration :
-    - Charge un modèle sur un GPU
-    - Envoie les données vers le prochain GPU
-    - Récupère la sortie en temps réel
+    Scheduler Round‑Robin.
+
+    Chaque bloc (`torch.nn.Module`) est chargé sur un GPU différent.
+    L’entrée est transmise de manière séquentielle d’un GPU vers le
+    suivant, sans duplication de données en mémoire.
+
+    Parameters
+    ----------
+    blocks : List[torch.nn.Module]
+        Liste de modules, un module par GPU. Les modules doivent
+        être pré‑chargés sur le GPU correspondant.
+    schedule_interval : float, optional
+        Pause (en s) entre deux passes Round‑Robin.
+        Utilisé uniquement dans `run_loop` pour simuler un
+        traitement temps réel.
+    verbose : bool, optional
+        Si `True`, affiche des logs de debug (surcharge GPU, etc.).
     """
 
-    def __init__(self, blocks: List[torch.nn.Module], schedule_interval: float = 0.1):
-        """
-        :param blocks: liste de blocs (un `torch.nn.Module` par GPU) ;
-                       ils sont supposés déjà chargés sur le GPU correspondant.
-        :param schedule_interval: délai (en s) entre deux passes “Round‑Robin”.
-        """
+    def __init__(
+        self,
+        blocks: List[torch.nn.Module],
+        schedule_interval: float = 0.1,
+        verbose: bool = False,
+    ) -> None:
         self.blocks = blocks
         self.schedule_interval = schedule_interval
+        self.verbose = verbose
+        self.monitor = GPUMonitor() if GPUMonitor else None
 
-    # --------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # Méthodes principales
+    # ------------------------------------------------------------------
     def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
         """
-        Passe l’entrée à travers tous les blocs (GPU‑par‑GPU).
-        :param input_ids: Tensor de forme `[batch, seq_len]` sur `cpu`.
-        :return: Tensor de sortie placé sur `cpu`.
+        Passe `input_ids` à travers chaque bloc en séquence.
+
+        Parameters
+        ----------
+        input_ids : torch.Tensor
+            Tensor de forme `[batch, seq_len]` initialisé sur `cpu`.
+
+        Returns
+        -------
+        torch.Tensor
+            Tensor de sortie placé sur `cpu`.
         """
         x = input_ids
         for i, block in enumerate(self.blocks):
             device = f"cuda:{i}"
             x = x.to(device)
 
-            # On ne garde pas le graphe de calcul (no‑grad) pour l’inférence
+            # Inference en mode « no‑grad » pour libérer la mémoire GPU
             with torch.no_grad():
                 x = block(x)
 
         return x.cpu()
 
-    # --------------------------------------------------------------------
     def run_loop(
         self,
         prompt: str = "Bonjour",
@@ -49,58 +90,115 @@ class SimpleScheduler:
         tokenizer: Any = None,
     ) -> None:
         """
-        Boucle d’inférence simple (un prompt → texte).
+        Boucle d’inférence « prompt‑to‑text ».
 
-        Vous pouvez soit passer un `tokenizer` explicite (ex. de HuggingFace),
-        soit laisser le scheduler récupérer le tokenizer depuis le premier
-        bloc.
+        Cette fonction est surtout utile pour tester le scheduler
+        en mode autonome. Elle :
+
+        1. Encode le prompt en `input_ids`.
+        2. Génère `max_tokens` en appelant `forward` de manière
+           séquentielle (Round‑Robin).
+        3. Affiche chaque token généré en temps réel.
+        4. Vérifie (via `GPUMonitor`) si un GPU est surchargé
+           avant chaque itération.
+
+        Parameters
+        ----------
+        prompt : str, optional
+            Texte de départ.
+        max_tokens : int, optional
+            Nombre de tokens à générer.
+        tokenizer : Any, optional
+            Tokenizer (ex. `transformers.BertTokenizer`).
+            Si `None`, on extrait le tokenizer du premier bloc
+            (ex. `block.tokenizer`).
         """
-        # On récupère le tokenizer
+        # ------------------------------------------------------------------
+        # Pré‑remontage du tokenizer
+        # ------------------------------------------------------------------
         if tokenizer is None:
-            try:
-                # Le premier bloc doit exposer un attribut `tokenizer`
+            if hasattr(self.blocks[0], "tokenizer"):
                 tokenizer = self.blocks[0].tokenizer
-            except AttributeError:
+            else:
                 raise RuntimeError(
-                    "Pas de tokenizer fourni ! "
-                    "Passez un objet `tokenizer` ou assurez‑vous que "
-                    "le premier bloc possède un attribut `tokenizer`."
+                    "Un tokenizer doit être fourni ou "
+                    "existant dans le premier bloc."
                 )
 
-        input_ids = tokenizer(prompt, return_tensors="pt").input_ids
+        # ------------------------------------------------------------------
+        # Encoder le prompt
+        # ------------------------------------------------------------------
+        input_ids = tokenizer(prompt, return_tensors="pt")["input_ids"].squeeze(0)
 
         for _ in range(max_tokens):
-            # On attend le temps du scheduler (Round‑Robin)
+            # Petite pause pour laisser le temps aux GPU de se
+            # synchroniser dans un vrai scénario
             time.sleep(self.schedule_interval)
 
+            # Vérification de surcharge GPU (si GPUMonitor est présent)
+            if self.monitor:
+                if (gpu_id := self.monitor.detect_overload(threshold=90.0)) is not None:
+                    if self.verbose:
+                        print(
+                            f"⚠️  GPU {gpu_id} surchargé ({self.monitor.vram_usage(gpu_id)} %) – "
+                            "libération de mémoire recommandée."
+                        )
+
+            # Inference Round‑Robin
             output = self.forward(input_ids)
 
-            # Prendre le token de sortie le plus probable
-            next_token_id = output[0, -1, :].argmax().item()
-            input_ids = torch.cat([input_ids, torch.tensor([[next_token_id]])])
+            # Décodage du token le plus probable
+            next_token_id = torch.argmax(output, dim=-1)[-1].item()
+            next_token = tokenizer.convert_ids_to_tokens(next_token_id)
 
-            token = tokenizer.decode(next_token_id)
-            print(token, end="", flush=True)
+            # Affichage en temps réel
+            print(next_token, end="", flush=True)
 
-        print()  # fin de la ligne
+            # Mise à jour de l’entrée pour la prochaine itération
+            input_ids = torch.cat(
+                (input_ids, torch.tensor([[next_token_id]], dtype=input_ids.dtype))
+            )
 
-    # --------------------------------------------------------------------
-    # Méthodes d’extension pour le dashboard / MemoryBalancer
-    # --------------------------------------------------------------------
-    def get_available_gpus(self) -> list[int]:
-        """Renvoie la liste des IDs de GPU disponibles (0…N‑1)."""
-        return list(range(len(self.blocks)))
+        print()  # saut de ligne final
 
-    def get_gpu_usage(self, gpu_id: int) -> dict[str, int]:
+    # ------------------------------------------------------------------
+    # Méthodes auxiliaires (exemple d’utilisation du monitor)
+    # ------------------------------------------------------------------
+    def get_gpu_status(self) -> Dict[str, str]:
         """
-        Renvoie un dictionnaire `{ "used": X, "total": Y }` pour le GPU
-        donné. Ici on retourne les chiffres **statistiques** calculés
-        par la classe `MemoryBalancer`. Si vous voulez les vrais chiffres
-        temps réel, utilisez `torch.cuda.memory_allocated` / `memory_reserved`.
-        """
-        if gpu_id < 0 or gpu_id >= len(self.blocks):
-            raise ValueError(f"gpu_id {gpu_id} hors limites")
+        Retourne un résumé de l’état des GPUs via `GPUMonitor`.
 
-        # Exemple simple : on retourne 0 MB utilisés, 8 GB total
-        # à remplacer par vos métriques réelles
-        return {"used": 0, "total": 8192}
+        Returns
+        -------
+        dict
+            `{ "GPU i" : "xx% VRAM" }` ou `{ "GPU i" : "Simulé" }`
+            si aucun GPU est disponible.
+        """
+        if self.monitor:
+            return self.monitor.status()
+        return {"GPU 0": "GPUMonitor non disponible"}
+
+    def get_overloaded_gpu(self, threshold: float = 90.0) -> Any:
+        """
+        Renvoie l’ID du GPU dépassant le seuil `threshold`.
+
+        Returns
+        -------
+        int or None
+            ID du GPU en surcharge, ou `None` s’il n’y en a pas.
+        """
+        if self.monitor:
+            return self.monitor.detect_overload(threshold)
+        return None
+
+    # ------------------------------------------------------------------
+    # Méthodes de diagnostics
+    # ------------------------------------------------------------------
+    def print_status(self) -> None:
+        """Affiche le status actuel des GPUs (utile en debug)."""
+        if self.monitor:
+            status = self.monitor.status()
+            for gpu, txt in status.items():
+                print(f"{gpu}: {txt}")
+        else:
+            print("GPUMonitor non installé – status simulé.")
