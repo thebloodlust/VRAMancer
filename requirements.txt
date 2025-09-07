@@ -1,6 +1,9 @@
-torch>=2.0.0
-matplotlib>=3.8.0
-flask>=3.0.0
-tk
-numpy>=1.26.0
-psutil>=5.9.0
+torch>=2.1
+transformers>=4.34
+accelerate>=0.27
+flask>=2.3
+torchvision
+pynvml
+python-socketio
+pycryptodome
+numpy
