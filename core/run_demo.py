@@ -1,38 +1,37 @@
 # run_demo.py
 import torch
 import transformers
-from core.monitor import GPUMonitor
-from core.scheduler import SimpleScheduler
+from core import get_tokenizer, SimpleScheduler, GPUMonitor
 
 def load_gpt2():
-    model_name = "gpt2"   # Vous pouvez changer pour un autre modèle
-    tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
-    # Charger le modèle entier, puis l’envelopper dans une liste de blocs
-    # (ici on ne le découpe pas, chaque bloc est un modèle complet)
+    model_name = "gpt2"
+    tokenizer = get_tokenizer(model_name)
     model = transformers.AutoModelForCausalLM.from_pretrained(model_name)
-    return tokenizer, [model]   # un bloc unique
+    return tokenizer, [model]
 
 def main():
     tokenizer, blocks = load_gpt2()
 
-    # Monitor (facultatif)
+    # 1️⃣  Monitor (optional)
     monitor = GPUMonitor()
     print("GPU(s) détectés :", [g["name"] for g in monitor.gpus])
 
-    # Scheduler
-    scheduler = SimpleScheduler(blocks, verbose=True)
+    # 2️⃣  Scheduler
+    scheduler = SimpleScheduler(blocks, callbacks={
+        "on_start": lambda idx, x: print(f"START on {x.device}"),
+        "on_end":   lambda idx, x: print(f"END on {x.device}"),
+    })
 
-    # Prompt de test
+    # 3️⃣  Prompt
     prompt = "Once upon a time,"
     inputs = tokenizer(prompt, return_tensors="pt").input_ids
 
-    # Exécution
+    # 4️⃣  Inference
     logits = scheduler.forward(inputs)
     print("Logits shape :", logits.shape)
 
-    # Prédiction simple
+    # 5️⃣  Prediction
     pred = scheduler.predict(inputs)
     print("Token prédit :", tokenizer.decode(pred.tolist()))
 
-if __name__ == "__main__":
-    main()
+if __name__
