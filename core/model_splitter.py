@@ -1,63 +1,39 @@
-from transformers import AutoModel, AutoConfig
 import torch
-import json
+from transformers import GPT2Model, GPT2Config
 
-class ModelSplitter:
-    def __init__(self, model_name="bert-base-uncased"):
-        self.model_name = model_name
-        self.config = AutoConfig.from_pretrained(model_name)
-        self.model = AutoModel.from_pretrained(model_name)
-        self.layers = self._extract_layers()
+# ------------------------------------------------------------------
+# 1️⃣  Découpage d’un modèle GPT‑2 en « blocs » (peuvent être répartis sur GPU)
+# ------------------------------------------------------------------
+def split_gpt2_into_blocks(num_gpus, model_path="models/model.pkl"):
+    """
+    Charge un modèle GPT‑2 et le divise en `num_gpus` blocs de couches
+    consécutives. Chaque bloc sera chargé sur un GPU distinct.
+    """
+    # 1️⃣ Charger le modèle (on charge l’intégralité sur CPU)
+    model = GPT2Model.from_pretrained("gpt2")
+    torch.save(model, model_path)
 
-    def _extract_layers(self):
-        """
-        Retourne une liste des couches du modèle avec leur nom, taille estimée et type.
-        """
-        layers = []
-        for name, param in self.model.named_parameters():
-            size_mb = param.numel() * param.element_size() / (1024 ** 2)
-            layer_type = self._classify_layer(name)
-            layers.append({
-                "name": name,
-                "size_mb": round(size_mb, 2),
-                "requires_grad": param.requires_grad,
-                "type": layer_type
-            })
-        return layers
+    # 2️⃣ Récupérer la liste des couches transformer
+    layers = list(model.transformer.h)
 
-    def _classify_layer(self, name):
-        if any(key in name for key in ["attention", "embeddings", "output"]):
-            return "core"
-        return "secondary"
+    # 3️⃣ Partitionner les couches en blocs égaux
+    blocks = []
+    n = len(layers)
+    for i in range(num_gpus):
+        start = i * n // num_gpus
+        end   = (i + 1) * n // num_gpus
+        block_layers = layers[start:end]
+        # Crée un sous‑module contenant uniquement ces couches
+        block = torch.nn.Sequential(*block_layers)
+        blocks.append(block)
 
-    def estimate_total_memory(self):
-        """
-        Retourne la mémoire totale estimée du modèle.
-        """
-        total = sum(layer["size_mb"] for layer in self.layers)
-        return round(total, 2)
+    return blocks
 
-    def split_by_gpu(self, gpus):
-        """
-        Répartit les couches entre GPU selon leur type et VRAM dispo.
-        """
-        allocation = {gpu["id"]: [] for gpu in gpus}
-        for layer in self.layers:
-            target_gpu = 0 if layer["type"] == "core" else self._find_secondary_gpu(gpus)
-            allocation[target_gpu].append(layer)
-        return allocation
-
-    def _find_secondary_gpu(self, gpus):
-        secondary_gpus = [gpu for gpu in gpus if gpu["id"] != 0]
-        sorted_gpus = sorted(secondary_gpus, key=lambda g: g["total_vram_mb"], reverse=True)
-        return sorted_gpus[0]["id"] if sorted_gpus else 0
-
-    def export_allocation(self, allocation, filename="layer_allocation.json"):
-        with open(filename, "w") as f:
-            json.dump(allocation, f, indent=2)
-        print(f"✅ Allocation exportée dans {filename}")
-
-    def visualize_layers(self):
-        print("📊 Couches du modèle :")
-        for layer in self.layers:
-            print(f" - {layer['name']} | {layer['size_mb']}MB | {layer['type']}")
+# ------------------------------------------------------------------
+# 2️⃣  Exemple d’utilisation : assigner chaque bloc à un GPU
+# ------------------------------------------------------------------
+def assign_blocks_to_gpus(blocks):
+    gpus = [f"cuda:{i}" for i in range(len(blocks)) if torch.cuda.is_available()]
+    for block, device in zip(blocks, gpus):
+        block.to(device)
+    return blocks
