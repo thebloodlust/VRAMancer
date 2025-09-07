@@ -1,101 +1,52 @@
-import uuid
-import random
-import shutil
+import torch
+from pynvml import *
+import time
 
-class MemoryBlock:
-    def __init__(self, size_mb, gpu_id, status="free"):
-        self.id = str(uuid.uuid4())
-        self.size_mb = size_mb
-        self.gpu_id = gpu_id
-        self.status = status  # "free", "reserved", "allocated"
+# ------------------------------------------------------------------
+# 1️⃣  Balancer la VRAM entre les GPU
+# ------------------------------------------------------------------
+def get_vram_usage(device_index):
+    """Renvoie la VRAM utilisée (GB) et la mémoire totale (GB)."""
+    handle = nvmlDeviceGetHandleByIndex(device_index)
+    mem_info = nvmlDeviceGetMemoryInfo(handle)
+    used_gb  = mem_info.used / 1024**3
+    total_gb = mem_info.total / 1024**3
+    return used_gb, total_gb
 
-    def reserve(self):
-        if self.status == "free":
-            self.status = "reserved"
-        else:
-            raise RuntimeError(f"Block {self.id} is not free.")
+def balance_memory(gpu_blocks, target_utilization=0.7):
+    """
+    Si un GPU dépasse `target_utilization` de sa VRAM,
+    on déplace un bloc de celui‑ci vers un autre GPU qui est moins saturé.
+    """
+    # 1️⃣ Récupérer l’état actuel
+    stats = []
+    for i in range(len(gpu_blocks)):
+        used, total = get_vram_usage(i)
+        stats.append((i, used, total, used/total))
 
-    def allocate(self):
-        if self.status == "reserved":
-            self.status = "allocated"
-        else:
-            raise RuntimeError(f"Block {self.id} must be reserved before allocation.")
+    # 2️⃣ Trouver le GPU le plus saturé et le moins saturé
+    stats.sort(key=lambda x: x[3])  # tri par utilisation
+    most_saturated = stats[-1]
+    least_saturated = stats[0]
 
-    def release(self):
-        self.status = "free"
+    # 3️⃣ Si le plus saturé dépasse le seuil, déplace‑on un bloc
+    if most_saturated[3] > target_utilization:
+        src_gpu = most_saturated[0]
+        dst_gpu = least_saturated[0]
+        block_to_move = gpu_blocks[src_gpu].pop(-1)   # dernier bloc
+        block_to_move.to(f"cuda:{dst_gpu}")
+        gpu_blocks[dst_gpu].append(block_to_move)
+        print(f"[Balancer] Déplacé bloc du GPU {src_gpu} → GPU {dst_gpu}")
 
-    def __repr__(self):
-        return f"<Block {self.id[:8]} | {self.size_mb}MB | GPU {self.gpu_id} | {self.status}>"
+    return gpu_blocks
 
-class MemoryBalancer:
-    def __init__(self, gpu_profiles, verbose=True):
-        self.verbose = verbose
-        self.blocks = []
-        for gpu in gpu_profiles:
-            for _ in range(gpu["block_count"]):
-                self.blocks.append(MemoryBlock(size_mb=gpu["block_size_mb"], gpu_id=gpu["id"]))
-
-    def allocate_for_layer(self, layer):
-        for block in self.blocks:
-            if block.status == "free" and block.size_mb >= layer["size_mb"]:
-                block.reserve()
-                block.allocate()
-                if self.verbose:
-                    print(f"✅ Layer {layer['name']} → Block {block.id[:8]} (GPU {block.gpu_id})")
-                return block
-        if self.verbose:
-            print(f"❌ Aucun bloc disponible pour {layer['name']} ({layer['size_mb']}MB)")
-        return None
-
-    def visualize_blocks(self):
-        print("📊 État des blocs mémoire :")
-        for block in self.blocks:
-            print(block)
-
-    def simulate_overload(self, threshold=90):
-        print("⚠️ Simulation de surcharge VRAM...")
-        usage_by_gpu = {}
-        gpu_totals = {}
-
-        for block in self.blocks:
-            gpu_id = block.gpu_id
-            gpu_totals.setdefault(gpu_id, 0)
-            usage_by_gpu.setdefault(gpu_id, 0)
-            gpu_totals[gpu_id] += block.size_mb
-            if block.status == "allocated":
-                usage_by_gpu[gpu_id] += block.size_mb
-
-        for gpu_id in sorted(gpu_totals.keys()):
-            used = usage_by_gpu[gpu_id]
-            total = gpu_totals[gpu_id]
-            percent = round((used / total) * 100, 2)
-            print(f"GPU {gpu_id} → {percent}% utilisé")
-            if percent > threshold:
-                print(f"🔥 GPU {gpu_id} dépasse le seuil ({percent}%)")
-
-    def dashboard(self):
-        term_width = shutil.get_terminal_size().columns
-        print("\n🖥️ Dashboard VRAM")
-        usage_by_gpu = {}
-        gpu_total = {}
-
-        for block in self.blocks:
-            gpu_id = block.gpu_id
-            usage_by_gpu.setdefault(gpu_id, 0)
-            gpu_total.setdefault(gpu_id, 0)
-            gpu_total[gpu_id] += block.size_mb
-            if block.status == "allocated":
-                usage_by_gpu[gpu_id] += block.size_mb
-
-        for gpu_id in sorted(gpu_total.keys()):
-            used = usage_by_gpu[gpu_id]
-            total = gpu_total[gpu_id]
-            percent = int((used / total) * 100)
-            bar_length = int((percent / 100) * (term_width - 30))
-            bar = "█" * bar_length + "-" * (term_width - 30 - bar_length)
-            print(f"GPU {gpu_id} [{percent}%] |{bar}| {used}/{total} MB")
-
-    def release_all(self):
-        for block in self.blocks:
-            block.release()
-        print("🧹 Tous les blocs ont été libérés.")
+# ------------------------------------------------------------------
+# 2️⃣  Surveillance simple
+# ------------------------------------------------------------------
+def monitor_vram(interval=5):
+    """Affiche en temps réel la consommation de VRAM de chaque GPU."""
+    while True:
+        for i in range(torch.cuda.device_count()):
+            used, total = get_vram_usage(i)
+            print(f"GPU {i}: {used:.1f}/{total:.1f} GB ({used/total:.0%})")
+        time.sleep(interval)
