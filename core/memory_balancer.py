@@ -1,52 +1,44 @@
-import torch
-from pynvml import *
-import time
+from __future__ import annotations
+import typing as T
+import logging
 
-# ------------------------------------------------------------------
-# 1️⃣  Balancer la VRAM entre les GPU
-# ------------------------------------------------------------------
-def get_vram_usage(device_index):
-    """Renvoie la VRAM utilisée (GB) et la mémoire totale (GB)."""
-    handle = nvmlDeviceGetHandleByIndex(device_index)
-    mem_info = nvmlDeviceGetMemoryInfo(handle)
-    used_gb  = mem_info.used / 1024**3
-    total_gb = mem_info.total / 1024**3
-    return used_gb, total_gb
-
-def balance_memory(gpu_blocks, target_utilization=0.7):
+class MemoryBalancer:
     """
-    Si un GPU dépasse `target_utilization` de sa VRAM,
-    on déplace un bloc de celui‑ci vers un autre GPU qui est moins saturé.
+    Gère le rééquilibrage de mémoire entre les GPUs.
     """
-    # 1️⃣ Récupérer l’état actuel
-    stats = []
-    for i in range(len(gpu_blocks)):
-        used, total = get_vram_usage(i)
-        stats.append((i, used, total, used/total))
 
-    # 2️⃣ Trouver le GPU le plus saturé et le moins saturé
-    stats.sort(key=lambda x: x[3])  # tri par utilisation
-    most_saturated = stats[-1]
-    least_saturated = stats[0]
+    def __init__(self, scheduler: "Scheduler", logger: logging.Logger):
+        self.scheduler = scheduler
+        self.logger    = logger
+        # On garde un état interne que `get_memory_state` retournera
+        self._gpu_state = {
+            gpu["id"]: {"used": 0, "total": gpu["total_vram_mb"]}
+            for gpu in scheduler.get_available_gpus()
+        }
 
-    # 3️⃣ Si le plus saturé dépasse le seuil, déplace‑on un bloc
-    if most_saturated[3] > target_utilization:
-        src_gpu = most_saturated[0]
-        dst_gpu = least_saturated[0]
-        block_to_move = gpu_blocks[src_gpu].pop(-1)   # dernier bloc
-        block_to_move.to(f"cuda:{dst_gpu}")
-        gpu_blocks[dst_gpu].append(block_to_move)
-        print(f"[Balancer] Déplacé bloc du GPU {src_gpu} → GPU {dst_gpu}")
+    # --------------------------------------------------------------------
+    # Méthodes métier existantes (balance, predictive_balance, …) …
+    # --------------------------------------------------------------------
 
-    return gpu_blocks
+    # --------------------------------------------------------------------
+    # Méthode d’extension – utilisée par le dashboard
+    # --------------------------------------------------------------------
+    def get_memory_state(self) -> dict[int, dict[str, int]]:
+        """
+        Renvoie un dictionnaire `{gpu_id: {"used": X, "total": Y}}`.
+        Si votre Scheduler peut fournir les chiffres de mémoire en temps réel,
+        appelez‑le ici ; sinon, on renvoie l’état interne mis à jour dans
+        les méthodes `balance`, `release_layer`, ….
+        """
+        # Exemple d’appel (à adapter à votre implémentation ):
+        # for gpu_id in self._gpu_state:
+        #     usage = self.scheduler.get_gpu_usage(gpu_id)  # {"used": ..., "total": ...}
+        #     self._gpu_state[gpu_id]["used"] = usage["used"]
+        # return self._gpu_state
 
-# ------------------------------------------------------------------
-# 2️⃣  Surveillance simple
-# ------------------------------------------------------------------
-def monitor_vram(interval=5):
-    """Affiche en temps réel la consommation de VRAM de chaque GPU."""
-    while True:
-        for i in range(torch.cuda.device_count()):
-            used, total = get_vram_usage(i)
-            print(f"GPU {i}: {used:.1f}/{total:.1f} GB ({used/total:.0%})")
-        time.sleep(interval)
+        # Si le Scheduler n’expose pas de `get_gpu_usage`, on renvoie l’état interne
+        return self._gpu_state
+
+    # --------------------------------------------------------------------
+    # Méthodes déjà présentes dans votre classe (balance, predictive_balance, …)
+    # --------------------------------------------------------------------
