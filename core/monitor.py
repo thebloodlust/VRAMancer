@@ -1,44 +1,46 @@
+# core/monitor.py
+"""
+Petit monitor d’état GPU (CUDA / ROCm / MPS).
+"""
+
 import torch
-import subprocess
-import random
+import torch.backends.mps
+
 
 class GPUMonitor:
-    def __init__(self, verbose=True):
-        self.verbose = verbose
+    """Récupère les statistiques de mémoire GPU."""
+    def __init__(self):
+        self.gpus = []
 
-    def vram_usage(self, gpu_id=0):
-        try:
-            total = torch.cuda.get_device_properties(gpu_id).total_memory / (1024 ** 2)
-            used = torch.cuda.memory_allocated(gpu_id) / (1024 ** 2)
-            usage = round((used / total) * 100, 2)
-            return usage
-        except:
-            return random.randint(50, 95)  # fallback simulé
+        # CUDA / ROCm
+        for i in range(torch.cuda.device_count()):
+            props = torch.cuda.get_device_properties(i)
+            device_type = "rocm" if torch.version.hip else "cuda"
+            self.gpus.append({
+                "index": i,
+                "name": props.name,
+                "type": device_type,
+                "total": props.total_memory,
+            })
 
-    def detect_overload(self, threshold=90):
-        try:
-            for i in range(torch.cuda.device_count()):
-                if self.vram_usage(i) > threshold:
-                    return i
-            return None
-        except:
-            return random.choice([0, None])
+        # MPS (Apple Silicon)
+        if torch.backends.mps.is_available():
+            self.gpus.append({
+                "index": "mps",
+                "name": "Apple Silicon MPS",
+                "type": "mps",
+                "total": None,
+            })
 
-    def status(self):
-        try:
-            status = {}
-            for i in range(torch.cuda.device_count()):
-                usage = self.vram_usage(i)
-                temp = self._get_gpu_temp(i)
-                status[f"GPU {i}"] = f"{usage}% VRAM | {temp}°C"
-            return status
-        except:
-            return {"GPU 0": "Simulé"}
+    def memory_allocated(self, device_index: int) -> int:
+        """Mémoire allouée (bytes) pour le GPU."""
+        if isinstance(device_index, int) and device_index < torch.cuda.device_count():
+            return torch.cuda.memory_allocated(device_index)
+        # MPS n’expose pas cette API → 0
+        return 0
 
-    def _get_gpu_temp(self, gpu_id):
-        try:
-            output = subprocess.check_output(["nvidia-smi", "--query-gpu=temperature.gpu", "--format=csv,noheader,nounits"])
-            temps = output.decode("utf-8").strip().split("\n")
-            return int(temps[gpu_id])
-        except:
-            return random.randint(40, 85)
+    def memory_reserved(self, device_index: int) -> int:
+        """Mémoire réservée par le runtime (CUDA/ROCm)."""
+        if isinstance(device_index, int) and device_index < torch.cuda.device_count():
+            return torch.cuda.memory_reserved(device_index)
+        return 0
