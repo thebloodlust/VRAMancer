@@ -1,0 +1,36 @@
+# .github/workflows/ci.yml
+name: CI
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      gpu:
+        image: nvidia/cuda:12.1.0-cudnn8-runtime-ubuntu22.04
+        options: >-  # request all GPUs
+          --gpus all
+        ports:
+          - 80:80
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Lint
+        run: |
+          pip install flake8
+          flake8 core/ dashboard/ examples/ tests/
+
+      - name: Run tests
+        run: python -m pytest tests/
