@@ -1,46 +1,44 @@
-from core.memory_block import MemoryBlock
+import time
+import torch
 
-class Scheduler:
-    def __init__(self, gpu_list, strategy="balanced"):
-        self.gpu_list = gpu_list
-        self.strategy = strategy
-        self.allocations = {gpu["id"]: [] for gpu in gpu_list}
+# ------------------------------------------------------------------
+# 1️⃣  Planification adaptative – simple “Round‑Robin”
+# ------------------------------------------------------------------
+class SimpleScheduler:
+    """
+    Le Scheduler est le cœur de l’orchestration :
+    - Charge un modèle sur un GPU
+    - Envoie les données vers le prochain GPU
+    - Récupère la sortie en temps réel
+    """
 
-    def allocate_block(self, size_mb):
+    def __init__(self, blocks, schedule_interval=0.1):
+        self.blocks = blocks
+        self.schedule_interval = schedule_interval
+
+    def forward(self, input_ids):
         """
-        Alloue un bloc de mémoire selon la stratégie définie.
+        Passe l’entrée à travers tous les blocs (GPU‑par‑GPU).
         """
-        target_gpu = self._select_gpu(size_mb)
-        if target_gpu is None:
-            raise RuntimeError("Aucun GPU ne peut accueillir ce bloc.")
+        x = input_ids
+        for i, block in enumerate(self.blocks):
+            device = f"cuda:{i}"
+            x = x.to(device)
+            with torch.no_grad():
+                x = block(x)
+        # Fusionner les sorties (simple concaténation)
+        return x.cpu()
 
-        block = MemoryBlock(size_mb=size_mb, gpu_id=target_gpu["id"])
-        block.reserve()
-        block.allocate()
-        self.allocations[target_gpu["id"]].append(block)
-        return block
+    def run_loop(self, prompt="Bonjour", max_tokens=50):
+        """Boucle d’inférence simple (un prompt → texte)."""
+        tokenizer = self.blocks[0][0].transformer.tokenizer
+        input_ids = tokenizer(prompt, return_tensors="pt").input_ids
 
-    def _select_gpu(self, size_mb):
-        """
-        Sélectionne le GPU cible selon la stratégie.
-        """
-        if self.strategy == "balanced":
-            # Choisir le GPU avec le moins de blocs alloués
-            sorted_gpus = sorted(self.gpu_list, key=lambda g: len(self.allocations[g["id"]]))
-            for gpu in sorted_gpus:
-                if gpu["total_vram_mb"] >= size_mb:
-                    return gpu
-        elif self.strategy == "priority":
-            # Choisir le GPU avec le plus de VRAM
-            sorted_gpus = sorted(self.gpu_list, key=lambda g: g["total_vram_mb"], reverse=True)
-            for gpu in sorted_gpus:
-                if gpu["total_vram_mb"] >= size_mb:
-                    return gpu
-        return None
-
-    def show_allocations(self):
-        print("📦 Allocations mémoire :")
-        for gpu_id, blocks in self.allocations.items():
-            print(f"GPU {gpu_id} :")
-            for block in blocks:
-                print(f"  - {block}")
+        for _ in range(max_tokens):
+            output = self.forward(input_ids)
+            # Prendre le token de sortie le plus probable
+            next_token_id = output[0, -1, :].argmax().item()
+            input_ids = torch.cat([input_ids, torch.tensor([[next_token_id]])])
+            token = tokenizer.decode(next_token_id)
+            print(token, end="", flush=True)
+        print()
