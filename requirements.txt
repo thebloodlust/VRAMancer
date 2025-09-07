@@ -1,9 +1,11 @@
-torch>=2.1
-transformers>=4.34
-accelerate>=0.27
-flask>=2.3
-torchvision
-pynvml
-python-socketio
-pycryptodome
-numpy
+# requirements.txt
+# ---- Pin minimal (pour la stabilité) ----
+torch>=2.1               # PyTorch (CUDA / ROCm / CPU)
+transformers>=4.34       # Hugging‑Face Transformers
+accelerate>=0.27         # For multi‑GPU/accelerator support
+flask>=2.3               # API (si vous utilisez Flask)
+torchvision              # Opérations vision (optionnel)
+pynvml                   # Pour récupérer l’usage GPU
+python-socketio          # WebSocket (si besoin)
+pycryptodome             # Cryptographie (si besoin)
+numpy                    # Base scientific stack
