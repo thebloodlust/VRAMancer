@@ -2,25 +2,27 @@
 import argparse
 import sys
 
-# On importe les trois modes
-from dashboard import dashboard_cli, dashboard_tk, dashboard_qt
+# Import des wrappers
+from dashboard.dashboard_cli import launch
+from dashboard.dashboard_tk import launch_dashboard as launch_tk
+from dashboard.dashboard_qt import launch_dashboard as launch_qt  # optional
 
 def main():
-    parser = argparse.ArgumentParser(description="Lanceur de dashboard VRAMancer")
+    parser = argparse.ArgumentParser(description="VRAMancer Dashboard Launcher")
     parser.add_argument(
         "--mode",
         choices=["cli", "tk", "qt"],
         default="cli",
-        help="Choisir l’interface d’affichage (cli, tk, qt)",
+        help="Choisir l'interface d'affichage",
     )
     args = parser.parse_args()
 
     if args.mode == "cli":
-        dashboard_cli.launch()
+        launch()
     elif args.mode == "tk":
-        dashboard_tk.launch_dashboard()
+        launch_tk()
     elif args.mode == "qt":
-        dashboard_qt.launch_dashboard()
+        launch_qt()
     else:
         print("Mode inconnu.")
         sys.exit(1)
