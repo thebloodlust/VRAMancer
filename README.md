@@ -1,149 +1,121 @@
-# 🎮 VRAMancer
-
-**VRAMancer** est un outil open source conçu pour optimiser l’utilisation de la mémoire vidéo (VRAM) sur des configurations multi-GPU, même modestes. Il permet de charger des modèles IA plus volumineux en répartissant intelligemment les blocs mémoire entre plusieurs cartes graphiques.
-
----
-
-## 🚀 Objectif
-
+🎮 VRAMancer
+VRAMancer est un outil open‑source conçu pour optimiser l’utilisation de la mémoire vidéo (VRAM) sur des configurations multi‑GPU, même modestes.
+Il permet de charger des modèles IA plus volumineux en répartissant intelligemment les blocs mémoire entre plusieurs cartes graphiques.
+🚀 Objectif
 Faciliter l’exécution locale de modèles LLM ou de génération d’images (type Stable Diffusion) sur des machines avec plusieurs GPU, sans dépendre du cloud ni investir dans du matériel haut de gamme.
+📦 Structure du projet
+text
 
----
-
-## 📦 Structure du projet
-
-```
+Réduire
+Enregistrer
+Copier
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
 VRAMancer/
 ├── README.md
 ├── vramancer.py
 ├── requirements.txt
-
 ├── data/
 │   └── raw_data.csv
-
 ├── models/
 │   └── model.pkl
-
 ├── utils/
 │   └── helpers.py
-
 ├── core/
 │   ├── model_splitter.py         # Découpe du modèle en blocs
 │   ├── memory_balancer.py        # Répartition VRAM entre GPU
 │   ├── scheduler.py              # Planification adaptative
 │   ├── secure_layer.py           # Chiffrement & authentification
-
 │   └── network/
 │       ├── packets.py            # Format des paquets réseau
-│       ├── transmission.py       # Logique d’échange inter-GPU
-│       ├── vramancer_link.py     # Protocole custom ultra-léger
+│       ├── transmission.py       # Logique d’échange inter‑GPU
+│       ├── vramancer_link.py     # Protocole custom ultra‑léger
 │       ├── cloud_bridge.py       # Extension VRAM via réseau
 │       └── sfp_override.py       # Firmware réseau custom
-
 ├── premium/
 │   ├── auto_tuner.py             # Optimisation dynamique
 │   ├── huggingface_bridge.py     # Compatibilité HF
-
 ├── dashboard/
 │   ├── app.py                    # Interface graphique (Flask ou PyQt)
 │   └── visualizer.py             # Visualisation VRAM en temps réel
-
 ├── tests/
 │   └── test_vramancer.py         # Tests unitaires
+🧪 Installation
+bash
 
-```
-
----
-
-## 🛠️ Fonctionnalités à venir
-
-- 📊 Visualisation en temps réel de l’usage de la VRAM
-- 🧠 Analyse des pics de consommation GPU
-- 🗃️ Export des statistiques en CSV ou JSON
-- 🖼️ Interface graphique simple (Tkinter ou PyQt)
-- 🧩 Support multi-GPU et compatibilité CUDA
-- 🔌 Intégration avec Hugging Face et ComfyUI
-
----
-
-## 🧪 Installation
-
-```bash
+Réduire
+Enregistrer
+Copier
+1
+2
+3
 git clone https://github.com/tonpseudo/VRAMancer.git
 cd VRAMancer
 pip install -r requirements.txt
-```
-
----
-
-## 🤝 Vers une intégration native ?
-
-VRAMancer a été imaginé pour démocratiser l’accès aux modèles IA volumineux sur des configurations modestes.  
-Nous pensons que ce type d’approche pourrait enrichir l’écosystème NVIDIA, en complément des solutions haut de gamme comme CUDA, TensorRT ou DGX.
-
-Si cette idée résonne chez des acteurs du secteur, nous serions ravis d’explorer une collaboration ou une intégration plus poussée.
-
----
-
-## 📬 Contribuer
-
-Les contributions sont les bienvenues !  
-N’hésitez pas à ouvrir une issue ou une pull request pour proposer une amélioration, corriger un bug ou discuter d’une idée.
-
----
-
-## 📜 Licence
-
+🎯 Fonctionnalités
+Répartition intelligente de la VRAM entre plusieurs GPU.
+Planification adaptative du chargement des modèles.
+Sécurité : chiffrement des échanges réseau, authentification par clé publique.
+Interface graphique (Flask / PyQt) pour surveiller la consommation en temps réel.
+Export des statistiques en CSV ou JSON.
+Support multi‑GPU (CUDA, ROCm, M‑series).
+Intégration avec Hugging Face et ComfyUI.
+ 🔧 Options Premium Disponibles
+MODULE
+ DESCRIPTION
+ VRAMancer Link	
+Protocole réseau ultra‑léger (SFP+/Ethernet) pour les échanges inter‑machines.
+ZeroStack TCP‑Free Mode	
+Bypass complet de la pile TCP/IP pour réduire la latence.
+Cloud Fabric Custom	
+Stack réseau propriétaire pour cloud distribué.
+SFP Protocol Override	
+Firmware dédié pour remplacer le protocole Ethernet par un protocole custom.
+VRAMancer Memory Sync	
+Synchronisation directe des blocs mémoire entre machines.
+GPU Direct Dispatch	
+Envoi direct de tâches entre GPU distants.
+Cloud Bridge	
+Extension dynamique de la VRAM via le réseau.
+VRAMancer Lite	
+Version allégée pour les configurations edge.
+Auto Tuner	
+Optimisation dynamique des paramètres système et réseau.
+Hugging Face Bridge	
+Compatibilité native avec les modèles Hugging Face.
+Scheduler Intelligent	
+Prédiction et préchargement adaptatif des modèles.
+Secure Fabric Layer	
+Chiffrement natif, authentification, gestion des sessions.
+ 🤝 Contribution
+Les contributions sont les bienvenues !
+Ouvrez une issue ou une pull request pour corriger un bug, ajouter une fonctionnalité ou simplement discuter d’une idée.
+📜 Licence
 MIT — libre d’utilisation, modification et distribution.
-
-
-
-### 🔧 Options Premium Disponibles
-
-Voici les modules et fonctionnalités avancées disponibles en option pour les utilisateurs premium :
-
-#### 🚀 Protocoles & Réseaux
-
-- **VRAMancer Link**  
-  Protocole réseau ultra-léger et optimisé pour les échanges inter-machines (GPU ↔ GPU, machine ↔ machine), utilisant les ports SFP+ ou Ethernet sans passer par TCP/IP. Idéal pour les architectures cloud distribuées ou les clusters IA.
-
-- **ZeroStack TCP-Free Mode**  
-  Permet de bypasser complètement la stack TCP/IP pour des communications directes entre nœuds, réduisant la latence et augmentant le débit.
-
-- **Cloud Fabric Custom**  
-  Stack réseau propriétaire pour cloud distribué, avec gestion intelligente des flux, priorisation des tâches IA, et isolation des workloads.
-
-- **SFP Protocol Override**  
-  Firmware dédié pour cartes réseau et switchs compatibles, permettant de remplacer le protocole Ethernet par un protocole custom (VRAMancer Link).
-
-#### 🧠 Mémoire & GPU
-
-- **VRAMancer Memory Sync**  
-  Synchronisation directe des blocs mémoire entre machines sans copie intermédiaire, via le protocole VRAMancer.
-
-- **GPU Direct Dispatch**  
-  Envoi direct de tâches entre GPU distants via le protocole custom, sans passer par le CPU ou le système d’exploitation.
-
-- **Cloud Bridge**  
-  Extension de la mémoire GPU via le réseau, permettant à plusieurs machines de partager dynamiquement leur VRAM.
-
-#### ⚙️ Modules Optionnels
-
-- **VRAMancer Lite**  
-  Version allégée du protocole pour les machines modestes ou configurations edge.
-
-- **Auto Tuner**  
-  Optimisation dynamique des paramètres système et réseau en fonction de la charge et des performances observées.
-
-- **Hugging Face Bridge**  
-  Compatibilité native avec les modèles Hugging Face, incluant le chargement, l’inférence et la conversion.
-
-- **Scheduler Intelligent**  
-  Système de préchargement adaptatif des modèles et des données, basé sur les patterns d’usage et les prédictions de charge.
-
-#### 🔐 Sécurité & Monitoring
-
-- **Secure Fabric Layer**  
-  Chiffrement natif des échanges sur le protocole VRAMancer, avec authentification par clé publique et gestion des sessions.
-
-
