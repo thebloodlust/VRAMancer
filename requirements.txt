@@ -1,11 +1,20 @@
-# requirements.txt
-# ---- Pin minimal (pour la stabilité) ----
+# Core dependencies
 torch>=2.1               # PyTorch (CUDA / ROCm / CPU)
-transformers>=4.34       # Hugging‑Face Transformers
-accelerate>=0.27         # For multi‑GPU/accelerator support
-flask>=2.3               # API (si vous utilisez Flask)
-torchvision              # Opérations vision (optionnel)
-pynvml                   # Pour récupérer l’usage GPU
-python-socketio          # WebSocket (si besoin)
-pycryptodome             # Cryptographie (si besoin)
 numpy                    # Base scientific stack
+pyyaml                   # Chargement config.yaml
+psutil                   # Détection GPU et interfaces réseau
+
+# Model support
+transformers>=4.34       # Hugging Face Transformers
+accelerate>=0.27         # Multi-GPU / accélérateurs
+
+# Dashboard & API
+flask>=2.3               # Dashboard web
+python-socketio          # WebSocket (optionnel)
+
+# GPU monitoring
+pynvml                   # Usage VRAM NVIDIA
+
+# Optional features
+torchvision              # Vision (si besoin)
+pycryptodome             # Cryptographie (si besoin)
