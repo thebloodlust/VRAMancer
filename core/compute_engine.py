@@ -1,6 +1,9 @@
+# core/compute_engine.py
+
 import torch
 import time
 import onnx
+import psutil
 from torch.profiler import profile, record_function, ProfilerActivity
 
 class ComputeEngine:
@@ -11,16 +14,16 @@ class ComputeEngine:
     def _detect_backend(self):
         if torch.cuda.is_available():
             return "cuda"
-        elif torch.backends.mps.is_available():
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
             return "mps"
-        elif torch.version.hip:
+        elif hasattr(torch.version, "hip") and torch.version.hip:
             return "rocm"
         else:
             return "cpu"
 
-    def _get_device(self, device_id):
+    def _get_device(self, device_id=0):
         if self.backend in ["cuda", "rocm"]:
-            return torch.device(f"cuda:{device_id}")
+            return torch.device(f"{self.backend}:{device_id}")
         elif self.backend == "mps":
             return torch.device("mps")
         else:
@@ -41,7 +44,7 @@ class ComputeEngine:
             bias = torch.randn(x.shape[-1], device=device, requires_grad=track_gradients)
             return torch.nn.functional.relu(torch.matmul(x, weight) + bias)
 
-        if use_compile:
+        if use_compile and hasattr(torch, "compile"):
             layer_fn = torch.compile(layer_fn)
 
         if profile_gpu and self.backend in ["cuda", "rocm"]:
@@ -68,3 +71,6 @@ class ComputeEngine:
         if self.verbose:
             print(f"📦 Modèle exporté en ONNX : {filename}")
 
+    def get_ram_status(self):
+        mem = psutil.virtual_memory()
+        return mem.available, mem.total
