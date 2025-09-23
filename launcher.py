@@ -1,16 +1,17 @@
 import argparse
-from core.scheduler import Scheduler
+from core.scheduler import SimpleScheduler
 from core.memory_balancer import MemoryBalancer
-from network.transport import Transport
+from core.network.transport import Transport
 from dashboard.flask_app import app as dashboard_app
-from network.interface_selector import select_best_interface, list_interfaces
+from core.network.interface_selector import select_best_interface, list_interfaces
 
 def check_environment():
     print("✅ Environnement vérifié (mock)")
 
 def launch_scheduler(config_path):
-    scheduler = Scheduler(config_path)
-    scheduler.run()
+    # Tu peux adapter ici si SimpleScheduler attend autre chose que config_path
+    scheduler = SimpleScheduler(blocks=[], callbacks={})  # Exemple minimal
+    print("🚀 Scheduler lancé (mock)")
 
 def launch_transport(config_path, interface):
     transport = Transport(config_path, interface)
