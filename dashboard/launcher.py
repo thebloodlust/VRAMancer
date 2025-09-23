@@ -5,10 +5,7 @@ import importlib.util
 import subprocess
 import sys
 
-from dashboard import dashboard_cli, dashboard_tk, dashboard_qt
-
-def launch_web():
-    subprocess.run([sys.executable, "dashboard/app.py"])
+from dashboard import dashboard_cli, dashboard_tk, dashboard_qt, dashboard_web
 
 def is_available(module_name):
     return importlib.util.find_spec(module_name) is not None
@@ -33,7 +30,7 @@ def main():
         dashboard_qt.launch_dashboard()
 
     elif args.mode == "web":
-        launch_web()
+        dashboard_web.launch()
 
     elif args.mode == "auto":
         if is_available("PyQt5"):
@@ -48,6 +45,3 @@ def main():
 
     else:
         print("❌ Mode inconnu.")
-
-if __name__ == "__main__":
-    main()
