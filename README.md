@@ -1,102 +1,126 @@
-# 🎮 **VRAMancer**
+# 🎮 VRAMancer
 
-**VRAMancer** est un outil open‑source conçu pour optimiser l’utilisation de la mémoire vidéo (VRAM) sur des configurations multi‑GPU, même modestes.  
-Il permet de charger des modèles IA plus volumineux en répartissant intelligemment les blocs mémoire entre plusieurs cartes graphiques.
+**FR 🇫🇷**  
+VRAMancer est un moteur open‑source conçu pour optimiser l’utilisation de la mémoire vidéo (VRAM) sur des configurations multi‑GPU, même modestes. Il permet de charger des modèles IA volumineux en répartissant intelligemment les blocs entre GPU, RAM, NVMe et réseau.
 
----
-
-## 🚀 Objectif
-
-Faciliter l’exécution locale de modèles LLM ou de génération d’images (type Stable Diffusion) sur des machines avec plusieurs GPU, sans dépendre du cloud ni investir dans du matériel haut de gamme.
+**EN 🇬🇧**  
+VRAMancer is an open-source engine designed to optimize video memory (VRAM) usage across multi-GPU setups — even modest ones. It enables large AI models to run locally by intelligently routing blocks across GPU, RAM, NVMe, and network.
 
 ---
 
-## 📦 Structure du projet
+## 🚀 Objectif / Purpose
 
-```text
+**FR**  
+Faciliter l’exécution locale de modèles LLM ou de génération d’images (Stable Diffusion, etc.) sans dépendre du cloud ni investir dans du matériel haut de gamme.
+
+**EN**  
+Make it easy to run LLMs or image generation models (e.g. Stable Diffusion) locally — no cloud, no expensive hardware.
+
+---
+
+## 📦 Structure du projet / Project Structure
+
+```
 VRAMancer/
-├── README.md
-├── vramancer.py
-├── requirements.txt
-├── data/
-│   └── raw_data.csv
-├── models/
-│   └── model.pkl
-├── utils/
-│   └── helpers.py
-├── core/
-│   ├── model_splitter.py         # Découpe du modèle en blocs
-│   ├── memory_balancer.py        # Répartition VRAM entre GPU
-│   ├── scheduler.py              # Planification adaptative
-│   ├── secure_layer.py           # Chiffrement & authentification
+├── core/                  # Moteur de routage et planification
+│   ├── scheduler.py       # Planification adaptative
+│   ├── block_router.py    # Routage dynamique multi-niveau
+│   ├── block_metadata.py  # Poids et importance des blocs
+│   ├── compute_engine.py  # Détection GPU/CPU/MPS/ROCm
+│   ├── memory_monitor.py  # Surveillance RAM
+│   ├── storage_manager.py # Fallback NVMe
 │   └── network/
-│       ├── packets.py            # Format des paquets réseau
-│       ├── transmission.py       # Logique d’échange inter‑GPU
-│       ├── vramancer_link.py     # Protocole custom ultra‑léger
-│       ├── cloud_bridge.py       # Extension VRAM via réseau
-│       └── sfp_override.py       # Firmware réseau custom
-├── premium/
-│   ├── auto_tuner.py             # Optimisation dynamique
-│   ├── huggingface_bridge.py     # Compatibilité HF
+│       └── remote_executor.py  # Fallback réseau
+├── utils/
+│   └── gpu_utils.py       # Détection multi-GPU
 ├── dashboard/
-│   ├── app.py                    # Interface graphique (Flask ou PyQt)
-│   └── visualizer.py             # Visualisation VRAM en temps réel
-├── tests/
-│   └── test_vramancer.py         # Tests unitaires
+│   ├── app.py             # Interface graphique (Flask)
+│   └── visualizer.py      # Visualisation VRAM en temps réel
+├── premium/               # Modules avancés
+├── tests/                 # Tests unitaires et simulateurs
+├── launcher.py            # Point d’entrée CLI
+├── vrm                    # Alias CLI
+├── README.md
+├── setup.py
+├── debian/                # Packaging .deb
+```
 
+---
 
+## 🧪 Installation
 
-
-🧪 Installation
-bash
-
-Réduire
-Enregistrer
-Copier
-1
-2
-3
+```bash
 git clone https://github.com/tonpseudo/VRAMancer.git
 cd VRAMancer
 pip install -r requirements.txt
-🎯 Fonctionnalités
-Répartition intelligente de la VRAM entre plusieurs GPU.
-Planification adaptative du chargement des modèles.
-Sécurité : chiffrement des échanges réseau, authentification par clé publique.
-Interface graphique (Flask / PyQt) pour surveiller la consommation en temps réel.
-Export des statistiques en CSV ou JSON.
-Support multi‑GPU (CUDA, ROCm, M‑series).
-Intégration avec Hugging Face et ComfyUI.
- 🔧 Options Premium Disponibles
-MODULE
- DESCRIPTION
- VRAMancer Link	
-Protocole réseau ultra‑léger (SFP+/Ethernet) pour les échanges inter‑machines.
-ZeroStack TCP‑Free Mode	
-Bypass complet de la pile TCP/IP pour réduire la latence.
-Cloud Fabric Custom	
-Stack réseau propriétaire pour cloud distribué.
-SFP Protocol Override	
-Firmware dédié pour remplacer le protocole Ethernet par un protocole custom.
-VRAMancer Memory Sync	
-Synchronisation directe des blocs mémoire entre machines.
-GPU Direct Dispatch	
-Envoi direct de tâches entre GPU distants.
-Cloud Bridge	
-Extension dynamique de la VRAM via le réseau.
-VRAMancer Lite	
-Version allégée pour les configurations edge.
-Auto Tuner	
-Optimisation dynamique des paramètres système et réseau.
-Hugging Face Bridge	
-Compatibilité native avec les modèles Hugging Face.
-Scheduler Intelligent	
-Prédiction et préchargement adaptatif des modèles.
-Secure Fabric Layer	
-Chiffrement natif, authentification, gestion des sessions.
- 
- 🤝 Contribution
-Les contributions sont les bienvenues !
-Ouvrez une issue ou une pull request pour corriger un bug, ajouter une fonctionnalité ou simplement discuter d’une idée.
-📜 Licence
+```
+
+---
+
+## 🎯 Fonctionnalités / Features
+
+- ✅ Répartition intelligente de la VRAM entre plusieurs GPU
+- ✅ Routage dynamique vers GPU, CPU, RAM, NVMe ou réseau
+- ✅ Support multi-backend : CUDA, ROCm, MPS, CPU
+- ✅ Fallback automatique en cas de saturation mémoire
+- ✅ Interface graphique pour visualiser l’exécution
+- ✅ Export des statistiques en CSV ou JSON
+- ✅ Intégration Hugging Face et ComfyUI
+- ✅ Packaging `.deb` pour installation système
+
+---
+
+## 🔧 Modules Premium Disponibles
+
+| Module | Description |
+|--------|-------------|
+| VRAMancer Link | Protocole réseau ultra‑léger (SFP+/Ethernet) |
+| ZeroStack TCP‑Free Mode | Bypass complet de la pile TCP/IP |
+| Cloud Fabric Custom | Stack réseau propriétaire |
+| SFP Protocol Override | Firmware Ethernet custom |
+| VRAMancer Memory Sync | Synchronisation inter-machines |
+| GPU Direct Dispatch | Envoi direct entre GPU distants |
+| Cloud Bridge | Extension VRAM via réseau |
+| VRAMancer Lite | Version edge allégée |
+| Auto Tuner | Optimisation dynamique |
+| Hugging Face Bridge | Compatibilité native HF |
+| Scheduler Intelligent | Prédiction adaptative |
+| Secure Fabric Layer | Chiffrement et sessions |
+
+---
+
+## 📦 Packaging `.deb`
+
+```bash
+dpkg-deb --build VRAMancer
+```
+
+Or with [fpm](https://fpm.readthedocs.io/en/latest/):
+
+```bash
+fpm -s dir -t deb -n vramancer -v 1.0 .
+```
+
+---
+
+## 📊 Visualisation du Routage / Routing Visualization
+
+- Timeline des blocs exécutés
+- Affichage des périphériques utilisés (GPU, CPU, NVMe, réseau)
+- Logs exportables en JSON
+
+---
+
+## 🤝 Contribution
+
+**FR**  
+Les contributions sont les bienvenues ! Ouvrez une issue ou une pull request pour corriger un bug, ajouter une fonctionnalité ou discuter d’une idée.
+
+**EN**  
+Contributions welcome! Open an issue or pull request to fix a bug, add a feature, or share an idea.
+
+---
+
+## 📜 Licence
+
 MIT — libre d’utilisation, modification et distribution.
