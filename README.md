@@ -50,7 +50,7 @@ VRAMancer/
 ## 🧪 Installation
 
 ```bash
-git clone https://github.com/tonpseudo/VRAMancer.git
+git clone https://github.com/thebloodlust/VRAMancer.git
 cd VRAMancer
 pip install -r requirements.txt
 ```
@@ -59,6 +59,7 @@ pip install -r requirements.txt
 
 ## 🎯 Fonctionnalités / Features
 
+**FR 🇫🇷**
 - ✅ Répartition intelligente de la VRAM entre plusieurs GPU
 - ✅ Routage dynamique vers GPU, CPU, RAM, NVMe ou réseau
 - ✅ Support multi-backend : CUDA, ROCm, MPS, CPU
@@ -68,9 +69,19 @@ pip install -r requirements.txt
 - ✅ Intégration Hugging Face et ComfyUI
 - ✅ Packaging `.deb` pour installation système
 
+**EN 🇬🇧**
+- ✅ Smart VRAM distribution across multiple GPUs
+- ✅ Dynamic routing to GPU, CPU, RAM, NVMe, or network
+- ✅ Multi-backend support: CUDA, ROCm, MPS, CPU
+- ✅ Automatic fallback when memory is saturated
+- ✅ Graphical interface to monitor execution in real time
+- ✅ Export statistics to CSV or JSON
+- ✅ Hugging Face and ComfyUI integration
+- ✅ `.deb` packaging for system-wide installation
+
 ---
 
-## 🔧 Modules Premium Disponibles
+## 🔧 Modules Premium Disponibles / Premium Modules
 
 | Module | Description |
 |--------|-------------|
@@ -113,10 +124,10 @@ fpm -s dir -t deb -n vramancer -v 1.0 .
 
 ## 🤝 Contribution
 
-**FR**  
+**FR 🇫🇷**  
 Les contributions sont les bienvenues ! Ouvrez une issue ou une pull request pour corriger un bug, ajouter une fonctionnalité ou discuter d’une idée.
 
-**EN**  
+**EN 🇬🇧**  
 Contributions welcome! Open an issue or pull request to fix a bug, add a feature, or share an idea.
 
 ---
