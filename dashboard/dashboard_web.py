@@ -1,3 +1,5 @@
+# dashboard/dashboard_web.py
+
 from flask import Flask, render_template_string
 from utils.gpu_utils import get_available_gpus
 
@@ -34,5 +36,5 @@ def dashboard():
     gpus = get_available_gpus()
     return render_template_string(TEMPLATE, gpus=gpus)
 
-def launch_web_dashboard():
-    app.run(debug=False, port=5000)
+def launch():
+    app.run(debug=False, host="0.0.0.0", port=5000)
