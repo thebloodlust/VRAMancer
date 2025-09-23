@@ -1,0 +1,16 @@
+#!/bin/bash
+echo "📦 Installation VRAMancer dans /opt..."
+mkdir -p /opt/vramancer
+cp -r * /opt/vramancer
+
+echo "🔗 Création de l’alias CLI..."
+echo '#!/bin/bash' > /usr/local/bin/vrm
+echo 'python3 /opt/vramancer/launcher.py "$@"' >> /usr/local/bin/vrm
+chmod +x /usr/local/bin/vrm
+
+echo "🖼️ Installation de l’icône..."
+install -m 644 debian/icons/vramancer.png /usr/share/icons/vramancer.png
+
+echo "🖥️ Création du raccourci desktop..."
+install -m 644 debian/vrmancer.desktop /usr/share/applications/vrmancer.desktop
+update-desktop-database
