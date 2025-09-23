@@ -36,11 +36,27 @@ tk:
 clean:
 	@echo "🧹 Nettoyage..."
 	find . -type d -name "__pycache__" -exec rm -r {} +
+	rm -f vramancer_1.0.deb
+	rm -f vramancer.tar.gz
 
 deb:
 	@echo "📦 Construction du paquet .deb..."
 	chmod +x debian/postinst
 	dpkg-deb --build debian vramancer_1.0.deb
 
-release: install test clean deb
-	@echo "🚀 VRAMancer prêt pour distribution !"
+verify-deb:
+	@echo "🔍 Vérification du paquet .deb..."
+	dpkg-deb --info vramancer_1.0.deb
+	dpkg-deb --contents vramancer_1.0.deb
+
+archive:
+	@echo "📦 Création de l’archive .tar.gz..."
+	tar -czf vramancer.tar.gz \
+		launcher.py \
+		vrm \
+		requirements.txt \
+		dashboard/ \
+		core/ \
+		utils/ \
+		tests/ \
+	
