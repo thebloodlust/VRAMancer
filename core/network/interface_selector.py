@@ -5,13 +5,17 @@ def list_interfaces():
     for iface, addrs in psutil.net_if_addrs().items():
         print(f" - {iface}")
 
-def select_best_interface():
-    preferred = ["enp1s0f0", "eth0", "eno1"]
-    available = psutil.net_if_addrs().keys()
+def select_best_interface(preferred=None):
+    if preferred is None:
+        preferred = ["enp1s0f0", "eth0", "eno1"]
+    available = list(psutil.net_if_addrs().keys())
+    if not available:
+        print("❌ Aucune interface réseau détectée.")
+        return None
     for iface in preferred:
         if iface in available:
             print(f"✅ Interface sélectionnée automatiquement : {iface}")
             return iface
-    fallback = list(available)[0]
+    fallback = available[0]
     print(f"⚠️ Interface par défaut : {fallback}")
     return fallback
