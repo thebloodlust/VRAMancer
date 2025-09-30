@@ -1,7 +1,10 @@
+
 [Desktop Entry]
-Name=VRAMancer
-Exec=vrm --mode auto
-Icon=vramancer
+Version=1.0
 Type=Application
-Categories=Development;AI;
+Name=VRAMancer
+Comment=Gestion avancée de la VRAM GPU et dashboard
+Exec=/usr/local/bin/vramancer-launcher.sh
+Icon=/usr/local/share/vramancer/vramancer.png
 Terminal=false
+Categories=Utility;System;

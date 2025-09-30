@@ -1,12 +1,3 @@
-def get_unused_gpus(used_gpu_ids=None):
-    """
-    Retourne la liste des GPU non utilisés (par défaut, tous sauf GPU0).
-    used_gpu_ids : liste d’ID GPU déjà utilisés pour l’inférence principale.
-    """
-    gpus = get_available_gpus()
-    if used_gpu_ids is None:
-        used_gpu_ids = [0]  # convention : GPU0 principal
-    return [gpu for gpu in gpus if gpu["id"] not in used_gpu_ids and gpu["is_available"]]
 import torch
 
 def get_available_gpus():
@@ -47,6 +38,5 @@ def print_gpu_summary():
         status = "✅" if gpu["is_available"] else "❌"
         print(f"{status} GPU {gpu['id']} — {gpu['name']} — {gpu['total_vram_mb']} MB VRAM")
 
-# Exemple d'utilisation
 if __name__ == "__main__":
     print_gpu_summary()

@@ -13,8 +13,7 @@ setup(
     ],
     entry_points={
         "console_scripts": [
-            "vramancer=vramancer:main",
-            "vramancer-dashboard=dashboardcli:main"
+            "vramancer = vramancer.main:main"
         ]
     },
     author="Jérémie",

@@ -1,0 +1,5 @@
+# config.yaml
+# Exemple de configuration VRAMancer
+backend: auto   # auto, huggingface, vllm, ollama
+model: gpt2     # nom du modèle à charger
+num_gpus: null  # nombre de GPUs à utiliser (null = auto)

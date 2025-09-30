@@ -1,3 +1,15 @@
+lite:
+	@echo "📦 Construction de la version LITE (CLI only)..."
+	tar -czf vramancer-lite.tar.gz \
+		vramancer/ \
+		vrm \
+		requirements.txt \
+		core/ \
+		cli/ \
+		utils/ \
+		config.yaml \
+		README.md
+	@echo "✅ Archive LITE créée : vramancer-lite.tar.gz"
 # Makefile pour VRAMancer
 
 install:
@@ -15,23 +27,23 @@ test:
 
 run:
 	@echo "🚀 Lancement de VRAMancer (mode CLI)..."
-	python launcher.py --mode cli
+	bash scripts/vramancer-launcher.sh --mode cli
 
 auto:
 	@echo "🤖 Lancement intelligent (auto)..."
-	vrm --mode auto
+	bash scripts/vramancer-launcher.sh --mode auto
 
-web:
-	@echo "🌐 Lancement du dashboard web..."
-	python launcher.py --mode web
 
 qt:
+	@echo "📦 Construction du paquet .deb..."
+	chmod +x Debian/postinst
+	dpkg-deb --build Debian vramancer_1.0.deb
 	@echo "🪟 Lancement Qt..."
-	python launcher.py --mode qt
+	bash scripts/vramancer-launcher.sh --mode qt
 
 tk:
 	@echo "🧱 Lancement Tkinter..."
-	python launcher.py --mode tk
+	bash scripts/vramancer-launcher.sh --mode tk
 
 clean:
 	@echo "🧹 Nettoyage..."
@@ -41,8 +53,8 @@ clean:
 
 deb:
 	@echo "📦 Construction du paquet .deb..."
-	chmod +x debian/postinst
-	dpkg-deb --build debian vramancer_1.0.deb
+	chmod +x Debian/postinst
+	dpkg-deb --build Debian vramancer_1.0.deb
 
 verify-deb:
 	@echo "🔍 Vérification du paquet .deb..."

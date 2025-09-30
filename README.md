@@ -1,152 +1,149 @@
-🎮 VRAMancer
 
-FR 🇫🇷  
-VRAMancer est un moteur open‑source conçu pour optimiser l’utilisation de la mémoire vidéo (VRAM) sur des configurations multi‑GPU, même modestes. Il permet de charger des modèles IA volumineux en répartissant intelligemment les blocs entre GPU, RAM, NVMe et réseau.
+# 🎮 VRAMancer
 
-EN 🇬🇧  
-VRAMancer is an open-source engine designed to optimize video memory (VRAM) usage across multi-GPU setups — even modest ones. It enables large AI models to run locally by intelligently routing blocks across GPU, RAM, NVMe, and network.
+**FR 🇫🇷**
+> VRAMancer optimise la VRAM sur multi-GPU, permet d’exécuter n’importe quel LLM localement, et offre un dashboard moderne (Qt, Tk, Web, CLI) avec packaging .deb prêt à l’emploi.
 
----
-
-🚀 Objectif / Purpose
-
-FR  
-Faciliter l’exécution locale de modèles LLM ou de génération d’images (Stable Diffusion, etc.) sans dépendre du cloud ni investir dans du matériel haut de gamme.
-
-EN  
-Make it easy to run LLMs or image generation models (e.g. Stable Diffusion) locally — no cloud, no expensive hardware.
+**EN 🇬🇧**
+> VRAMancer optimizes VRAM across multi-GPU setups, runs any LLM locally, and provides a modern dashboard (Qt, Tk, Web, CLI) with ready-to-use .deb packaging.
 
 ---
 
-📦 Structure du projet / Project Structure
+## 🚀 Objectif / Purpose
 
-VRAMancer/  
-├── core/                  # Moteur de routage et planification  
-│   ├── scheduler.py       # Planification adaptative  
-│   ├── block_router.py    # Routage dynamique multi-niveau  
-│   ├── block_metadata.py  # Poids et importance des blocs  
-│   ├── compute_engine.py  # Détection GPU/CPU/MPS/ROCm  
-│   ├── memory_monitor.py  # Surveillance RAM  
-│   ├── storage_manager.py # Fallback NVMe  
-│   └── network/  
-│       └── remote_executor.py  # Fallback réseau  
-├── utils/  
-│   └── gpu_utils.py       # Détection multi-GPU  
-├── dashboard/  
-│   ├── app.py             # Interface graphique (Flask)  
-│   └── visualizer.py      # Visualisation VRAM en temps réel  
-├── premium/               # Modules avancés  
-├── tests/                 # Tests unitaires et simulateurs  
-├── launcher.py            # Point d’entrée CLI  
-├── vrm                    # Alias CLI  
-├── README.md  
-├── setup.py  
-├── debian/                # Packaging .deb  
+**FR** : Exécuter localement des LLM ou modèles IA volumineux sur n’importe quelle config, sans cloud ni matériel hors de prix.
+
+**EN** : Run large LLMs or AI models locally on any hardware, no cloud or expensive gear required.
 
 ---
 
-🧪 Installation
+## 📦 Structure du projet / Project Structure
 
-### Option 1 : locale (venv)
+```
+VRAMancer/
+├── core/         # Orchestrateur, découpeur, planificateur, gestion mémoire
+├── dashboard/    # Dashboards Qt, Tk, Web, CLI, visualisation VRAM
+├── cli/          # CLI alternative
+├── premium/      # Modules avancés (réseau, tuning, bridge HF, etc.)
+├── utils/        # Outils GPU, helpers
+├── vramancer/    # Entrée principale, packaging
+├── scripts/      # scripts/vramancer-launcher.sh (lanceur universel)
+├── Debian/       # Fichiers .deb, .desktop, icônes
+├── tests/        # Tests unitaires
+├── README.md, setup.py, Makefile, ...
+```
 
+---
+
+## 🧪 Installation
+
+### 1. Locale (recommandé)
 ```bash
 git clone https://github.com/thebloodlust/VRAMancer.git
 cd VRAMancer
-bash install.sh
+bash Install.sh
 source .venv/bin/activate
 make auto
 ```
 
-### Option 2 : via paquet `.deb`
-
+### 2. Paquet `.deb` (Ubuntu/Debian)
 ```bash
 sudo dpkg -i vramancer_1.0.deb
-vrm --mode auto
+/usr/local/bin/vramancer-launcher.sh --mode auto
 ```
 
-### Option 3 : via archive `.tar.gz`
-
+### 3. Archive portable
 ```bash
 tar -xzf vramancer.tar.gz
 cd VRAMancer
-bash install.sh
+bash Install.sh
 make auto
 ```
 
 ---
 
-🎯 Fonctionnalités / Features
+## 🖥️ Dashboards & Usage
 
-FR 🇫🇷  
-✅ Répartition intelligente de la VRAM entre plusieurs GPU  
-✅ Routage dynamique vers GPU, CPU, RAM, NVMe ou réseau  
-✅ Support multi-backend : CUDA, ROCm, MPS, CPU  
-✅ Fallback automatique en cas de saturation mémoire  
-✅ Interface graphique pour visualiser l’exécution  
-✅ Export des statistiques en CSV ou JSON  
-✅ Intégration Hugging Face et ComfyUI  
-✅ Packaging .deb pour installation système  
+Lancez le dashboard de votre choix :
 
-EN 🇬🇧  
-✅ Smart VRAM distribution across multiple GPUs  
-✅ Dynamic routing to GPU, CPU, RAM, NVMe, or network  
-✅ Multi-backend support: CUDA, ROCm, MPS, CPU  
-✅ Automatic fallback when memory is saturated  
-✅ Graphical interface to monitor execution in real time  
-✅ Export statistics to CSV or JSON  
-✅ Hugging Face and ComfyUI integration  
-✅ .deb packaging for system-wide installation  
+```bash
+# Mode auto (détection Qt > Tk > Web > CLI)
+scripts/vramancer-launcher.sh --mode auto
+# Forcer Qt
+scripts/vramancer-launcher.sh --mode qt
+# Forcer Tkinter
+scripts/vramancer-launcher.sh --mode tk
+# Forcer Web
+scripts/vramancer-launcher.sh --mode web
+# Mode CLI
+scripts/vramancer-launcher.sh --mode cli
+```
 
 ---
 
-🔧 Modules Premium Disponibles / Premium Modules
+## 🤖 Compatibilité LLM universelle
+
+- Découpe et routage dynamiques pour tous modèles HuggingFace, GPT, Llama, Mistral, etc.
+- Aucune dépendance à un modèle unique : le splitter et l’orchestrateur détectent automatiquement la structure (L1-L6, etc.).
+- Support multi-backend : CUDA, ROCm, MPS, CPU.
+
+---
+
+## 🎯 Fonctionnalités clés / Key Features
+
+- Répartition VRAM multi-GPU, fallback RAM/NVMe/réseau
+- Dashboard moderne (Qt, Tk, Web, CLI)
+- Visualisation temps réel, logs exportables
+- Intégration HuggingFace, ComfyUI, Llama.cpp, etc.
+- Packaging .deb, installation simple
+- Modules premium (réseau, tuning, bridge HF, etc.)
+
+---
+
+## 🔧 Premium Modules (en option)
 
 | Module                  | Description                            |
 |------------------------|----------------------------------------|
-| VRAMancer Link         | Protocole réseau ultra‑léger (SFP+/Ethernet)  
-| ZeroStack TCP‑Free Mode| Bypass complet de la pile TCP/IP  
-| Cloud Fabric Custom    | Stack réseau propriétaire  
-| SFP Protocol Override  | Firmware Ethernet custom  
-| VRAMancer Memory Sync  | Synchronisation inter-machines  
-| GPU Direct Dispatch    | Envoi direct entre GPU distants  
-| Cloud Bridge           | Extension VRAM via réseau  
-| VRAMancer Lite         | Version edge allégée  
-| Auto Tuner             | Optimisation dynamique  
-| Hugging Face Bridge    | Compatibilité native HF  
-| Scheduler Intelligent  | Prédiction adaptative  
-| Secure Fabric Layer    | Chiffrement et sessions  
+| VRAMancer Link         | Protocole réseau ultra‑léger (SFP+/Ethernet)  |
+| ZeroStack TCP‑Free Mode| Bypass complet de la pile TCP/IP        |
+| Cloud Fabric Custom    | Stack réseau propriétaire               |
+| SFP Protocol Override  | Firmware Ethernet custom                |
+| VRAMancer Memory Sync  | Synchronisation inter-machines          |
+| GPU Direct Dispatch    | Envoi direct entre GPU distants         |
+| Cloud Bridge           | Extension VRAM via réseau               |
+| VRAMancer Lite         | Version edge allégée                    |
+| Auto Tuner             | Optimisation dynamique                  |
+| Hugging Face Bridge    | Compatibilité native HF                 |
+| Scheduler Intelligent  | Prédiction adaptative                   |
+| Secure Fabric Layer    | Chiffrement et sessions                 |
 
 ---
 
-📦 Packaging `.deb`
+## 📦 Packaging & Build
 
 ```bash
-make deb          # Build du paquet
-make verify-deb   # Vérifie contenu et métadonnées
-make archive      # Crée une archive portable
+make deb          # Build du paquet .deb
 make release      # Build complet prêt à distribuer
 ```
 
 ---
 
-📊 Visualisation du Routage / Routing Visualization
+## 📊 Visualisation & Logs
 
-- Timeline des blocs exécutés  
-- Affichage des périphériques utilisés (GPU, CPU, NVMe, réseau)  
-- Logs exportables en JSON  
-
----
-
-🤝 Contribution
-
-FR 🇫🇷  
-Les contributions sont les bienvenues ! Ouvrez une issue ou une pull request pour corriger un bug, ajouter une fonctionnalité ou discuter d’une idée.
-
-EN 🇬🇧  
-Contributions welcome! Open an issue or pull request to fix a bug, add a feature, or share an idea.
+- Timeline des blocs exécutés
+- Affichage des périphériques utilisés (GPU, CPU, NVMe, réseau)
+- Logs exportables en JSON/CSV
 
 ---
 
-📜 Licence
+## 🤝 Contribution
+
+**FR** : Contributions bienvenues ! Ouvrez une issue ou une PR pour corriger un bug, ajouter une fonctionnalité ou discuter d’une idée.
+
+**EN** : Contributions welcome! Open an issue or PR to fix a bug, add a feature, or discuss an idea.
+
+---
+
+## 📜 Licence
 
 MIT — libre d’utilisation, modification et distribution.

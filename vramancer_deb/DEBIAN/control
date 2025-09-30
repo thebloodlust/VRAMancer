@@ -1,0 +1,7 @@
+Package: vramancer
+Version: 0.1.0
+Section: utils
+Priority: optional
+Architecture: all
+Maintainer: Jérémie
+Description: Optimisation VRAM multi-GPU pour IA locale
