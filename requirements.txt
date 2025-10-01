@@ -22,7 +22,7 @@ PyQt5==5.15.9               # Interface Qt (ajout explicite)
 # Tkinter est inclus dans Python ≥3.10
 
 # ─── Optional features ──────────────────────────────────────────────────
-torchvision==0.16.0         # Vision (si besoin)
+torchvision==0.17.0         # Vision (compatible Python 3.12)
 pycryptodome==3.20.0        # Cryptographie (si besoin)
 
 # ─── Packaging & CLI ────────────────────────────────────────────────────
