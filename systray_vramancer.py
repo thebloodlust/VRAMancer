@@ -9,25 +9,25 @@ class VRAMancerTray:
         self.tray = QSystemTrayIcon(QIcon("vramancer.png"), self.app)
         self.menu = QMenu()
 
-    self.install_action = QAction("Installation graphique VRAMancer")
-    self.install_action.triggered.connect(self.launch_installer)
-    self.menu.addAction(self.install_action)
+        self.install_action = QAction("Installation graphique VRAMancer")
+        self.install_action.triggered.connect(self.launch_installer)
+        self.menu.addAction(self.install_action)
 
-    self.supervision_action = QAction("Supervision / Dashboard")
-    self.supervision_action.triggered.connect(self.launch_supervision)
-    self.menu.addAction(self.supervision_action)
+        self.supervision_action = QAction("Supervision / Dashboard")
+        self.supervision_action.triggered.connect(self.launch_supervision)
+        self.menu.addAction(self.supervision_action)
 
-    self.gui_action = QAction("Ouvrir GUI avancée")
-    self.gui_action.triggered.connect(self.launch_gui)
-    self.menu.addAction(self.gui_action)
+        self.gui_action = QAction("Ouvrir GUI avancée")
+        self.gui_action.triggered.connect(self.launch_gui)
+        self.menu.addAction(self.gui_action)
 
-    self.quit_action = QAction("Quitter")
-    self.quit_action.triggered.connect(self.app.quit)
-    self.menu.addAction(self.quit_action)
+        self.quit_action = QAction("Quitter")
+        self.quit_action.triggered.connect(self.app.quit)
+        self.menu.addAction(self.quit_action)
 
-    self.tray.setContextMenu(self.menu)
-    self.tray.setToolTip("VRAMancer est lancé")
-    self.tray.show()
+        self.tray.setContextMenu(self.menu)
+        self.tray.setToolTip("VRAMancer est lancé")
+        self.tray.show()
 
     def launch_installer(self):
         # Lance l'installateur graphique
