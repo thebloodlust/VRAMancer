@@ -49,7 +49,7 @@ class InstallerGUI(QWidget):
     def run_install(self):
         mode = self.mode_combo.currentText()
         self.log(f"Mode selected: {mode}", "#FFD700")
-        if self.option_deb.isChecked():
+        if hasattr(self, "option_deb") and self.option_deb.isChecked():
             self.log("Building .deb package...", "#00BFFF")
             try:
                 result = subprocess.run(["make", "deb"], capture_output=True, text=True)
