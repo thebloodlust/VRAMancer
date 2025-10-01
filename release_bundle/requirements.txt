@@ -1,0 +1,29 @@
+# ─── Core ───────────────────────────────────────────────────────────────
+torch==2.1.0                # PyTorch (CUDA / ROCm / CPU)
+numpy==1.26.0               # Base scientific stack
+pyyaml==6.0.1               # Chargement config.yaml
+psutil==5.9.8               # Détection GPU, RAM, réseau
+
+# ─── Model support ──────────────────────────────────────────────────────
+transformers==4.34.0        # Hugging Face Transformers
+accelerate==0.27.2          # Multi-GPU / accélérateurs
+
+# ─── Dashboard & Web ────────────────────────────────────────────────────
+flask==3.0.2                # Dashboard web (Flask)
+dash==2.15.0                # Dashboard web (Dash)
+plotly==5.22.0              # Graphiques Dash
+python-socketio==5.11.1     # WebSocket (optionnel)
+
+# ─── GPU monitoring ─────────────────────────────────────────────────────
+nvidia-ml-py==11.525.112    # Usage VRAM NVIDIA (si dispo)
+
+# ─── GUI interfaces ─────────────────────────────────────────────────────
+PyQt5==5.15.9               # Interface Qt
+# Tkinter est inclus dans Python ≥3.10
+
+# ─── Optional features ──────────────────────────────────────────────────
+torchvision==0.16.0         # Vision (si besoin)
+pycryptodome==3.20.0        # Cryptographie (si besoin)
+
+# ─── Packaging & CLI ────────────────────────────────────────────────────
+setuptools==69.0.3          # Packaging pip / .deb
