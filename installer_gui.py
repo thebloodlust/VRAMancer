@@ -22,9 +22,11 @@ class InstallerGUI(QWidget):
         self.mode_combo.addItems(["Beginner (guided)", "Expert (custom)"])
         layout.addWidget(self.mode_combo)
 
-        self.option_deb = QCheckBox("Install .deb package (recommended)")
-        self.option_deb.setChecked(True)
-        layout.addWidget(self.option_deb)
+        import platform
+        if platform.system() != "Windows":
+            self.option_deb = QCheckBox("Install .deb package (recommended)")
+            self.option_deb.setChecked(True)
+            layout.addWidget(self.option_deb)
 
         self.option_lite = QCheckBox("Install Lite CLI version")
         layout.addWidget(self.option_lite)

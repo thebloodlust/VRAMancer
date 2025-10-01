@@ -16,6 +16,8 @@ if exist ..\requirements.txt (
 ) else (
 	pip install -r ..\..\requirements.txt
 )
+REM Installation explicite de PyQt5
+pip install pyqt5
 REM Lancement du systray et de l'interface graphique
 if exist ..\systray_vramancer.py (
 	start python ..\systray_vramancer.py
