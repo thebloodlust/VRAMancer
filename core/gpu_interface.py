@@ -47,6 +47,30 @@ def print_gpu_summary():
         status = "✅" if gpu["is_available"] else "❌"
         print(f"{status} GPU {gpu['id']} — {gpu['name']} — {gpu['total_vram_mb']} MB VRAM")
 
-# Exemple d'utilisation
+def use_secondary_gpus(task_fn, exclude_gpu0=True):
+    """
+    Exécute une fonction sur tous les GPU secondaires disponibles (monitoring, offload, orchestration, worker réseau).
+    task_fn : fonction à exécuter, reçoit l’id GPU en argument.
+    exclude_gpu0 : si True, ignore le GPU principal (0).
+    """
+    gpus = get_available_gpus()
+    for gpu in gpus:
+        if not gpu["is_available"]:
+            continue
+        if exclude_gpu0 and gpu["id"] == 0:
+            continue
+        print(f"[Secondary GPU] Exécution sur GPU{gpu['id']} ({gpu['name']})")
+        try:
+            task_fn(gpu["id"])
+        except Exception as e:
+            print(f"Erreur sur GPU{gpu['id']}: {e}")
+
+# Exemple d’utilisation : monitoring VRAM
 if __name__ == "__main__":
     print_gpu_summary()
+    def monitor_vram(gpu_id):
+        import torch
+        torch.cuda.set_device(gpu_id)
+        vram = torch.cuda.memory_allocated(gpu_id) / (1024 ** 2)
+        print(f"GPU{gpu_id} VRAM utilisée : {vram:.2f} MB")
+    use_secondary_gpus(monitor_vram)

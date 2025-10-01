@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VRAMancer Supervision</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 0; padding: 0; }
+        .cluster { display: flex; flex-wrap: wrap; gap: 1em; }
+        .node { border: 1px solid #ccc; border-radius: 8px; padding: 1em; min-width: 180px; background: #f9f9f9; }
+        .heatmap { margin-top: 2em; }
+        .mobile { max-width: 480px; margin: auto; }
+        .actions { margin-top: 1em; }
+    </style>
+</head>
+<body>
+    <div class="mobile">
+        <h2>Supervision VRAMancer (Mobile)</h2>
+        <div id="cluster" class="cluster"></div>
+        <div class="heatmap" id="heatmap"></div>
+        <div class="actions">
+            <button onclick="refreshCluster()">Rafraîchir</button>
+        </div>
+        <div id="logs"></div>
+    </div>
+    <script>
+        async function refreshCluster() {
+            const res = await fetch('/api/cluster');
+            const nodes = await res.json();
+            let html = '';
+            nodes.forEach(n => {
+                html += `<div class='node'><b>${n.id}</b><br>Type: ${n.type}<br>Statut: ${n.status}<br>CPU: ${n.cpu}<br>RAM: ${n.ram}<br>GPU: ${n.gpu}<br>OS: ${n.os}<br>Conn: ${n.conn}<br><button onclick=\"sendAction('${n.id}')\">Ping</button></div>`;
+            });
+            document.getElementById('cluster').innerHTML = html;
+        }
+        async function refreshHeatmap() {
+            const res = await fetch('/api/heatmap');
+            const heatmap = await res.json();
+            let html = '<h3>Heatmap VRAM/CPU</h3>';
+            heatmap.forEach(h => {
+                html += `<div>${h.id}: VRAM ${h.vram}% | CPU ${h.cpu}%</div>`;
+            });
+            document.getElementById('heatmap').innerHTML = html;
+        }
+        async function refreshLogs() {
+            const res = await fetch('/api/logs');
+            const logs = await res.json();
+            let html = '<h3>Logs</h3>';
+            logs.forEach(l => { html += `<div>${l.node}: ${l.action} (${new Date(l.timestamp*1000).toLocaleString()})</div>`; });
+            document.getElementById('logs').innerHTML = html;
+        }
+        async function sendAction(node_id) {
+            await fetch('/api/action', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({node_id, action:'ping'})});
+            refreshLogs();
+        }
+        refreshCluster(); refreshHeatmap(); refreshLogs();
+    </script>
+</body>
+</html>

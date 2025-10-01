@@ -1,0 +1,5 @@
+# Dépendances minimales pour VRAMancer Lite (CLI only)
+click
+requests
+numpy
+torch

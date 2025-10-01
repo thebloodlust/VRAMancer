@@ -1,0 +1,28 @@
+# Fichiers et dossiers à ignorer
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.swp
+*.swo
+*.log
+*.bak
+.DS_Store
+.env
+.env.*
+.cache/
+*.egg-info/
+dist/
+build/
+*.tar.gz
+*.deb
+*.zip
+*.sqlite3
+node_modules/
+.idea/
+.vscode/
+# Fichiers secrets
+secrets.*
+# Dossiers temporaires
+/tmp/
