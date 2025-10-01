@@ -18,6 +18,13 @@
 
 
 ## 📦 Installation du bundle ZIP
+### ⚠️ Note Windows : Installation de Rust
+
+Certains modules (ex : tokenizers) nécessitent Rust pour s’installer sous Windows. Si une erreur apparaît lors de l’installation, installez Rust via :
+
+https://rustup.rs/
+
+Puis relancez l’installation.
 
 1. Téléchargez le fichier : `vramancer_release_bundle.zip`
 2. Extrayez l’archive ZIP :

@@ -16,14 +16,28 @@
 
 # 🚀 Installation ultra-débutant
 
-1. Téléchargez et extrayez l’archive : `vramancer_release_bundle.zip`
-2. Ouvrez le dossier `release_bundle`
-3. Choisissez votre OS :
+
+## 📦 Installation du bundle ZIP
+### ⚠️ Note Windows : Installation de Rust
+
+Certains modules (ex : tokenizers) nécessitent Rust pour s’installer sous Windows. Si une erreur apparaît lors de l’installation, installez Rust via :
+
+https://rustup.rs/
+
+Puis relancez l’installation.
+
+1. Téléchargez le fichier : `vramancer_release_bundle.zip`
+2. Extrayez l’archive ZIP :
+	```bash
+	unzip vramancer_release_bundle.zip
+	```
+3. Ouvrez le dossier extrait : `release_bundle`
+4. Choisissez votre OS :
 	- **Linux** : lancez `installers/install_linux.sh` ou installez le `.deb`
 	- **macOS** : lancez `installers/install_macos.sh`
 	- **Windows** : lancez `installers/install_windows.bat`
-4. Suivez les instructions à l’écran
-5. Consultez le guide ultra-débutant dans `docs/INSTALL_ULTRA_DEBUTANT.md`
+5. Suivez les instructions à l’écran
+6. Consultez le guide ultra-débutant dans `docs/INSTALL_ULTRA_DEBUTANT.md`
 
 Tout est automatisé, plug-and-play, multi-OS, dashboards auto, cluster auto, onboarding vidéo/interactive.
 
