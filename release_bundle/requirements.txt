@@ -1,5 +1,5 @@
 # ─── Core ───────────────────────────────────────────────────────────────
-torch==2.1.0                # PyTorch (CUDA / ROCm / CPU)
+torch==2.2.0                # PyTorch (compatible Python 3.12)
 numpy==1.26.0               # Base scientific stack
 pyyaml==6.0.1               # Chargement config.yaml
 psutil==5.9.8               # Détection GPU, RAM, réseau
@@ -18,7 +18,7 @@ python-socketio==5.11.1     # WebSocket (optionnel)
 nvidia-ml-py==11.525.112    # Usage VRAM NVIDIA (si dispo)
 
 # ─── GUI interfaces ─────────────────────────────────────────────────────
-PyQt5==5.15.9               # Interface Qt
+PyQt5==5.15.9               # Interface Qt (ajout explicite)
 # Tkinter est inclus dans Python ≥3.10
 
 # ─── Optional features ──────────────────────────────────────────────────
