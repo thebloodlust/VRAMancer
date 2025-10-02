@@ -6,7 +6,17 @@ from PyQt5.QtCore import QProcess
 class VRAMancerTray:
     def __init__(self):
         self.app = QApplication(sys.argv)
-        self.tray = QSystemTrayIcon(QIcon("vramancer.png"), self.app)
+        import os
+        icon_path = os.path.join(os.path.dirname(__file__), "vramancer.png")
+        if not os.path.exists(icon_path):
+            # Icône par défaut si vramancer.png absent
+            from PyQt5.QtGui import QPixmap
+            pixmap = QPixmap(32, 32)
+            pixmap.fill(Qt.blue)
+            icon = QIcon(pixmap)
+        else:
+            icon = QIcon(icon_path)
+        self.tray = QSystemTrayIcon(icon, self.app)
         self.menu = QMenu()
 
         self.install_action = QAction("Installation graphique VRAMancer")

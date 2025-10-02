@@ -18,11 +18,17 @@
 
 
 ## 📦 Installation du bundle ZIP
+### ⚠️ Astuce Windows : chemins et nom de dossier
+
+Si vous téléchargez plusieurs fois l’archive ZIP, Windows ajoute une parenthèse et un chiffre au nom du dossier (ex : `VRAMancer-main (2)`).
+Pour éviter les problèmes de chemins dans les scripts, renommez le dossier extrait en `VRAMancer-main` (sans parenthèse ni chiffre) avant de lancer l’installation.
+Lancez toujours les scripts depuis le dossier `release_bundle`.
 ### ⚠️ Note Windows : Installation de Rust
 
 Certains modules (ex : tokenizers) nécessitent Rust pour s’installer sous Windows. Si une erreur apparaît lors de l’installation, installez Rust via :
 
-https://rustup.rs/
+https://
+rustup.rs/
 
 Puis relancez l’installation.
 

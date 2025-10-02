@@ -8,7 +8,8 @@ class VRAMancerTray:
     def __init__(self):
         print("[VRAMancer Systray] Démarrage du systray...")
         self.app = QApplication(sys.argv)
-        icon_path = os.path.join(os.path.dirname(__file__), "vramancer.png")
+        self.base_dir = os.path.dirname(os.path.abspath(__file__))
+        icon_path = os.path.join(self.base_dir, "vramancer.png")
         if not os.path.exists(icon_path):
             print(f"[ERREUR] Icône non trouvée : {icon_path}")
         try:
@@ -44,15 +45,24 @@ class VRAMancerTray:
 
     def launch_installer(self):
         # Lance l'installateur graphique
-        QProcess.startDetached(sys.executable, ["installer_gui.py"])
+        installer_path = os.path.join(self.base_dir, "installer_gui.py")
+        if not os.path.exists(installer_path):
+            print(f"[ERREUR] Installateur non trouvé : {installer_path}")
+        QProcess.startDetached(sys.executable, [installer_path])
 
     def launch_supervision(self):
         # Lance le dashboard supervision (exemple)
-        QProcess.startDetached(sys.executable, ["dashboard/dashboard_web.py"])
+        dashboard_path = os.path.join(self.base_dir, "dashboard", "dashboard_web.py")
+        if not os.path.exists(dashboard_path):
+            print(f"[ERREUR] Dashboard non trouvé : {dashboard_path}")
+        QProcess.startDetached(sys.executable, [dashboard_path])
 
     def launch_gui(self):
         # Lance la GUI avancée (exemple)
-        QProcess.startDetached(sys.executable, ["dashboard/dashboard_qt.py"])
+        gui_path = os.path.join(self.base_dir, "dashboard", "dashboard_qt.py")
+        if not os.path.exists(gui_path):
+            print(f"[ERREUR] GUI avancée non trouvée : {gui_path}")
+        QProcess.startDetached(sys.executable, [gui_path])
 
     def run(self):
         sys.exit(self.app.exec_())
