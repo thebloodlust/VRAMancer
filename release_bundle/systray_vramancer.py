@@ -1,12 +1,24 @@
 import sys
+import os
 from PyQt5.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QAction
 from PyQt5.QtGui import QIcon
 from PyQt5.QtCore import QProcess
 
 class VRAMancerTray:
     def __init__(self):
+        print("[VRAMancer Systray] Démarrage du systray...")
         self.app = QApplication(sys.argv)
-        self.tray = QSystemTrayIcon(QIcon("vramancer.png"), self.app)
+        icon_path = os.path.join(os.path.dirname(__file__), "vramancer.png")
+        if not os.path.exists(icon_path):
+            print(f"[ERREUR] Icône non trouvée : {icon_path}")
+        try:
+            icon = QIcon(icon_path)
+            if icon.isNull():
+                print(f"[ERREUR] Impossible de charger l'icône : {icon_path}")
+        except Exception as e:
+            print(f"[ERREUR] Exception lors du chargement de l'icône : {e}")
+            icon = QIcon()
+        self.tray = QSystemTrayIcon(icon, self.app)
         self.menu = QMenu()
 
         self.install_action = QAction("Installation graphique VRAMancer")
@@ -28,6 +40,7 @@ class VRAMancerTray:
         self.tray.setContextMenu(self.menu)
         self.tray.setToolTip("VRAMancer est lancé")
         self.tray.show()
+        print("[VRAMancer Systray] Systray lancé. Vérifiez la barre de tâches.")
 
     def launch_installer(self):
         # Lance l'installateur graphique
