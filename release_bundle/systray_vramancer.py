@@ -9,6 +9,14 @@ class VRAMancerTray:
         print("[VRAMancer Systray] Démarrage du systray...")
         self.app = QApplication(sys.argv)
         self.base_dir = os.path.dirname(os.path.abspath(__file__))
+        # Ajout des chemins core et dashboard au sys.path pour les imports
+        import sys
+        core_path = os.path.join(self.base_dir, "core")
+        dashboard_path = os.path.join(self.base_dir, "dashboard")
+        if core_path not in sys.path:
+            sys.path.append(core_path)
+        if dashboard_path not in sys.path:
+            sys.path.append(dashboard_path)
         icon_path = os.path.join(self.base_dir, "vramancer.png")
         if not os.path.exists(icon_path):
             print(f"[ERREUR] Icône non trouvée : {icon_path}")
