@@ -1,20 +1,28 @@
-import socketio
+import os
+try:
+    if os.environ.get("VRM_DISABLE_SOCKETIO", "0") in {"1","true","TRUE"}:
+        raise ImportError("socketio disabled by env")
+    import socketio  # type: ignore
+except ImportError:  # graceful degradation for lite environments or disabled
+    socketio = None  # noqa: N816
+
 import json
 from .packets import Packet
 from utils.helpers import serialize_tensors, deserialize_tensors
 
-sio = socketio.Client()
+sio = socketio.Client() if socketio else None
 
 # ------------------------------------------------------------------
 # 1️⃣  Connexion au serveur (ou à une autre machine)  
 # ------------------------------------------------------------------
-@sio.event
-def connect():
-    print("[Transmission] Connexion établie")
+if sio:
+    @sio.event  # type: ignore[misc]
+    def connect():  # pragma: no cover - simple print
+        print("[Transmission] Connexion établie")
 
-@sio.event
-def disconnect():
-    print("[Transmission] Déconnexion")
+    @sio.event  # type: ignore[misc]
+    def disconnect():  # pragma: no cover - simple print
+        print("[Transmission] Déconnexion")
 
 # ------------------------------------------------------------------
 # 2️⃣  Envoi d’un bloc (tensors) → serveur / autre GPU
@@ -82,14 +90,19 @@ def send_block(tensors, shapes, dtypes, target_device="localhost", storage_path=
 # ------------------------------------------------------------------
 # 3️⃣  Réception d’un bloc
 # ------------------------------------------------------------------
-@sio.on("vramancer_packet", namespace="/vram")
-def on_packet(data):
-    packet = Packet.unpack(data)[0]
-    # Pour l’exemple, on ne fait rien ici – le code client le fera
-    print("[Transmission] Réception d’un paquet")
+if sio:
+    @sio.on("vramancer_packet", namespace="/vram")  # type: ignore[misc]
+    def on_packet(data):  # pragma: no cover - IO print
+        packet = Packet.unpack(data)[0]
+        # Pour l’exemple, on ne fait rien ici – le code client le fera
+        print("[Transmission] Réception d’un paquet")
 
 # ------------------------------------------------------------------
 # 4️⃣  Démarrage du client (déjà fait dans vramancer_link)
 # ------------------------------------------------------------------
 def start_client(server_url="http://localhost:5000"):
+    if not sio:
+        print("[Transmission] SocketIO non disponible (mode lite) – client ignoré")
+        return False
     sio.connect(server_url)
+    return True
