@@ -2,14 +2,14 @@
 import time
 import random
 from core.scheduler import Scheduler
-from core.logger import Logger
+from core.logger import LoggerAdapter
 from core.monitor import GPUMonitor
 from core.compressor import Compressor
 
 class StreamManager:
     def __init__(self, scheduler: Scheduler, logger: Logger = None, verbose=True):
         self.scheduler = scheduler
-        self.logger = logger or Logger()
+    self.logger = logger or LoggerAdapter("stream")
         self.verbose = verbose
         self.loaded_layers = {}
         self.monitor = GPUMonitor()

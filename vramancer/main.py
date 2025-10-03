@@ -18,6 +18,7 @@ from core.stream_manager   import StreamManager
 from core.compute_engine   import ComputeEngine
 from core.transfer_manager import TransferManager
 from core.memory_balancer  import MemoryBalancer
+from core.hierarchical_memory import HierarchicalMemoryManager
 from core.scheduler        import SimpleScheduler as Scheduler
 from core.logger           import LoggerAdapter, get_logger
 from core.config           import get_config
@@ -108,6 +109,12 @@ def main():
         model = backend.load_model(model_name)
         blocks = backend.split_model(num_gpus)
     log.info(f"Modèle découpé en {len(blocks)} blocs")
+        hmem = HierarchicalMemoryManager()
+        # Enregistrer blocs VRAM primaire (L1)
+        from core.memory_block import MemoryBlock
+        for i, b in enumerate(blocks):
+            mb = MemoryBlock(size_mb=getattr(b, 'size_mb', 128), gpu_id=0, status="allocated")
+            hmem.register_block(mb, "L1")
     except NotImplementedError as e:
         log.warning(f"Non implémenté: {e}")
         return
