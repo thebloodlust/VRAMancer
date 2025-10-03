@@ -1,43 +1,49 @@
-# ------------------- Sélection dynamique du backend -------------------
+"""Abstraction unifiée des backends LLM.
+
+Ajouts :
+- Fallback stub vLLM / Ollama si dépendances absentes (activer via env
+  `VRM_BACKEND_ALLOW_STUB=1`).
+- Hooks de tracking mémoire (injection hmem) déjà gérés côté HuggingFace.
+"""
+from abc import ABC, abstractmethod
+from typing import Any, List
+import os
+from core.logger import LoggerAdapter
+import hashlib
+
 def select_backend(backend_name: str = "auto"):
-    """
-    Sélectionne dynamiquement le backend LLM selon le nom ou l’environnement.
-    - backend_name : "huggingface", "vllm", "ollama", ou "auto"
-    """
     backend_name = (backend_name or "auto").lower()
+    allow_stub = os.environ.get("VRM_BACKEND_ALLOW_STUB")
     if backend_name == "huggingface":
         return HuggingFaceBackend()
     if backend_name == "vllm":
         try:
             import vllm  # noqa: F401
-            return vLLMBackend()
+            return vLLMBackend(real=True)
         except ImportError:
-            raise RuntimeError("vLLM n'est pas installé.")
+            if allow_stub: return vLLMBackend(real=False)
+            raise RuntimeError("vLLM non installé (export VRM_BACKEND_ALLOW_STUB=1 pour stub)")
     if backend_name == "ollama":
         try:
             import ollama  # noqa: F401
-            return OllamaBackend()
+            return OllamaBackend(real=True)
         except ImportError:
-            raise RuntimeError("Ollama n'est pas installé.")
-    # Mode auto : priorité vLLM > Ollama > HuggingFace
+            if allow_stub: return OllamaBackend(real=False)
+            raise RuntimeError("Ollama non installé (export VRM_BACKEND_ALLOW_STUB=1 pour stub)")
+    # auto
     try:
         import vllm  # noqa: F401
-        return vLLMBackend()
+        return vLLMBackend(real=True)
     except ImportError:
-        pass
+        if allow_stub:
+            return vLLMBackend(real=False)
     try:
         import ollama  # noqa: F401
-        return OllamaBackend()
+        return OllamaBackend(real=True)
     except ImportError:
-        pass
+        if allow_stub:
+            return OllamaBackend(real=False)
     return HuggingFaceBackend()
-# core/backends.py
-"""
-Abstraction unifiée pour les backends LLM (HuggingFace, vLLM, Ollama, etc.)
-"""
-from abc import ABC, abstractmethod
-from typing import Any, List
-from core.logger import LoggerAdapter
 
 class BaseLLMBackend(ABC):
     """
@@ -85,14 +91,13 @@ class HuggingFaceBackend(BaseLLMBackend):
         self.log.debug("Début inférence séquentielle sur blocs")
         if not self.blocks:
             raise RuntimeError("Blocs non initialisés")
-        from core.memory_block import MemoryBlock
+    from core.memory_block import MemoryBlock
         for block in self.blocks:
             x = block(x)
             # Hook accès mémoire : chaque passage = touch + éventuelle promotion
             if self.hmem:
                 mb = MemoryBlock(size_mb=getattr(block, 'size_mb', 128), gpu_id=0, status="allocated")
                 # On reconstruit un id stable via id(block) hashé
-                import hashlib
                 bid = hashlib.sha1(str(id(block)).encode()).hexdigest()
                 # Enregistrer si pas présent
                 if bid not in self.hmem.registry:
@@ -107,79 +112,74 @@ class HuggingFaceBackend(BaseLLMBackend):
 
 # ------------------- vLLM Backend (squelette) -------------------
 class vLLMBackend(BaseLLMBackend):
-    def __init__(self):
-        """Backend vLLM natif (nécessite le package vllm)."""
+    def __init__(self, real: bool = True):
         self.model = None
-        self.log = LoggerAdapter("backend.vllm")
+        self.log = LoggerAdapter("backend.vllm" + (".stub" if not real else ""))
+        self.real = real
 
     def load_model(self, model_name: str, **kwargs):
-        """
-        Charge un modèle via l’API vLLM (si installé).
-        """
+        if not self.real:
+            self.model = {"name": model_name, "stub": True}
+            return self.model
         try:
             from vllm import LLM
             self.model = LLM(model=model_name, **kwargs)
             return self.model
-        except ImportError:
-            self.log.error("vLLM n'est pas installé")
-            raise RuntimeError("vLLM n’est pas installé. Faites pip install vllm.")
         except Exception as e:
-            self.log.error(f"Erreur vLLM: {e}")
-            raise RuntimeError(f"Erreur vLLM: {e}")
+            if os.environ.get("VRM_BACKEND_ALLOW_STUB"):
+                self.log.warning(f"Fallback stub vLLM: {e}")
+                self.real = False
+                self.model = {"name": model_name, "stub": True}
+                return self.model
+            raise
 
     def split_model(self, num_gpus: int, vram_per_gpu: List[int] = None):
-        """
-        vLLM gère le dispatch GPU en interne. Retourne un stub unique.
-        """
         if self.model is None:
             raise RuntimeError("Modèle vLLM non chargé.")
         return [self.model]
 
     def infer(self, inputs: Any):
-        """
-        Effectue une inférence via vLLM (API Python ou REST selon install).
-        """
         if self.model is None:
             raise RuntimeError("Modèle vLLM non chargé.")
-        # Ex: self.model.generate(...)
-        raise NotImplementedError("Intégration vLLM réelle à compléter selon votre install.")
+        if not self.real:
+            try:
+                import torch
+                return torch.zeros_like(inputs)
+            except Exception:
+                return inputs
+        raise NotImplementedError("Intégration vLLM réelle manquante (installer vllm).")
 
 # ------------------- Ollama Backend (squelette) -------------------
 class OllamaBackend(BaseLLMBackend):
-    def __init__(self):
-        """Backend Ollama natif (nécessite Ollama en local ou via REST)."""
+    def __init__(self, real: bool = True):
         self.model = None
-        self.log = LoggerAdapter("backend.ollama")
+        self.log = LoggerAdapter("backend.ollama" + (".stub" if not real else ""))
+        self.real = real
 
     def load_model(self, model_name: str, **kwargs):
-        """
-        Charge un modèle Ollama (via REST ou SDK Python si dispo).
-        """
+        if not self.real:
+            self.model = {"name": model_name, "stub": True}
+            return self.model
         try:
-            import requests
-            # Ex: requests.post('http://localhost:11434/api/generate', ...)
+            import requests  # noqa: F401
             self.model = model_name
             return self.model
-        except ImportError:
-            self.log.error("requests n'est pas installé")
-            raise RuntimeError("requests n’est pas installé. Faites pip install requests.")
         except Exception as e:
-            self.log.error(f"Erreur Ollama: {e}")
-            raise RuntimeError(f"Erreur Ollama: {e}")
+            if os.environ.get("VRM_BACKEND_ALLOW_STUB"):
+                self.log.warning(f"Fallback stub Ollama: {e}")
+                self.real = False
+                self.model = {"name": model_name, "stub": True}
+                return self.model
+            raise
 
     def split_model(self, num_gpus: int, vram_per_gpu: List[int] = None):
-        """
-        Ollama ne supporte pas le split GPU natif. Retourne un stub unique.
-        """
         if self.model is None:
             raise RuntimeError("Modèle Ollama non chargé.")
         return [self.model]
 
     def infer(self, inputs: Any):
-        """
-        Effectue une inférence via Ollama (REST API ou SDK Python).
-        """
         if self.model is None:
             raise RuntimeError("Modèle Ollama non chargé.")
-        # Ex: requests.post(...)
-        raise NotImplementedError("Intégration Ollama réelle à compléter selon votre install.")
+        if not self.real:
+            return {"text": "stub-ollama-output", "len_in": getattr(inputs, 'shape', '?')}
+        raise NotImplementedError("Intégration Ollama réelle manquante (installer Ollama).")
