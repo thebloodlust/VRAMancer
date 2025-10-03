@@ -12,6 +12,8 @@ import time
 import random
 from dataclasses import dataclass
 from typing import Optional, Callable
+import mmap
+import hashlib
 
 from core.logger import LoggerAdapter
 
@@ -39,16 +41,41 @@ class FastHandle:
     kind: str
     meta: dict
     latency_us: int = 40  # valeur par défaut simulée
+    shm_path: Optional[str] = None
+    _last_sent_len: int = 0
+
+    def _ensure_segment(self, size: int):
+        if not self.shm_path:
+            name = f"/tmp/vramancer_fast_{hashlib.sha1(str(self.meta).encode()).hexdigest()[:8]}"
+            self.shm_path = name
+        # Crée/étend le fichier mmap
+        with open(self.shm_path, 'ab') as f:
+            if f.tell() < size:
+                f.truncate(size)
 
     def send(self, data: bytes) -> int:
-        # Simulation latence
-        target = time.perf_counter_ns() + self.latency_us * 1000
-        while time.perf_counter_ns() < target:
-            pass
-        return len(data)
+        size = len(data)
+        self._ensure_segment(size)
+        with open(self.shm_path, 'r+b') as f:
+            mm = mmap.mmap(f.fileno(), size)
+            mm.seek(0)
+            mm.write(data)
+            mm.flush()
+            mm.close()
+        self._last_sent_len = size
+        return size
 
     def recv(self) -> Optional[bytes]:
-        return None
+        if not self.shm_path or self._last_sent_len == 0:
+            return None
+        try:
+            with open(self.shm_path, 'rb') as f:
+                mm = mmap.mmap(f.fileno(), self._last_sent_len, access=mmap.ACCESS_READ)
+                buf = mm.read(self._last_sent_len)
+                mm.close()
+            return buf
+        except FileNotFoundError:
+            return None
 
 
 def open_low_latency_channel(prefer: Optional[str] = None) -> Optional[FastHandle]:

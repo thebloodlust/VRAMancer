@@ -111,6 +111,11 @@ def main():
         blocks = backend.split_model(num_gpus)
         log.info(f"Modèle découpé en {len(blocks)} blocs")
         hmem = HierarchicalMemoryManager()
+        # Injecter référence dans backend si supporté
+        try:
+            backend.hmem = hmem
+        except Exception:
+            pass
         # Enregistrer blocs VRAM primaire (L1)
         from core.memory_block import MemoryBlock
         for i, b in enumerate(blocks):
@@ -180,7 +185,15 @@ def main():
 
     # Fast-path fibre/usb4 (stub) ouverture
     channel = open_low_latency_channel()
-    log.info(f"Fast-path ouvert kind={channel.kind}")
+    log.info(f"Fast-path ouvert kind={channel.kind} shm={channel.shm_path}")
+    # Test d'écriture/lecture fastpath (démo)
+    payload = b"hello-fastpath"
+    channel.send(payload)
+    echoed = channel.recv()
+    if echoed == payload:
+        log.info("Fastpath mmap OK (echo)")
+    else:
+        log.warning("Fastpath echo failed (stub mode?)")
 
     # Boucle principale (placeholder) simulation d'accès blocs
     while True:

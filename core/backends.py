@@ -64,6 +64,7 @@ class HuggingFaceBackend(BaseLLMBackend):
         self.model = None
         self.blocks = None
         self.log = LoggerAdapter("backend.hf")
+        self.hmem = None  # référence injectée optionnelle
 
     def load_model(self, model_name: str, **kwargs):
         from transformers import AutoModelForCausalLM
@@ -82,8 +83,25 @@ class HuggingFaceBackend(BaseLLMBackend):
         # Simple forward sur tous les blocs (à adapter pour pipeline multi-GPU)
         x = inputs
         self.log.debug("Début inférence séquentielle sur blocs")
+        if not self.blocks:
+            raise RuntimeError("Blocs non initialisés")
+        from core.memory_block import MemoryBlock
         for block in self.blocks:
             x = block(x)
+            # Hook accès mémoire : chaque passage = touch + éventuelle promotion
+            if self.hmem:
+                mb = MemoryBlock(size_mb=getattr(block, 'size_mb', 128), gpu_id=0, status="allocated")
+                # On reconstruit un id stable via id(block) hashé
+                import hashlib
+                bid = hashlib.sha1(str(id(block)).encode()).hexdigest()
+                # Enregistrer si pas présent
+                if bid not in self.hmem.registry:
+                    mb.id = bid
+                    self.hmem.register_block(mb, "L1")
+                else:
+                    mb.id = bid
+                self.hmem.touch(mb)
+                self.hmem.promote_policy(mb)
         self.log.debug("Fin inférence")
         return x
 
