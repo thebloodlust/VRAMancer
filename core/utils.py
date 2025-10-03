@@ -8,6 +8,7 @@ from __future__ import annotations
 import torch
 from typing import Iterable, Sequence
 from transformers import AutoTokenizer
+from transformers.utils import is_tokenizers_available
 
 
 # --------------------------------------------------------------
@@ -27,7 +28,11 @@ def get_tokenizer(model_name: str) -> AutoTokenizer:
     AutoTokenizer
         Instantiated tokenizer ready for use.
     """
-    return AutoTokenizer.from_pretrained(model_name, use_fast=True)
+    try:
+        return AutoTokenizer.from_pretrained(model_name, use_fast=True)
+    except Exception as e:
+        print(f"[Tokenizer] Fast tokenizer indisponible ({e}). Fallback slow...")
+        return AutoTokenizer.from_pretrained(model_name, use_fast=False)
 
 
 def get_device_type(idx: int) -> torch.device:

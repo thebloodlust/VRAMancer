@@ -1,6 +1,3 @@
-
-
-
 # 🆕 Nouveautés 2025
 
 - **API No-code Workflows IA** : création et exécution de pipelines IA sans coder
@@ -191,6 +188,33 @@ Voir [ROADMAP_IDEES.md](ROADMAP_IDEES.md) pour toutes les idées avancées, modu
 
 MIT — (c) thebloodlust 2023-2025
 
+---
+
+## 🔍 État d'implémentation (Réalité vs Promesse)
+
+| Domaine | Statut | Détails |
+|---------|--------|---------|
+| Backends HuggingFace | ✅ Fonctionnel | Chargement + split basique (à améliorer VRAM réelle) |
+| Backend vLLM | 🟡 Prototype | Stub, infer non implémenté |
+| Backend Ollama | 🟡 Prototype | Stub, REST à compléter |
+| Routing adaptatif | 🟡 Démo | Heuristique simple sur VRAM simulée |
+| Federated Learning | 🟡 Prototype | Agrégation simple (federated_learning.py) |
+| XAI Dashboard | 🟡 Prototype | Méthodes explain/detect_bias stub |
+| Hybrid Cloud Bridge | 🟡 Prototype | Déploiement/offload simulé |
+| Zero Trust / Sécurité | 🟡 Prototype | Structures présentes, logique à étoffer |
+| Auto-Repair | 🟡 Prototype | Scripts de base, pas d'orchestration complète |
+| Marketplace Plugins | 🟡 Prototype | Classe plugin générique |
+| API No-Code | 🟡 Prototype | Endpoint Flask POST pipeline |
+| Tokenizer fallback | ❌ Manquant | À ajouter : fallback slow si Rust absent |
+| Tests unitaires | 🟡 Partiel | Scheduler / imports ok, manque réseau/sécurité/XAI |
+| Tests lourds mémoire | ⚠️ Risque | `test_memory_stress` potentiellement OOM |
+| CI automatisée | ❌ Manquant | Recommander workflow lint+tests rapides |
+| Cohérence dépendances | ✅ Corrigé | `setup.cfg` synchronisé sur requirements.txt |
+| Systray multi-contexte | ✅ OK | Chemins absolus + détection bundle |
+
+Légende : ✅ = opérationnel / 🟡 = prototype / ❌ = à implémenter / ⚠️ = à surveiller
+
+
 ## 🇬🇧 English version
 
 ### 🚀 Quick install
@@ -293,6 +317,41 @@ make deb           # or make archive / make lite
 - Sécurité, auto-réparation, extensions premium
 
 ---
+
+# Installation simplifiée de VRAMancer (Windows)
+
+## 1. Téléchargement
+- Téléchargez le dépôt GitHub (VRAMancer-main.zip) et le bundle release (vramancer_release_bundle.zip).
+
+## 2. Extraction
+- Dézippez le dépôt dans un dossier, par exemple :
+  `C:\Users\votre_nom\Downloads\VRAMancer-main\`
+- Dézippez le bundle release dans ce même dossier ou à l’intérieur, par exemple :
+  `C:\Users\votre_nom\Downloads\VRAMancer-main\release_bundle\`
+
+## 3. Installation des dépendances
+- Ouvrez une console (cmd ou PowerShell) dans le dossier `release_bundle`.
+- Installez les dépendances Python :
+  ```bash
+  pip install -r requirements.txt
+  ```
+
+## 4. Lancement du systray
+- Dans la console, lancez :
+  ```bash
+  python systray_vramancer.py
+  ```
+- L’icône VRAMancer apparaît dans la barre de tâches.
+- Utilisez le menu pour accéder à l’installation graphique, la supervision ou la GUI avancée.
+
+## 5. Conseils
+- Ne déplacez pas le script systray ou les fichiers du bundle, lancez toujours depuis le dossier `release_bundle`.
+- Si une dépendance manque (ex : Flask), relancez la commande d’installation des dépendances.
+- Pour toute erreur, vérifiez que tous les fichiers du bundle sont bien présents dans le dossier.
+
+---
+
+Pour toute question ou problème, consultez le manuel ou contactez le support sur GitHub.
 
 ## 🇬🇧 Ultra-beginner installation guide
 
