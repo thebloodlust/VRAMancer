@@ -1,10 +1,19 @@
 # dashboard/dashboard_web.py
 
 from flask import Flask, render_template_string, request, jsonify
+import os
 from utils.gpu_utils import get_available_gpus
 import subprocess
 
 app = Flask(__name__)
+API_TOKEN = os.environ.get("VRM_API_TOKEN")
+
+@app.before_request
+def _auth_guard():
+    if request.path.startswith("/api/") and API_TOKEN:
+        provided = request.headers.get("X-API-TOKEN") or request.args.get("token")
+        if provided != API_TOKEN:
+            return ("forbidden", 403)
 
 # Objet mémoire hiérarchique injecté dynamiquement par main (set via set_memory_manager)
 HIER_MEMORY = None
