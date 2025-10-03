@@ -1,6 +1,6 @@
 
 
-from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QPushButton, QTextEdit, QLabel, QListWidget, QListWidgetItem, QHBoxLayout
+from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QPushButton, QTextEdit, QLabel, QListWidget, QListWidgetItem, QHBoxLayout, QTableWidget, QTableWidgetItem
 from PyQt5.QtGui import QIcon, QPixmap
 from PyQt5.QtCore import Qt, QTimer
 from core.network.network_monitor import NetworkMonitor
@@ -33,6 +33,14 @@ class DashboardQt(QWidget):
 		self.net_stats = QTextEdit()
 		self.net_stats.setReadOnly(True)
 		layout.addWidget(self.net_stats)
+
+		# Vue mémoire hiérarchique
+		self.mem_label = QLabel("Mémoire (tiers):")
+		layout.addWidget(self.mem_label)
+		self.mem_table = QTableWidget(0, 5)
+		self.mem_table.setHorizontalHeaderLabels(["ID","Tier","SizeMB","Access","Promote/Demote"])
+		layout.addWidget(self.mem_table)
+		self.mem_timer = QTimer(); self.mem_timer.timeout.connect(self.refresh_memory); self.mem_timer.start(4000)
 
 		self.offload_btn = QPushButton("Déporter bloc VRAM via USB4")
 		self.offload_btn.clicked.connect(self.offload_vram)
@@ -117,6 +125,40 @@ class DashboardQt(QWidget):
 		tensor = torch.randn(512, 512)
 		send_block([tensor], [tensor.shape], [str(tensor.dtype)], target_device="machineB", usb4_path="/mnt/usb4_share", protocol="usb4", compress=True)
 		self.net_stats.append("Bloc VRAM transféré via USB4 !")
+
+	def refresh_memory(self):
+		try:
+			resp = requests.get("http://localhost:5000/api/memory")
+			if resp.ok:
+				data = resp.json()
+				blocks = data.get("blocks", {})
+				self.mem_table.setRowCount(len(blocks))
+				for r,(bid, meta) in enumerate(blocks.items()):
+					self.mem_table.setItem(r,0,QTableWidgetItem(bid[:8]))
+					self.mem_table.setItem(r,1,QTableWidgetItem(meta.get("tier","?")))
+					self.mem_table.setItem(r,2,QTableWidgetItem(str(meta.get("size_mb","?"))))
+					self.mem_table.setItem(r,3,QTableWidgetItem(str(meta.get("access","0"))))
+					btn_widget = QWidget(); hb = QHBoxLayout(); hb.setContentsMargins(0,0,0,0)
+					btn_p = QPushButton("+"); btn_d = QPushButton("-")
+					short = bid[:8]
+					btn_p.clicked.connect(lambda _, b=short: self.promote_block(b))
+					btn_d.clicked.connect(lambda _, b=short: self.demote_block(b))
+					hb.addWidget(btn_p); hb.addWidget(btn_d); btn_widget.setLayout(hb)
+					self.mem_table.setCellWidget(r,4, btn_widget)
+		except Exception:
+			pass
+
+	def promote_block(self, short_id):
+		try:
+			requests.get(f"http://localhost:5000/api/memory/promote?id={short_id}")
+		except Exception:
+			pass
+
+	def demote_block(self, short_id):
+		try:
+			requests.get(f"http://localhost:5000/api/memory/demote?id={short_id}")
+		except Exception:
+			pass
 
 if __name__ == "__main__":
 	app = QApplication([])
