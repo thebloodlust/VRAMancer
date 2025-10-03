@@ -137,6 +137,30 @@ Tout est guidé, plug-and-play, multi-OS, dashboards auto, cluster auto, onboard
 | `GET /api/marketplace/plugins` | Plugins + signatures (sandbox run expérimental) |
 | `POST /api/quota/reset` | Reset compteurs quotas (outillage/tests) |
 
+### 🔐 Authentification forte (JWT)
+
+Flux supporté (prototype production-ready minimal) :
+1. `POST /api/login {"username":"admin","password":"admin"}` → tokens `{access, refresh, expires_in}`
+2. Appels protégés: ajouter l'en-tête `Authorization: Bearer <access>`
+3. Rafraîchissement: `POST /api/token/refresh {"refresh":"<refresh_token>"}` → nouveaux tokens
+
+Variables d'environnement:
+| Variable | Rôle | Défaut |
+|----------|------|--------|
+| VRM_AUTH_SECRET | Secret signature JWT HS256 | auto-généré (dev) |
+| VRM_AUTH_EXP | Durée access token (s) | 900 |
+| VRM_AUTH_REFRESH_EXP | Durée refresh token (s) | 86400 |
+
+Exemple rapide:
+```bash
+curl -s -X POST -H 'Content-Type: application/json' \
+	-d '{"username":"admin","password":"admin"}' http://localhost:5030/api/login | jq .
+ACCESS=... # insérer access renvoyé
+curl -H "Authorization: Bearer $ACCESS" http://localhost:5030/api/workflows
+```
+
+NOTE: En production changer immédiatement le mot de passe admin et définir `VRM_AUTH_SECRET`.
+
 Variables utiles : `VRM_UNIFIED_API_QUOTA`, `VRM_READ_ONLY`, `VRM_LOG_JSON`, `VRM_REQUEST_LOG`, `VRM_DISABLE_SOCKETIO`.
 
 ---

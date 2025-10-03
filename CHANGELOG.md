@@ -19,6 +19,15 @@ Post‑tag additions (to be included in next 0.2.x):
 - SocketIO désactivable (`VRM_DISABLE_SOCKETIO=1`) + fallback propre.
 - Détection VRAM réelle via pynvml si disponible.
 
+### 0.2.2 (2025-10-03)
+Features:
+- Auth forte (JWT access + refresh) + hash PBKDF2 + bootstrap admin.
+- Endpoints: /api/login, /api/token/refresh.
+Security:
+- Protection endpoints non publics via Bearer token.
+Docs:
+- README endpoints section (JWT usage) ajouté.
+
 Internal / Polish:
 - Version bump central (__version__).
 - Tests added (XAI, placement, quota reset, workflows list, persistence).
