@@ -35,6 +35,8 @@ class HierarchicalMemoryManager:
             "tier": tier,
             "size_mb": block.size_mb,
             "ts": time.time(),
+            "access": 0,
+            "last_access": None,
             "meta": {},
         }
         self.log.debug(f"Register {block.id[:8]} @ {tier}")
@@ -51,6 +53,31 @@ class HierarchicalMemoryManager:
         self.registry[block.id]["tier"] = target
         self.registry[block.id]["ts"] = time.time()
         self.log.info(f"Migration bloc {block.id[:8]} {prev} → {target}")
+
+    # --- Accès (pour promotion) ---
+    def touch(self, block: MemoryBlock):
+        if block.id in self.registry:
+            meta = self.registry[block.id]
+            meta["access"] += 1
+            meta["last_access"] = time.time()
+
+    def promote_policy(self, block: MemoryBlock):
+        meta = self.registry.get(block.id)
+        if not meta:
+            return
+        tier = meta["tier"]
+        acc = meta["access"]
+        # Règle heuristique : si un bloc stocké hors VRAM (>=L3) est accédé
+        # plus de X fois dans une fenêtre, on le remonte progressivement.
+        if tier in {"L5","L4"} and acc >= 3:
+            self.migrate(block, "L3")
+        elif tier == "L3" and acc >= 5:
+            self.migrate(block, "L2")
+        elif tier == "L2" and acc >= 8:
+            self.migrate(block, "L1")
+        # Reset partiel pour éviter promotions infinies trop rapides
+        if acc >= 8:
+            meta["access"] = 0
 
     # --- NVMe spill (L5) ---
     def spill_to_nvme(self, block: MemoryBlock, payload: Any):
@@ -85,5 +112,16 @@ class HierarchicalMemoryManager:
         for meta in self.registry.values():
             tiers[meta["tier"]] += 1
         return {"tiers": tiers, "count": len(self.registry)}
+
+    # --- Benchmark initial (optionnel) ---
+    def run_initial_benchmark(self):
+        try:
+            from core.memory_benchmark import benchmark_and_rank
+            res = benchmark_and_rank()
+            self.log.info(f"Benchmark tiers (p50 asc) : {res.get('ranking')}")
+            return res
+        except Exception as e:
+            self.log.warning(f"Benchmark tiers impossible: {e}")
+            return None
 
 __all__ = ["HierarchicalMemoryManager"]

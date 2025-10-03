@@ -19,6 +19,7 @@ from core.compute_engine   import ComputeEngine
 from core.transfer_manager import TransferManager
 from core.memory_balancer  import MemoryBalancer
 from core.hierarchical_memory import HierarchicalMemoryManager
+from core.network.fibre_fastpath import open_low_latency_channel
 from core.scheduler        import SimpleScheduler as Scheduler
 from core.logger           import LoggerAdapter, get_logger
 from core.config           import get_config
@@ -115,6 +116,8 @@ def main():
         for i, b in enumerate(blocks):
             mb = MemoryBlock(size_mb=getattr(b, 'size_mb', 128), gpu_id=0, status="allocated")
             hmem.register_block(mb, "L1")
+            # Benchmark initial tiers (optionnel)
+            hmem.run_initial_benchmark()
         # Watcher de pression VRAM (simulation simple)
         import threading, time
         def vram_watcher():
@@ -175,5 +178,18 @@ def main():
 
     log.info("Exécution terminée ✅")
 
+    # Fast-path fibre/usb4 (stub) ouverture
+    channel = open_low_latency_channel()
+    log.info(f"Fast-path ouvert kind={channel.kind}")
+
+    # Boucle principale (placeholder) simulation d'accès blocs
+    while True:
+        # Simule accès sur quelques blocs pour déclencher promotions
+        for bid, meta in list(hmem.registry.items())[:2]:
+            dummy_block = MemoryBlock(size_mb=meta['size_mb'], gpu_id=0)
+            dummy_block.id = bid
+            hmem.touch(dummy_block)
+            hmem.promote_policy(dummy_block)
+        time.sleep(5)
 if __name__ == "__main__":
     main()
