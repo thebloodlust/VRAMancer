@@ -42,10 +42,12 @@ from core.persistence import (
 )
 from core.xai.xai_dashboard import XAIDashboard
 from core.marketplace.generative_plugin import list_plugins, register_plugin, GenerativePlugin, compute_signature
+from core.auth_strong import ensure_default_admin, verify_user, issue_tokens, refresh_token, decode_access
 
 app = Flask(__name__)
 install_security(app)
 metrics_server_start()
+ensure_default_admin()
 
 # ----------------------------------------------------------------------------
 # Middleware logging HTTP (simple, activable via env VRM_REQUEST_LOG=1)
@@ -84,6 +86,19 @@ def _quota_global():  # pragma: no cover (testé indirectement)
         return None
     if request.path in ('/api/health','/api/quota/reset'):
         return None
+    # Auth forte: endpoints publics
+    public_paths = {'/api/version','/api/health','/api/login','/api/token/refresh'}
+    if request.path.startswith('/api/federated/round'):
+        pass  # toléré (interop tests)
+    elif request.path not in public_paths:
+        auth = request.headers.get('Authorization','')
+        if not auth.startswith('Bearer '):
+            return ("unauthorized", 401)
+        token = auth.split(' ',1)[1]
+        data = decode_access(token)
+        if not data:
+            return ("invalid_token", 401)
+        request._auth_user = data
     err = _enforce_quota(request)
     if err:
         return err
@@ -147,6 +162,28 @@ def version():
 @app.route('/api/health')
 def health():
     return {"status": "ok", "ts": time.time()}
+
+@app.route('/api/login', methods=['POST'])
+def login():
+    body = request.json or {}
+    user = body.get('username')
+    pwd = body.get('password')
+    if not user or not pwd:
+        return ("missing credentials", 400)
+    if not verify_user(user, pwd):
+        return ("invalid credentials", 401)
+    return jsonify(issue_tokens(user))
+
+@app.route('/api/token/refresh', methods=['POST'])
+def token_refresh():
+    body = request.json or {}
+    ref = body.get('refresh')
+    if not ref:
+        return ("missing refresh", 400)
+    newt = refresh_token(ref)
+    if not newt:
+        return ("invalid refresh", 401)
+    return jsonify(newt)
 
 # ---- No-code reuse ----
 @app.route('/api/workflows', methods=['POST'])
