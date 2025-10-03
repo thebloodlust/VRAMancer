@@ -48,7 +48,7 @@ class VRAMancerTray:
         self.cli_health.triggered.connect(lambda: QProcess.startDetached(sys.executable, ['-m','core.health']))
         cli_menu.addAction(self.cli_health)
         self.cli_list = QAction("Lister GPUs")
-        self.cli_list.triggered.connect(lambda: QProcess.startDetached(sys.executable, ['-c','from utils.helpers import get_available_gpus; print(get_available_gpus())']))
+    self.cli_list.triggered.connect(lambda: QProcess.startDetached(sys.executable, ['-c','import sys,os; sys.path.insert(0, os.path.dirname(__file__)); from utils.helpers import get_available_gpus; print(get_available_gpus())']))
         cli_menu.addAction(self.cli_list)
 
         self.quit_action = QAction("Quitter")
