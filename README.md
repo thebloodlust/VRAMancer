@@ -265,6 +265,29 @@ make deb           # or make archive / make lite
 
 **Optimisation VRAM multi-GPU, LLM universel, dashboards modernes, packaging pro.**
 
+### Compatibilité GPU / Accélération
+| Stack | Support actuel | Détails |
+|-------|----------------|---------|
+| CUDA (NVIDIA) | ✅ | Détection GPU, mémoire, torch.cuda.* |
+| ROCm (AMD) | 🟡 Partiel | Torch ROCm fonctionne si environnement dispos; fastpath neutre |
+| Apple Metal (MPS) | 🟡 Partiel | Si torch.mps dispo: fallback CPU->MPS possible (à ajouter) |
+| CPU pur | ✅ | Tous backends stub / HF CPU fonctionnent |
+
+Pour activer un backend même sans dépendance native :
+```bash
+export VRM_BACKEND_ALLOW_STUB=1
+python -m vramancer.main --backend vllm --model dummy
+```
+
+### Fastpath & Bypass TCP/IP
+Le module `core/network/fibre_fastpath.py` fournit :
+ - Autosensing (usb4 / interfaces réseau génériques)
+ - Canal mmap local zero-copy (prototype)
+ - API unifiée send/recv
+ - Extensible vers RDMA (verbs), io_uring, ou driver fibre SFP+ personnalisé
+
+Roadmap bas niveau : implémenter un backend C (io_uring) + un backend RDMA (pyverbs) branchés derrière `FastHandle`.
+
 ---
 
 ## 🇫🇷 Version française

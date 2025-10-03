@@ -14,6 +14,8 @@ INFER_REQUESTS = Counter("vramancer_infer_total", "Nombre total de requêtes d'i
 INFER_ERRORS = Counter("vramancer_infer_errors_total", "Erreurs d'inférence")
 INFER_LATENCY = Histogram("vramancer_infer_latency_seconds", "Latence inférence (s)")
 GPU_MEMORY_USED = Gauge("vramancer_gpu_memory_used_bytes", "Mémoire GPU utilisée (bytes)", ["gpu"])
+MEMORY_PROMOTIONS = Counter("vramancer_memory_promotions_total", "Promotions mémoire (tiers)", ["from","to"])
+MEMORY_DEMOTIONS  = Counter("vramancer_memory_demotions_total", "Démotions mémoire (tiers)", ["from","to"])
 
 _started = False
 
@@ -32,5 +34,7 @@ __all__ = [
     "INFER_ERRORS",
     "INFER_LATENCY",
     "GPU_MEMORY_USED",
+    "MEMORY_PROMOTIONS",
+    "MEMORY_DEMOTIONS",
     "metrics_server_start",
 ]

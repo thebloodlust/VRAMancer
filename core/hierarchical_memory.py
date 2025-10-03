@@ -17,6 +17,7 @@ import pickle
 from pathlib import Path
 from typing import Any, Literal
 from core.logger import LoggerAdapter
+from core.metrics import MEMORY_PROMOTIONS, MEMORY_DEMOTIONS
 from core.memory_block import MemoryBlock
 
 Tier = Literal["L1","L2","L3","L4","L5","L6"]
@@ -52,7 +53,17 @@ class HierarchicalMemoryManager:
             return
         self.registry[block.id]["tier"] = target
         self.registry[block.id]["ts"] = time.time()
+        # Metrics
+        if prev and target:
+            if self._is_promotion(prev, target):
+                MEMORY_PROMOTIONS.labels(prev, target).inc()
+            else:
+                MEMORY_DEMOTIONS.labels(prev, target).inc()
         self.log.info(f"Migration bloc {block.id[:8]} {prev} → {target}")
+
+    def _is_promotion(self, prev: Tier, target: Tier) -> bool:
+        order = ["L6","L5","L4","L3","L2","L1"]  # plus lent → plus rapide
+        return order.index(target) > order.index(prev)
 
     # --- Accès (pour promotion) ---
     def touch(self, block: MemoryBlock):
