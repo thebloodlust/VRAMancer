@@ -37,6 +37,7 @@ Abstraction unifiée pour les backends LLM (HuggingFace, vLLM, Ollama, etc.)
 """
 from abc import ABC, abstractmethod
 from typing import Any, List
+from core.logger import LoggerAdapter
 
 class BaseLLMBackend(ABC):
     """
@@ -62,32 +63,36 @@ class HuggingFaceBackend(BaseLLMBackend):
     def __init__(self):
         self.model = None
         self.blocks = None
+        self.log = LoggerAdapter("backend.hf")
 
     def load_model(self, model_name: str, **kwargs):
         from transformers import AutoModelForCausalLM
+        self.log.info(f"Chargement modèle HuggingFace: {model_name}")
         self.model = AutoModelForCausalLM.from_pretrained(model_name, **kwargs)
         return self.model
 
     def split_model(self, num_gpus: int, vram_per_gpu: List[int] = None):
         # TODO: utiliser split_model_into_blocks adapté à la VRAM réelle
         from core.model_splitter import split_model_into_blocks
+        self.log.debug(f"Découpage en blocs sur {num_gpus} GPUs")
         self.blocks = split_model_into_blocks(self.model, num_gpus, vram_per_gpu)
         return self.blocks
 
     def infer(self, inputs: Any):
         # Simple forward sur tous les blocs (à adapter pour pipeline multi-GPU)
         x = inputs
+        self.log.debug("Début inférence séquentielle sur blocs")
         for block in self.blocks:
             x = block(x)
+        self.log.debug("Fin inférence")
         return x
 
 # ------------------- vLLM Backend (squelette) -------------------
 class vLLMBackend(BaseLLMBackend):
     def __init__(self):
-        """
-        Backend vLLM natif (nécessite le package vllm).
-        """
+        """Backend vLLM natif (nécessite le package vllm)."""
         self.model = None
+        self.log = LoggerAdapter("backend.vllm")
 
     def load_model(self, model_name: str, **kwargs):
         """
@@ -98,8 +103,10 @@ class vLLMBackend(BaseLLMBackend):
             self.model = LLM(model=model_name, **kwargs)
             return self.model
         except ImportError:
+            self.log.error("vLLM n'est pas installé")
             raise RuntimeError("vLLM n’est pas installé. Faites pip install vllm.")
         except Exception as e:
+            self.log.error(f"Erreur vLLM: {e}")
             raise RuntimeError(f"Erreur vLLM: {e}")
 
     def split_model(self, num_gpus: int, vram_per_gpu: List[int] = None):
@@ -122,10 +129,9 @@ class vLLMBackend(BaseLLMBackend):
 # ------------------- Ollama Backend (squelette) -------------------
 class OllamaBackend(BaseLLMBackend):
     def __init__(self):
-        """
-        Backend Ollama natif (nécessite Ollama en local ou via REST).
-        """
+        """Backend Ollama natif (nécessite Ollama en local ou via REST)."""
         self.model = None
+        self.log = LoggerAdapter("backend.ollama")
 
     def load_model(self, model_name: str, **kwargs):
         """
@@ -137,8 +143,10 @@ class OllamaBackend(BaseLLMBackend):
             self.model = model_name
             return self.model
         except ImportError:
+            self.log.error("requests n'est pas installé")
             raise RuntimeError("requests n’est pas installé. Faites pip install requests.")
         except Exception as e:
+            self.log.error(f"Erreur Ollama: {e}")
             raise RuntimeError(f"Erreur Ollama: {e}")
 
     def split_model(self, num_gpus: int, vram_per_gpu: List[int] = None):

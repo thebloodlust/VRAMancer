@@ -12,7 +12,8 @@ from core.compute_engine   import ComputeEngine
 from core.transfer_manager import TransferManager
 from core.memory_balancer  import MemoryBalancer
 from core.scheduler        import SimpleScheduler as Scheduler
-from core.logger           import Logger
+from core.logger           import LoggerAdapter, get_logger
+from core.config           import get_config
 from dashboard.updater import update_dashboard
 from dashboard.dashboard_qt import launch_dashboard as launch_qt_dashboard
 
@@ -35,20 +36,23 @@ def main():
         with open("config.yaml", "r") as f:
             config = yaml.safe_load(f)
 
-    backend_name = args.backend or config.get("backend", "auto")
-    model_name = args.model or config.get("model", "gpt2")
-    num_gpus = args.gpus if args.gpus is not None else config.get("num_gpus")
-    net_mode = args.net_mode or config.get("net_mode", "auto")
-    net_iface = args.net_iface or config.get("net_iface")
+    merged = get_config()
+    backend_name = args.backend or merged.get("backend")
+    model_name = args.model or merged.get("model")
+    num_gpus = args.gpus if args.gpus is not None else merged.get("num_gpus")
+    net_mode = args.net_mode or merged.get("net_mode")
+    net_iface = args.net_iface or merged.get("net_iface")
 
-    print(f"🚀 VRAMancer — Initialisation (backend={backend_name}, modèle={model_name})")
+    log = get_logger("main")
+
+    log.info(f"Démarrage VRAMancer (backend={backend_name}, model={model_name})")
 
     backend = select_backend(backend_name)
-    print(f"[Backend] Utilisé : {backend.__class__.__name__}")
+    log.info(f"Backend sélectionné : {backend.__class__.__name__}")
 
     # 1️⃣  Instanciation des modules métier
     scheduler = Scheduler()
-    logger    = Logger()
+    logger    = LoggerAdapter("runtime")
     streamer  = StreamManager(scheduler, logger)
     engine    = ComputeEngine(backend="auto")
     transfer  = TransferManager(protocol="vramancer", secure=True)
@@ -57,14 +61,14 @@ def main():
     gpus = scheduler.get_available_gpus()
     if num_gpus is None:
         num_gpus = len(gpus)
-    print(f"🧠 GPUs détectés : {[gpu['id'] for gpu in gpus]}")
+    log.info(f"GPUs détectés : {[gpu['id'] for gpu in gpus]}")
 
     # 2️⃣ bis — Exploitation des GPU secondaires pour tâches annexes
     from core.gpu_interface import get_unused_gpus
     used_gpu_ids = list(range(num_gpus))
     secondary_gpus = get_unused_gpus(used_gpu_ids)
     if secondary_gpus:
-        print(f"🔄 GPU secondaires disponibles pour tâches annexes : {[g['id'] for g in secondary_gpus]}")
+    log.info(f"GPU secondaires disponibles : {[g['id'] for g in secondary_gpus]}")
         # Exemple concret : monitoring GPU secondaire en thread
         import threading, time
         from core.monitor import GPUMonitor
@@ -80,7 +84,7 @@ def main():
         # Exemple offload (simulation)
         print("[OFFLOAD] Vous pouvez utiliser ces GPU pour des tâches de swap, worker réseau, etc.")
     else:
-        print("ℹ️ Aucun GPU secondaire libre pour tâches annexes.")
+    log.info("Aucun GPU secondaire libre.")
 
     # 2️⃣ ter — Sélection réseau auto/manuel
     from core.network.interface_selector import select_network_interface
@@ -88,18 +92,18 @@ def main():
         iface = net_iface or select_network_interface("manual")
     else:
         iface = select_network_interface("auto")
-    print(f"🌐 Interface réseau utilisée : {iface}")
+    log.info(f"Interface réseau utilisée : {iface}")
 
     # 2️⃣  Chargement et découpage du modèle via backend unifié
     try:
         model = backend.load_model(model_name)
         blocks = backend.split_model(num_gpus)
-        print(f"📦 Modèle découpé en {len(blocks)} blocs.")
+    log.info(f"Modèle découpé en {len(blocks)} blocs")
     except NotImplementedError as e:
-        print("[Non implémenté]", e)
+        log.warning(f"Non implémenté: {e}")
         return
     except Exception as e:
-        print("[Erreur]", e)
+        log.error(f"Erreur chargement modèle: {e}")
         return
 
     # 3️⃣  Lancement du dashboard (en parallèle)
@@ -118,13 +122,13 @@ def main():
     # 5️⃣  Inférence via backend unifié (sur tous les blocs)
     try:
         out = backend.infer(batch)
-        print("Sortie backend :", out.shape if hasattr(out, 'shape') else type(out))
+        log.info(f"Sortie backend: {getattr(out,'shape', type(out))}")
     except NotImplementedError as e:
-        print("[Non implémenté]", e)
+        log.warning(f"Non implémenté: {e}")
     except Exception as e:
-        print("[Erreur inférence]", e)
+        log.error(f"Erreur inférence: {e}")
 
-    print("\n✅ Exécution terminée — VRAMancer a tout donné 💥")
+    log.info("Exécution terminée ✅")
 
 if __name__ == "__main__":
     main()
