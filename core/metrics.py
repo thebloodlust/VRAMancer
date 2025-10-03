@@ -16,6 +16,8 @@ INFER_LATENCY = Histogram("vramancer_infer_latency_seconds", "Latence inférence
 GPU_MEMORY_USED = Gauge("vramancer_gpu_memory_used_bytes", "Mémoire GPU utilisée (bytes)", ["gpu"])
 MEMORY_PROMOTIONS = Counter("vramancer_memory_promotions_total", "Promotions mémoire (tiers)", ["from","to"])
 MEMORY_DEMOTIONS  = Counter("vramancer_memory_demotions_total", "Démotions mémoire (tiers)", ["from","to"])
+FASTPATH_BYTES    = Counter("vramancer_fastpath_bytes_total", "Octets transférés fastpath", ["method","direction"])  # direction=send|recv
+FASTPATH_LATENCY  = Histogram("vramancer_fastpath_latency_seconds", "Latence opérations fastpath", ["method","op"])  # op=send|recv
 
 _started = False
 
@@ -36,5 +38,7 @@ __all__ = [
     "GPU_MEMORY_USED",
     "MEMORY_PROMOTIONS",
     "MEMORY_DEMOTIONS",
+    "FASTPATH_BYTES",
+    "FASTPATH_LATENCY",
     "metrics_server_start",
 ]

@@ -1,11 +1,13 @@
 # dashboard/dashboard_web.py
 
 from flask import Flask, render_template_string, request, jsonify
+from flask_socketio import SocketIO, emit
 import os
 from utils.gpu_utils import get_available_gpus
 import subprocess
 
 app = Flask(__name__)
+socketio = SocketIO(app, cors_allowed_origins="*")
 API_TOKEN = os.environ.get("VRM_API_TOKEN")
 
 @app.before_request
@@ -163,5 +165,19 @@ def switch():
     subprocess.Popen(["python3", "launcher.py", "--mode", mode])
     return f"<p>Lancement de l’interface {mode}…</p><meta http-equiv='refresh' content='2;url=/' />"
 
+@socketio.on('subscribe_memory')
+def handle_subscribe_mem(msg):
+    if HIER_MEMORY:
+        emit('memory', HIER_MEMORY.summary())
+
+def push_memory_periodic():
+    import time
+    while True:
+        if HIER_MEMORY:
+            socketio.emit('memory', HIER_MEMORY.summary())
+        time.sleep(3)
+
 def launch():
-    app.run(debug=False, host="0.0.0.0", port=5000)
+    import threading
+    threading.Thread(target=push_memory_periodic, daemon=True).start()
+    socketio.run(app, debug=False, host="0.0.0.0", port=5000)

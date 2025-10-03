@@ -42,6 +42,12 @@ class DashboardQt(QWidget):
 		layout.addWidget(self.mem_table)
 		self.mem_timer = QTimer(); self.mem_timer.timeout.connect(self.refresh_memory); self.mem_timer.start(4000)
 
+		self.edge_label = QLabel("Edge / IoT Charge Nodes:")
+		layout.addWidget(self.edge_label)
+		self.edge_stats = QTextEdit(); self.edge_stats.setReadOnly(True)
+		layout.addWidget(self.edge_stats)
+		self.edge_timer = QTimer(); self.edge_timer.timeout.connect(self.refresh_edge); self.edge_timer.start(5000)
+
 		self.offload_btn = QPushButton("Déporter bloc VRAM via USB4")
 		self.offload_btn.clicked.connect(self.offload_vram)
 		layout.addWidget(self.offload_btn)
@@ -157,6 +163,17 @@ class DashboardQt(QWidget):
 	def demote_block(self, short_id):
 		try:
 			requests.get(f"http://localhost:5000/api/memory/demote?id={short_id}")
+		except Exception:
+			pass
+
+	def refresh_edge(self):
+		try:
+			resp = requests.get("http://localhost:5010/api/nodes")
+			if resp.ok:
+				data = resp.json()
+				self.edge_stats.clear()
+				for n in data:
+					self.edge_stats.append(f"{n['id']} | type={n.get('type')} | load={n.get('cpu_load_pct','?')}% | free_cores={n.get('free_cores','?')}")
 		except Exception:
 			pass
 

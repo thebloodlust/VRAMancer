@@ -16,6 +16,7 @@ import mmap
 import hashlib
 
 from core.logger import LoggerAdapter
+from core.metrics import FASTPATH_BYTES, FASTPATH_LATENCY
 
 log = LoggerAdapter("fibre")
 
@@ -55,6 +56,7 @@ class FastHandle:
 
     def send(self, data: bytes) -> int:
         size = len(data)
+        start = time.perf_counter()
         self._ensure_segment(size)
         with open(self.shm_path, 'r+b') as f:
             mm = mmap.mmap(f.fileno(), size)
@@ -63,16 +65,21 @@ class FastHandle:
             mm.flush()
             mm.close()
         self._last_sent_len = size
+        FASTPATH_BYTES.labels(self.kind, "send").inc(size)
+        FASTPATH_LATENCY.labels(self.kind, "send").observe(time.perf_counter()-start)
         return size
 
     def recv(self) -> Optional[bytes]:
         if not self.shm_path or self._last_sent_len == 0:
             return None
+        start = time.perf_counter()
         try:
             with open(self.shm_path, 'rb') as f:
                 mm = mmap.mmap(f.fileno(), self._last_sent_len, access=mmap.ACCESS_READ)
                 buf = mm.read(self._last_sent_len)
                 mm.close()
+            FASTPATH_BYTES.labels(self.kind, "recv").inc(len(buf))
+            FASTPATH_LATENCY.labels(self.kind, "recv").observe(time.perf_counter()-start)
             return buf
         except FileNotFoundError:
             return None
