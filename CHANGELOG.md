@@ -11,6 +11,14 @@ Features:
 - Marketplace: basic plugin registry & listing.
 - Diagnostics script.
 
+Post‑tag additions (to be included in next 0.2.x):
+- Endpoint `/api/health` (Docker HEALTHCHECK).
+- Secure aggregation prototype (`/api/federated/secure` GET/POST) avec masquage déterministe basique & retrait lors agrégation.
+- Sandbox plugin `sandboxed_run` (expérimental, restrictions simples sur builtins/imports).
+- Logging JSON (`VRM_LOG_JSON=1`) et logging HTTP (`VRM_REQUEST_LOG=1`).
+- SocketIO désactivable (`VRM_DISABLE_SOCKETIO=1`) + fallback propre.
+- Détection VRAM réelle via pynvml si disponible.
+
 Internal / Polish:
 - Version bump central (__version__).
 - Tests added (XAI, placement, quota reset, workflows list, persistence).
