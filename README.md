@@ -214,6 +214,25 @@ MIT — (c) thebloodlust 2023-2025
 
 Légende : ✅ = opérationnel / 🟡 = prototype / ❌ = à implémenter / ⚠️ = à surveiller
 
+### 📡 Observabilité & Health
+
+Métriques Prometheus exposées par défaut sur le port 9108 (modifiable via `VRM_METRICS_PORT`).
+
+```bash
+vramancer --backend huggingface --model gpt2 &
+curl -s http://localhost:9108/metrics | grep vramancer_infer_total
+```
+
+Healthcheck rapide :
+```bash
+vramancer-health
+```
+
+Bootstrap environnement :
+```bash
+python scripts/bootstrap_env.py
+```
+
 
 ## 🇬🇧 English version
 

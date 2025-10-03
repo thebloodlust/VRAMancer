@@ -25,5 +25,9 @@ PyQt5==5.15.9               # Interface Qt (ajout explicite)
 torchvision==0.17.0         # Vision (compatible Python 3.12)
 pycryptodome==3.20.0        # Cryptographie (si besoin)
 
+# ─── Observabilité ─────────────────────────────────────────────────────
+prometheus-client==0.21.0   # Exposition métriques
+rich==13.9.4                # Console enrichie / diagnostics
+
 # ─── Packaging & CLI ────────────────────────────────────────────────────
 setuptools==69.0.3          # Packaging pip / .deb

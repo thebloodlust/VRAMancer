@@ -7,6 +7,13 @@ import random
 import torch
 import argparse
 from core.backends import select_backend
+from core.metrics import (
+    metrics_server_start,
+    INFER_REQUESTS,
+    INFER_ERRORS,
+    INFER_LATENCY,
+    GPU_MEMORY_USED,
+)
 from core.stream_manager   import StreamManager
 from core.compute_engine   import ComputeEngine
 from core.transfer_manager import TransferManager
@@ -47,6 +54,8 @@ def main():
 
     log.info(f"Démarrage VRAMancer (backend={backend_name}, model={model_name})")
 
+    # Metrics server
+    metrics_server_start()
     backend = select_backend(backend_name)
     log.info(f"Backend sélectionné : {backend.__class__.__name__}")
 
@@ -121,11 +130,19 @@ def main():
 
     # 5️⃣  Inférence via backend unifié (sur tous les blocs)
     try:
-        out = backend.infer(batch)
+        INFER_REQUESTS.inc()
+        with INFER_LATENCY.time():
+            out = backend.infer(batch)
+        # Mise à jour gauges GPU
+        if torch.cuda.is_available():
+            for i in range(torch.cuda.device_count()):
+                GPU_MEMORY_USED.labels(gpu=str(i)).set(torch.cuda.memory_allocated(i))
         log.info(f"Sortie backend: {getattr(out,'shape', type(out))}")
     except NotImplementedError as e:
+        INFER_ERRORS.inc()
         log.warning(f"Non implémenté: {e}")
     except Exception as e:
+        INFER_ERRORS.inc()
         log.error(f"Erreur inférence: {e}")
 
     log.info("Exécution terminée ✅")
