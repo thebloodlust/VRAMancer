@@ -78,7 +78,7 @@ def main():
     used_gpu_ids = list(range(num_gpus))
     secondary_gpus = get_unused_gpus(used_gpu_ids)
     if secondary_gpus:
-    log.info(f"GPU secondaires disponibles : {[g['id'] for g in secondary_gpus]}")
+        log.info(f"GPU secondaires disponibles : {[g['id'] for g in secondary_gpus]}")
         # Exemple concret : monitoring GPU secondaire en thread
         import threading, time
         from core.monitor import GPUMonitor
@@ -94,7 +94,7 @@ def main():
         # Exemple offload (simulation)
         print("[OFFLOAD] Vous pouvez utiliser ces GPU pour des tâches de swap, worker réseau, etc.")
     else:
-    log.info("Aucun GPU secondaire libre.")
+        log.info("Aucun GPU secondaire libre.")
 
     # 2️⃣ ter — Sélection réseau auto/manuel
     from core.network.interface_selector import select_network_interface
@@ -108,13 +108,34 @@ def main():
     try:
         model = backend.load_model(model_name)
         blocks = backend.split_model(num_gpus)
-    log.info(f"Modèle découpé en {len(blocks)} blocs")
+        log.info(f"Modèle découpé en {len(blocks)} blocs")
         hmem = HierarchicalMemoryManager()
         # Enregistrer blocs VRAM primaire (L1)
         from core.memory_block import MemoryBlock
         for i, b in enumerate(blocks):
             mb = MemoryBlock(size_mb=getattr(b, 'size_mb', 128), gpu_id=0, status="allocated")
             hmem.register_block(mb, "L1")
+        # Watcher de pression VRAM (simulation simple)
+        import threading, time
+        def vram_watcher():
+            while True:
+                if torch.cuda.is_available():
+                    used = torch.cuda.memory_allocated(0)
+                    total = torch.cuda.get_device_properties(0).total_memory
+                    pct = used / total * 100 if total else 0
+                    # Politique de démotion simple
+                    for blk_id in list(hmem.registry.keys()):
+                        dummy = type("_B", (), {"id": blk_id})()
+                        try:
+                            # Recréation d'un objet MemoryBlock factice juste pour policy
+                            from core.memory_block import MemoryBlock as MB
+                            mb_fake = MB(size_mb=128, gpu_id=0, status="allocated")
+                            mb_fake.id = blk_id
+                            hmem.policy_demote_if_needed(mb_fake, pct)
+                        except Exception:
+                            pass
+                time.sleep(5)
+        threading.Thread(target=vram_watcher, daemon=True).start()
     except NotImplementedError as e:
         log.warning(f"Non implémenté: {e}")
         return

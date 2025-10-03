@@ -1,10 +1,17 @@
 # dashboard/dashboard_web.py
 
-from flask import Flask, render_template_string, request
+from flask import Flask, render_template_string, request, jsonify
 from utils.gpu_utils import get_available_gpus
 import subprocess
 
 app = Flask(__name__)
+
+# Objet mémoire hiérarchique injecté dynamiquement par main (set via set_memory_manager)
+HIER_MEMORY = None
+
+def set_memory_manager(hm):
+    global HIER_MEMORY
+    HIER_MEMORY = hm
 
 TEMPLATE = """
 <!DOCTYPE html>
@@ -48,6 +55,12 @@ TEMPLATE = """
 def dashboard():
     gpus = get_available_gpus()
     return render_template_string(TEMPLATE, gpus=gpus)
+
+@app.route("/api/memory")
+def api_memory():
+    if HIER_MEMORY is None:
+        return jsonify({"error": "no memory manager"}), 404
+    return jsonify(HIER_MEMORY.summary())
 
 @app.route("/switch")
 def switch():
