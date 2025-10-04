@@ -161,6 +161,13 @@ curl -H "Authorization: Bearer $ACCESS" http://localhost:5030/api/workflows
 
 NOTE: En production changer immédiatement le mot de passe admin et définir `VRM_AUTH_SECRET`.
 
+### 🪟 Note Windows (Dashboards)
+Si `flask_socketio` ou `torch` ne sont pas installés, les dashboards Web / Qt démarrent en mode dégradé (pas de temps réel SocketIO, certaines fonctions d’offload inactives). Pour l’expérience complète :
+```bash
+pip install flask-socketio torch
+```
+Les wrappers se trouvent sous `installers/dashboard/` et redirigent vers `dashboard/`.
+
 Variables utiles : `VRM_UNIFIED_API_QUOTA`, `VRM_READ_ONLY`, `VRM_LOG_JSON`, `VRM_REQUEST_LOG`, `VRM_DISABLE_SOCKETIO`.
 
 ---

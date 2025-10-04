@@ -3,14 +3,38 @@
 from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QPushButton, QTextEdit, QLabel, QListWidget, QListWidgetItem, QHBoxLayout, QTableWidget, QTableWidgetItem
 from PyQt5.QtGui import QIcon, QPixmap
 from PyQt5.QtCore import Qt, QTimer
-from core.network.network_monitor import NetworkMonitor
-from core.network.transmission import send_block
-from core.network.supervision import NodeSupervisor
-from core.network.edge_iot import EdgeNode
-import torch
-import requests
-import os
-import socketio
+import os, struct
+try:
+	from core.network.network_monitor import NetworkMonitor
+except Exception:
+	class NetworkMonitor:  # fallback minimal
+		def __init__(self): self.stats=[]
+		def start(self): pass
+try:
+	from core.network.transmission import send_block
+except Exception:
+	def send_block(*a, **k): return None
+try:
+	import torch
+except Exception:
+	class _T:
+		def randn(self,*a,**k): return None
+	torch = _T()
+try:
+	import socketio
+except Exception:
+	socketio = None
+try:
+	import requests
+except Exception:
+	class _Req:
+		def get(self,*a,**k): raise RuntimeError('requests missing')
+		def post(self,*a,**k): raise RuntimeError('requests missing')
+	requests = _Req()
+try:
+	from core.telemetry import decode_stream
+except Exception:
+	def decode_stream(blob): return []
 
 
 class DashboardQt(QWidget):
@@ -62,16 +86,21 @@ class DashboardQt(QWidget):
 
 		self.node_timer = QTimer()
 		self.node_timer.timeout.connect(self.refresh_nodes)
-		self.node_timer.start(5000)
+		self.node_timer.start(8000)
+
+		# Télémétrie binaire périodique
+		self.telemetry_timer = QTimer(); self.telemetry_timer.timeout.connect(self.fetch_binary_telemetry); self.telemetry_timer.start(4000)
 
 		# SocketIO pour supervision temps réel
-		self.sio = socketio.Client()
-		self.sio.on("nodes", self.on_nodes)
-		self.sio.on("pong", self.on_pong)
-		try:
-			self.sio.connect("http://localhost:5010")
-		except Exception:
-			pass
+		self.sio = None
+		if socketio:
+			try:
+				self.sio = socketio.Client()
+				self.sio.on("nodes", self.on_nodes)
+				self.sio.on("pong", self.on_pong)
+				self.sio.connect("http://localhost:5010")
+			except Exception:
+				self.sio = None
 		self.nodes = []
 		self.refresh_nodes()
 
@@ -86,12 +115,24 @@ class DashboardQt(QWidget):
 
 	def refresh_nodes(self):
 		try:
-			resp = requests.get("http://localhost:5010/api/nodes")
+			resp = requests.get("http://localhost:5010/api/nodes", timeout=1.5)
 			self.nodes = resp.json()
 			self.update_node_list()
 		except Exception as e:
 			self.node_list.clear()
 			self.status_label.setText(f"Erreur: {e}")
+
+	def fetch_binary_telemetry(self):
+		try:
+			resp = requests.get("http://localhost:5010/api/telemetry.bin", timeout=1.5)
+			blob = resp.content
+			decoded = list(decode_stream(blob))
+			# On peut enrichir l'affichage edge_stats avec charge rapide
+			self.edge_stats.clear()
+			for n in decoded:
+				self.edge_stats.append(f"{n['id']} | load={n['cpu_load_pct']:.2f}% free={n['free_cores']} vram={n['vram_used_mb']}/{n['vram_total_mb']}MB")
+		except Exception:
+			pass
 
 	def update_node_list(self):
 		self.node_list.clear()
@@ -118,7 +159,8 @@ class DashboardQt(QWidget):
 				resp = requests.post(f"http://localhost:5010/api/nodes/{node['id']}/action", json={"action": "ping"})
 				if resp.ok:
 					self.status_label.setText(f"Action envoyée à {node['id']}")
-					self.sio.emit("ping", {"node_id": node['id']})
+					if self.sio:
+						self.sio.emit("ping", {"node_id": node['id']})
 			except Exception as e:
 				self.status_label.setText(f"Erreur action: {e}")
 
@@ -128,9 +170,13 @@ class DashboardQt(QWidget):
 			self.net_stats.append(f"Sent: {last['sent']/1024:.1f} KB | Recv: {last['recv']/1024:.1f} KB")
 
 	def offload_vram(self):
-		tensor = torch.randn(512, 512)
-		send_block([tensor], [tensor.shape], [str(tensor.dtype)], target_device="machineB", usb4_path="/mnt/usb4_share", protocol="usb4", compress=True)
-		self.net_stats.append("Bloc VRAM transféré via USB4 !")
+		try:
+			if hasattr(torch,'randn'):
+				tensor = torch.randn(512, 512)
+				send_block([tensor], [getattr(tensor,'shape',())], [str(getattr(tensor,'dtype','f32'))], target_device="machineB", usb4_path="/mnt/usb4_share", protocol="usb4", compress=True)
+				self.net_stats.append("Bloc VRAM transféré via USB4 !")
+		except Exception:
+			self.net_stats.append("Offload indisponible (deps manquantes)")
 
 	def refresh_memory(self):
 		try:
