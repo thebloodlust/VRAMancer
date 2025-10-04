@@ -205,6 +205,17 @@ Variables d'environnement spécifiques :
 Comportement : chaque requête tente `VRM_API_BASE` puis variante `127.0.0.1` avec backoff progressif. L'état (connecté / injoignable) est affiché sans spam.
 Pour réduire l'erreur `Max retries exceeded with url /api/nodes` : augmenter `VRM_API_TIMEOUT` (ex: `export VRM_API_TIMEOUT=5`).
 
+Détection automatique intégrée : si `VRM_API_BASE` n'est pas défini, le dashboard scanne `5030` puis `5010` (`/api/health`).
+Script CLI équivalent :
+```bash
+python scripts/api_autodetect.py --json
+```
+Debug verbeux (requêtes, ports testés) :
+```bash
+export VRM_API_DEBUG=1
+python dashboard/dashboard_qt.py
+```
+
 
 ---
 
@@ -419,6 +430,7 @@ vramancer-health
 | VRM_FASTPATH_IF | Force interface fastpath | autodetect |
 | VRM_RATE_MAX | Seuil rate limit (req/interval) | 60 |
 | VRM_DISABLE_ONNX | Désactive import/export ONNX (environnements légers) | 0 |
+| VRM_API_DEBUG | Verbose debug connexions dashboard (Qt) | 0 |
 
 Pour le mode production ne pas définir `VRM_TEST_MODE` et laisser rotation active.
 
