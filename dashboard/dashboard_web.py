@@ -1,11 +1,14 @@
+import os, sys
+# Auto-activation du mode minimal APRÈS import os
 if os.environ.get('VRM_DASHBOARD_MINIMAL','0') == '0':
-    # Auto-activation si dépendances lourdes manquantes détectées
     try:
         import importlib
+        missing = False
         for mod in ('torch','transformers','numpy'):
             if importlib.util.find_spec(mod) is None:
-                os.environ['VRM_DASHBOARD_MINIMAL'] = '1'
-                break
+                missing = True; break
+        if missing:
+            os.environ['VRM_DASHBOARD_MINIMAL'] = '1'
     except Exception:
         os.environ['VRM_DASHBOARD_MINIMAL'] = '1'
 # dashboard/dashboard_web.py
@@ -17,7 +20,7 @@ except ImportError:  # fallback sans temps réel
     SocketIO = None  # type: ignore
     def emit(*a, **k):
         return None
-import os, sys
+from math import isnan  # noqa (potentiel usage futur)
 try:
     from utils.gpu_utils import get_available_gpus
 except Exception:

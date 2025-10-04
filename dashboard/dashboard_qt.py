@@ -27,19 +27,26 @@ except Exception:
 try:
 	import requests
 except Exception:
+	class _RespStub:
+		ok = False
+		status_code = 0
+		_content = b''
+		def json(self): return {}
+		@property
+		def content(self): return self._content
 	class _Req:
+		_warned_get = False
+		_warned_post = False
 		def get(self,*a,**k):
-			print("requests package is not installed -- cannot send HTTP requests!")
-			class _R: ok=False; status_code=0
-			def json(self_inner): return {}
-			@property
-			def content(self_inner): return b''
-			return _R()
+			if not self._warned_get:
+				print("requests absent (stub) – HTTP GET désactivé (message unique)")
+				self._warned_get = True
+			return _RespStub()
 		def post(self,*a,**k):
-			print("requests package is not installed -- cannot POST!")
-			class _R: ok=False; status_code=0
-			def json(self_inner): return {}
-			return _R()
+			if not self._warned_post:
+				print("requests absent (stub) – HTTP POST désactivé (message unique)")
+				self._warned_post = True
+			return _RespStub()
 	requests = _Req()
 try:
 	from core.telemetry import decode_stream
