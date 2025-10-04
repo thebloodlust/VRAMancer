@@ -8,6 +8,7 @@ Cette API agrège des prototypes existants pour offrir un point unique.
 """
 from flask import Flask, request, jsonify
 import time, uuid, os, hashlib, threading
+import secrets
 from typing import List
 from core.metrics import Counter as _Counter
 
@@ -35,7 +36,7 @@ except Exception:  # fallback minimal
             return list(self.history)
 from core.collective.federated_learning import FederatedLearner
 from core.security import install_security
-from core.metrics import API_LATENCY, metrics_server_start
+from core.metrics import API_LATENCY, metrics_server_start, ENV_ENDPOINT_HITS
 from core.persistence import (
     persistence_enabled, save_workflow, load_workflow,
     save_federated_round, load_federated_round
@@ -62,12 +63,16 @@ else:
 @app.before_request
 def _lat_start():  # pragma: no cover
     request._start_ts = time.time()
+    # Request ID propagation (trace simple)
+    rid = request.headers.get('X-Request-ID') or secrets.token_hex(8)
+    request._req_id = rid
     if _http_log:
-        _http_log.info(f"REQ START path={request.path} method={request.method} ip={request.remote_addr}")
+        _http_log.info(f"REQ START id={rid} path={request.path} method={request.method} ip={request.remote_addr}")
 
 @app.after_request
 def _lat_end(resp):  # pragma: no cover
     st = getattr(request, '_start_ts', None)
+    rid = getattr(request, '_req_id', None)
     if st is not None:
         dur = time.time() - st
         try:
@@ -75,7 +80,9 @@ def _lat_end(resp):  # pragma: no cover
         except Exception:
             pass
     if _http_log:
-        _http_log.info(f"REQ END path={request.path} status={resp.status_code}")
+        _http_log.info(f"REQ END id={rid} path={request.path} status={resp.status_code}")
+    if rid:
+        resp.headers['X-Request-ID'] = rid
     return resp
 
 # Quota global avant chaque requête API (hors /api/health déjà géré côté security)
@@ -166,6 +173,10 @@ def health():
 @app.route('/api/env')
 def env_info():
     """Expose quelques drapeaux runtime (diagnostic)."""
+    try:
+        ENV_ENDPOINT_HITS.inc()
+    except Exception:
+        pass
     flags = {}
     # Imports facultatifs
     try:

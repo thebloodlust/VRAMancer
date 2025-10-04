@@ -138,6 +138,8 @@ Tout est guidé, plug-and-play, multi-OS, dashboards auto, cluster auto, onboard
 | `GET /api/marketplace/plugins` | Plugins + signatures (sandbox run expérimental) |
 | `POST /api/quota/reset` | Reset compteurs quotas (outillage/tests) |
 
+Chaque réponse inclut un header `X-Request-ID` (corrélation logs). Vous pouvez fournir votre propre identifiant via le même header dans la requête.
+
 ### 🔐 Authentification forte (JWT)
 
 Flux supporté (prototype production-ready minimal) :
