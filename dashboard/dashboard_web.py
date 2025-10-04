@@ -1,3 +1,13 @@
+if os.environ.get('VRM_DASHBOARD_MINIMAL','0') == '0':
+    # Auto-activation si dépendances lourdes manquantes détectées
+    try:
+        import importlib
+        for mod in ('torch','transformers','numpy'):
+            if importlib.util.find_spec(mod) is None:
+                os.environ['VRM_DASHBOARD_MINIMAL'] = '1'
+                break
+    except Exception:
+        os.environ['VRM_DASHBOARD_MINIMAL'] = '1'
 # dashboard/dashboard_web.py
 
 from flask import Flask, render_template_string, request, jsonify

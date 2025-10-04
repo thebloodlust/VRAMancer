@@ -28,8 +28,18 @@ try:
 	import requests
 except Exception:
 	class _Req:
-		def get(self,*a,**k): raise RuntimeError('requests missing')
-		def post(self,*a,**k): raise RuntimeError('requests missing')
+		def get(self,*a,**k):
+			print("requests package is not installed -- cannot send HTTP requests!")
+			class _R: ok=False; status_code=0
+			def json(self_inner): return {}
+			@property
+			def content(self_inner): return b''
+			return _R()
+		def post(self,*a,**k):
+			print("requests package is not installed -- cannot POST!")
+			class _R: ok=False; status_code=0
+			def json(self_inner): return {}
+			return _R()
 	requests = _Req()
 try:
 	from core.telemetry import decode_stream

@@ -168,6 +168,12 @@ pip install flask-socketio torch
 ```
 Les wrappers se trouvent sous `installers/dashboard/` et redirigent vers `dashboard/`.
 
+Mode ultra-léger forcé (pas de torch / transformers) :
+```bat
+set VRM_DASHBOARD_MINIMAL=1
+python installers\dashboard\dashboard_web.py
+```
+
 Variables utiles : `VRM_UNIFIED_API_QUOTA`, `VRM_READ_ONLY`, `VRM_LOG_JSON`, `VRM_REQUEST_LOG`, `VRM_DISABLE_SOCKETIO`.
 
 ---
