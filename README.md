@@ -418,6 +418,7 @@ vramancer-health
 | VRM_DISABLE_SECRET_ROTATION | Fige rotation HMAC | 0 |
 | VRM_FASTPATH_IF | Force interface fastpath | autodetect |
 | VRM_RATE_MAX | Seuil rate limit (req/interval) | 60 |
+| VRM_DISABLE_ONNX | Désactive import/export ONNX (environnements légers) | 0 |
 
 Pour le mode production ne pas définir `VRM_TEST_MODE` et laisser rotation active.
 

@@ -1,10 +1,52 @@
-# core/compute_engine.py
+"""ComputeEngine abstrait avec fallback si ONNX ou torch features manquants.
 
-import torch
-import time
-import onnx
+En environnement Windows minimal (sans onnx installé), l'import ne doit pas casser
+le démarrage des dashboards. `export VRM_DISABLE_ONNX=1` force la désactivation.
+"""
+
+import os, time
+try:
+    import torch  # type: ignore
+except Exception:  # pragma: no cover - torch absent
+    class _TorchStub:
+        class nn:
+            class Module: ...
+            class functional:
+                @staticmethod
+                def relu(x): return x
+        class profiler:
+            class profile:
+                def __init__(self,*a,**k): pass
+                def __enter__(self): return self
+                def __exit__(self,*a): pass
+            class record_function:
+                def __init__(self,*a,**k): pass
+                def __enter__(self): return self
+                def __exit__(self,*a): pass
+        def device(self,name): return name
+        class cuda:
+            @staticmethod
+            def is_available(): return False
+    torch = _TorchStub()  # type: ignore
+
+try:  # ONNX optionnel
+    if os.environ.get('VRM_DISABLE_ONNX') == '1':
+        raise ImportError('ONNX disabled by VRM_DISABLE_ONNX=1')
+    import onnx  # type: ignore
+except Exception:  # pragma: no cover - fallback silencieux
+    onnx = None
 import psutil
-from torch.profiler import profile, record_function, ProfilerActivity
+try:
+    from torch.profiler import profile, record_function, ProfilerActivity  # type: ignore
+except Exception:  # profiler peut être absent ou torch stub
+    class _NullCtx:
+        def __init__(self,*a,**k): pass
+        def __enter__(self): return self
+        def __exit__(self,*a): pass
+    profile = _NullCtx  # type: ignore
+    record_function = _NullCtx  # type: ignore
+    class ProfilerActivity:  # type: ignore
+        CPU='cpu'; CUDA='cuda'
 
 class ComputeEngine:
     def __init__(self, backend="auto", verbose=True):
@@ -12,22 +54,16 @@ class ComputeEngine:
         self.backend = self._detect_backend() if backend == "auto" else backend
 
     def _detect_backend(self):
-        if torch.cuda.is_available():
-            return "cuda"
-        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-            return "mps"
-        elif hasattr(torch.version, "hip") and torch.version.hip:
-            return "rocm"
-        else:
-            return "cpu"
+        from core.utils import detect_backend
+        return detect_backend()
 
     def _get_device(self, device_id=0):
         if self.backend in ["cuda", "rocm"]:
-            return torch.device(f"{self.backend}:{device_id}")
-        elif self.backend == "mps":
+            # Sur ROCm on reste sur l'API cuda: (PyTorch unifié)
+            return torch.device(f"cuda:{device_id}")
+        if self.backend == "mps":
             return torch.device("mps")
-        else:
-            return torch.device("cpu")
+        return torch.device("cpu")
 
     def execute_layer(self, layer, input_tensor, device_id=0, track_gradients=False, use_compile=False, profile_gpu=False):
         device = self._get_device(device_id)
@@ -67,9 +103,19 @@ class ComputeEngine:
         return output
 
     def export_onnx(self, model, dummy_input, filename="model.onnx"):
-        torch.onnx.export(model, dummy_input, filename, export_params=True, opset_version=17)
-        if self.verbose:
-            print(f"📦 Modèle exporté en ONNX : {filename}")
+        if onnx is None:
+            if self.verbose:
+                print("[WARN] ONNX indisponible (ou désactivé), export ignoré")
+            return False
+        try:
+            torch.onnx.export(model, dummy_input, filename, export_params=True, opset_version=17)
+            if self.verbose:
+                print(f"📦 Modèle exporté en ONNX : {filename}")
+            return True
+        except Exception as e:
+            if self.verbose:
+                print(f"[WARN] Export ONNX échoué: {e}")
+            return False
 
     def get_ram_status(self):
         mem = psutil.virtual_memory()
