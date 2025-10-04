@@ -60,7 +60,12 @@ class DashboardQt(QWidget):
 		self.setWindowTitle("VRAMancer Dashboard Qt")
 		self.setGeometry(100, 100, 900, 700)
 		# ---------------- Configuration réseau / API ----------------
-		self.api_base = os.environ.get("VRM_API_BASE", "http://localhost:5010").rstrip('/')
+		# Auto-détection du port API si VRM_API_BASE non défini: on tente 5030 puis 5010
+		_env_base = os.environ.get("VRM_API_BASE")
+		if _env_base:
+			self.api_base = _env_base.rstrip('/')
+		else:
+			self.api_base = self._autodetect_api_base()
 		self.memory_base = os.environ.get("VRM_MEMORY_BASE", "http://localhost:5000").rstrip('/')
 		self.api_timeout = float(os.environ.get("VRM_API_TIMEOUT", "2.5"))
 		self.api_retries = int(os.environ.get("VRM_API_RETRIES", "3"))
@@ -192,7 +197,7 @@ class DashboardQt(QWidget):
 		if idx < len(self.nodes):
 			node = self.nodes[idx]
 			try:
-				resp = requests.post(f"http://localhost:5010/api/nodes/{node['id']}/action", json={"action": "ping"})
+				resp = requests.post(f"{self.api_base}/api/nodes/{node['id']}/action", json={"action": "ping"})
 				if resp.ok:
 					self.status_label.setText(f"Action envoyée à {node['id']}")
 					if self.sio:
@@ -285,6 +290,22 @@ class DashboardQt(QWidget):
 			return None
 		return None
 
+	def _autodetect_api_base(self):
+		candidates = [
+			f"http://localhost:{os.environ.get('VRM_API_PORT','5030')}",
+			"http://localhost:5030",
+			"http://localhost:5010",
+		]
+		if requests:
+			for base in candidates:
+				try:
+					r = requests.get(base + '/api/health', timeout=0.8)
+					if r.ok:
+						return base
+				except Exception:
+					continue
+		return candidates[0]
+
 	def _backend_ok(self):
 		if self._backend_state != 'ok':
 			self.status_label.setText(f"Connecté {self.api_base}")
@@ -293,7 +314,7 @@ class DashboardQt(QWidget):
 
 	def _backend_fail(self):
 		if self._backend_state != 'fail':
-			self.status_label.setText(f"Backend injoignable ({self.api_base}) – lancer: python -m core.api.unified_api")
+			self.status_label.setText(f"Backend injoignable ({self.api_base}) – lancer: python -m core.api.unified_api (ou définir VRM_API_BASE)")
 			self._set_indicator('fail')
 			self._backend_state = 'fail'
 
