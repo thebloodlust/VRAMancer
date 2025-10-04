@@ -73,7 +73,17 @@ class DashboardQt(QWidget):
 		self.node_list = QListWidget()
 		layout.addWidget(self.node_list)
 		self.status_label = QLabel("")
-		layout.addWidget(self.status_label)
+		# Barre statut avec pastille + bouton reconnect
+		from PyQt5.QtWidgets import QHBoxLayout
+		status_bar = QHBoxLayout()
+		self.status_indicator = QLabel("●")
+		self.status_indicator.setStyleSheet("font-size:16px;color:gray;margin-right:6px;")
+		self.reconnect_btn = QPushButton("Reconnect / Refresh")
+		self.reconnect_btn.clicked.connect(self.force_reconnect)
+		status_bar.addWidget(self.status_indicator)
+		status_bar.addWidget(self.status_label, 1)
+		status_bar.addWidget(self.reconnect_btn)
+		layout.addLayout(status_bar)
 
 		self.net_label = QLabel("Network stats:")
 		layout.addWidget(self.net_label)
@@ -117,13 +127,7 @@ class DashboardQt(QWidget):
 		# SocketIO pour supervision temps réel
 		self.sio = None
 		if socketio:
-			try:
-				self.sio = socketio.Client()
-				self.sio.on("nodes", self.on_nodes)
-				self.sio.on("pong", self.on_pong)
-				self.sio.connect(self.api_base)
-			except Exception:
-				self.sio = None
+			self._init_socketio()
 		self.nodes = []
 		self.refresh_nodes()
 
@@ -284,12 +288,50 @@ class DashboardQt(QWidget):
 	def _backend_ok(self):
 		if self._backend_state != 'ok':
 			self.status_label.setText(f"Connecté {self.api_base}")
+			self._set_indicator('ok')
 			self._backend_state = 'ok'
 
 	def _backend_fail(self):
 		if self._backend_state != 'fail':
 			self.status_label.setText(f"Backend injoignable ({self.api_base}) – lancer: python -m core.api.unified_api")
+			self._set_indicator('fail')
 			self._backend_state = 'fail'
+
+	# -------------------- UI helpers statut --------------------
+	def _set_indicator(self, state: str):
+		if state == 'ok':
+			self.status_indicator.setStyleSheet("font-size:16px;color:#21c55d;margin-right:6px;")  # vert
+		elif state == 'fail':
+			self.status_indicator.setStyleSheet("font-size:16px;color:#dc2626;margin-right:6px;")  # rouge
+		else:
+			self.status_indicator.setStyleSheet("font-size:16px;color:gray;margin-right:6px;")
+
+	def force_reconnect(self):
+		# Force une vérification immédiate + tentative socketio
+		self.status_label.setText("Reconnexion...")
+		self._set_indicator('pending')
+		self.refresh_nodes()
+		if socketio and (not getattr(self,'sio',None) or not self._socketio_connected()):
+			self._init_socketio(force=True)
+
+	def _socketio_connected(self):
+		try:
+			return bool(self.sio) and self.sio.connected
+		except Exception:
+			return False
+
+	def _init_socketio(self, force=False):
+		if not socketio:
+			return
+		if getattr(self,'sio',None) and self._socketio_connected() and not force:
+			return
+		try:
+			self.sio = socketio.Client(reconnection=True, reconnection_attempts=2, reconnection_delay=1)
+			self.sio.on("nodes", self.on_nodes)
+			self.sio.on("pong", self.on_pong)
+			self.sio.connect(self.api_base, wait_timeout=2)
+		except Exception:
+			self.sio = None
 
 if __name__ == "__main__":
 	app = QApplication([])
