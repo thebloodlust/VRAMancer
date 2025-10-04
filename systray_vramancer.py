@@ -1,4 +1,4 @@
-import sys
+import sys, os
 from PyQt5.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QAction
 from PyQt5.QtGui import QIcon, QPixmap
 from PyQt5.QtCore import QProcess, Qt
@@ -6,17 +6,13 @@ from PyQt5.QtCore import QProcess, Qt
 class VRAMancerTray:
     def __init__(self):
         self.app = QApplication(sys.argv)
-        import os
-        icon_path = os.path.join(os.path.dirname(__file__), "vramancer.png")
-        if not os.path.exists(icon_path):
-            # Icône par défaut si vramancer.png absent
-            from PyQt5.QtGui import QPixmap
-            pixmap = QPixmap(32, 32)
-            pixmap.fill(Qt.blue)
-            icon = QIcon(pixmap)
-        else:
-            icon = QIcon(icon_path)
+        # Préserver l'appli si aucune fenêtre
+        self.app.setQuitOnLastWindowClosed(False)
+        icon = self._resolve_icon()
         self.tray = QSystemTrayIcon(icon, self.app)
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            # Log simple sur stdout (Windows: Powershell / cmd)
+            print("[Systray] System tray non disponible sur ce système / session (RDP ?)")
         self.menu = QMenu()
 
         self.install_action = QAction("Installation graphique VRAMancer")
@@ -48,7 +44,16 @@ class VRAMancerTray:
         self.cli_health.triggered.connect(lambda: QProcess.startDetached(sys.executable, ['-m','core.health']))
         cli_menu.addAction(self.cli_health)
         self.cli_list = QAction("Lister GPUs")
-    self.cli_list.triggered.connect(lambda: QProcess.startDetached(sys.executable, ['-c','import sys,os; sys.path.insert(0, os.path.dirname(__file__)); from utils.helpers import get_available_gpus; print(get_available_gpus())']))
+        self.cli_list.triggered.connect(
+            lambda: QProcess.startDetached(
+                sys.executable,
+                [
+                    '-c',
+                    'import sys,os; sys.path.insert(0, os.path.dirname(__file__)); '
+                    'from utils.helpers import get_available_gpus; print(get_available_gpus())'
+                ]
+            )
+        )
         cli_menu.addAction(self.cli_list)
 
         self.quit_action = QAction("Quitter")
@@ -91,6 +96,23 @@ class VRAMancerTray:
 
     def run(self):
         sys.exit(self.app.exec_())
+
+    # ------------------------------------------------------------------
+    # Résolution robuste de l'icône (Windows: chemins dupliqués / double extraction)
+    # ------------------------------------------------------------------
+    def _resolve_icon(self) -> QIcon:
+        candidates = [
+            os.path.join(os.path.dirname(__file__), "vramancer.png"),
+            os.path.join(os.getcwd(), "vramancer.png"),
+            os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "vramancer.png"),
+        ]
+        for c in candidates:
+            if os.path.exists(c):
+                return QIcon(c)
+        # Fallback: icône bleue simple
+        pixmap = QPixmap(32, 32)
+        pixmap.fill(Qt.blue)
+        return QIcon(pixmap)
 
 if __name__ == "__main__":
     tray = VRAMancerTray()
