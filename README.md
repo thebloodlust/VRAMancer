@@ -176,6 +176,21 @@ python installers\dashboard\dashboard_web.py
 
 Variables utiles : `VRM_UNIFIED_API_QUOTA`, `VRM_READ_ONLY`, `VRM_LOG_JSON`, `VRM_REQUEST_LOG`, `VRM_DISABLE_SOCKETIO`.
 
+### 🖥️ Qt Dashboard (fiabilisation connexions)
+Le dashboard Qt utilise maintenant des retries configurables + fallback `127.0.0.1` si `localhost` échoue.
+
+Variables d'environnement spécifiques :
+| Variable | Rôle | Défaut |
+|----------|------|--------|
+| `VRM_API_BASE` | Base URL API supervision (nodes, telemetry) | `http://localhost:5010` |
+| `VRM_MEMORY_BASE` | Base URL service mémoire hiérarchique | `http://localhost:5000` |
+| `VRM_API_TIMEOUT` | Timeout (s) par requête HTTP | `2.5` |
+| `VRM_API_RETRIES` | Nombre de tentatives par base | `3` |
+
+Comportement : chaque requête tente `VRM_API_BASE` puis variante `127.0.0.1` avec backoff progressif. L'état (connecté / injoignable) est affiché sans spam.
+Pour réduire l'erreur `Max retries exceeded with url /api/nodes` : augmenter `VRM_API_TIMEOUT` (ex: `export VRM_API_TIMEOUT=5`).
+
+
 ---
 
 ## 🔥 Fonctionnalités clés / Key features

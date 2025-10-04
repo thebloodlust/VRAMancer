@@ -3,7 +3,7 @@
 from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QPushButton, QTextEdit, QLabel, QListWidget, QListWidgetItem, QHBoxLayout, QTableWidget, QTableWidgetItem
 from PyQt5.QtGui import QIcon, QPixmap
 from PyQt5.QtCore import Qt, QTimer
-import os, struct
+import os, struct, time
 try:
 	from core.network.network_monitor import NetworkMonitor
 except Exception:
@@ -59,6 +59,12 @@ class DashboardQt(QWidget):
 		super().__init__()
 		self.setWindowTitle("VRAMancer Dashboard Qt")
 		self.setGeometry(100, 100, 900, 700)
+		# ---------------- Configuration réseau / API ----------------
+		self.api_base = os.environ.get("VRM_API_BASE", "http://localhost:5010").rstrip('/')
+		self.memory_base = os.environ.get("VRM_MEMORY_BASE", "http://localhost:5000").rstrip('/')
+		self.api_timeout = float(os.environ.get("VRM_API_TIMEOUT", "2.5"))
+		self.api_retries = int(os.environ.get("VRM_API_RETRIES", "3"))
+		self._backend_state = None
 		layout = QVBoxLayout()
 
 		# Supervision des nœuds (API supervision)
@@ -115,7 +121,7 @@ class DashboardQt(QWidget):
 				self.sio = socketio.Client()
 				self.sio.on("nodes", self.on_nodes)
 				self.sio.on("pong", self.on_pong)
-				self.sio.connect("http://localhost:5010")
+				self.sio.connect(self.api_base)
 			except Exception:
 				self.sio = None
 		self.nodes = []
@@ -131,23 +137,32 @@ class DashboardQt(QWidget):
 		self.status_label.setText(f"Ping {node_id}: {status}")
 
 	def refresh_nodes(self):
-		try:
-			resp = requests.get("http://localhost:5010/api/nodes", timeout=1.5)
-			self.nodes = resp.json()
+		data = self._api_get_json('/api/nodes')
+		if data is not None:
+			self.nodes = data
 			self.update_node_list()
-		except Exception as e:
+			self._backend_ok()
+		else:
 			self.node_list.clear()
-			self.status_label.setText(f"Erreur: {e}")
+			self._backend_fail()
 
 	def fetch_binary_telemetry(self):
+		blob = self._api_get_content('/api/telemetry.bin')
+		if not blob:
+			return
 		try:
-			resp = requests.get("http://localhost:5010/api/telemetry.bin", timeout=1.5)
-			blob = resp.content
 			decoded = list(decode_stream(blob))
-			# On peut enrichir l'affichage edge_stats avec charge rapide
 			self.edge_stats.clear()
 			for n in decoded:
-				self.edge_stats.append(f"{n['id']} | load={n['cpu_load_pct']:.2f}% free={n['free_cores']} vram={n['vram_used_mb']}/{n['vram_total_mb']}MB")
+				cid = n.get('id','?')
+				cpu = n.get('cpu_load_pct',0.0)
+				freec = n.get('free_cores','?')
+				vused = n.get('vram_used_mb','?'); vtot = n.get('vram_total_mb','?')
+				try:
+					cpu_fmt = f"{float(cpu):.2f}"
+				except Exception:
+					cpu_fmt = str(cpu)
+				self.edge_stats.append(f"{cid} | load={cpu_fmt}% free={freec} vram={vused}/{vtot}MB")
 		except Exception:
 			pass
 
@@ -218,27 +233,63 @@ class DashboardQt(QWidget):
 			pass
 
 	def promote_block(self, short_id):
-		try:
-			requests.get(f"http://localhost:5000/api/memory/promote?id={short_id}")
-		except Exception:
-			pass
+		self._memory_simple(f"/api/memory/promote?id={short_id}")
 
 	def demote_block(self, short_id):
-		try:
-			requests.get(f"http://localhost:5000/api/memory/demote?id={short_id}")
-		except Exception:
-			pass
+		self._memory_simple(f"/api/memory/demote?id={short_id}")
 
 	def refresh_edge(self):
-		try:
-			resp = requests.get("http://localhost:5010/api/nodes")
-			if resp.ok:
-				data = resp.json()
-				self.edge_stats.clear()
-				for n in data:
-					self.edge_stats.append(f"{n['id']} | type={n.get('type')} | load={n.get('cpu_load_pct','?')}% | free_cores={n.get('free_cores','?')}")
-		except Exception:
-			pass
+		data = self._api_get_json('/api/nodes')
+		if not data:
+			self._backend_fail(); return
+		self.edge_stats.clear()
+		for n in data:
+			self.edge_stats.append(f"{n['id']} | type={n.get('type')} | load={n.get('cpu_load_pct','?')}% | free_cores={n.get('free_cores','?')}")
+
+	# -------------------- Helpers HTTP avec retries --------------------
+	def _api_get_json(self, path: str):
+		return self._do_get(path, json_mode=True, bases=[self.api_base])
+
+	def _api_get_content(self, path: str):
+		return self._do_get(path, json_mode=False, bases=[self.api_base])
+
+	def _memory_simple(self, path: str):
+		self._do_get(path, json_mode=False, bases=[self.memory_base], silent=True)
+
+	def _do_get(self, path: str, json_mode=True, bases=None, silent=False):
+		if not requests:
+			return None
+		bases = bases or [self.api_base]
+		# Ajoute fallback 127.0.0.1 si localhost
+		expanded = []
+		for b in bases:
+			expanded.append(b)
+			if 'localhost' in b:
+				expanded.append(b.replace('localhost','127.0.0.1'))
+		for base in expanded:
+			for attempt in range(self.api_retries):
+				try:
+					resp = requests.get(base + path, timeout=self.api_timeout)
+					if resp.ok:
+						if json_mode:
+							return resp.json()
+						return resp.content
+					time.sleep( min(0.6, 0.25 * (attempt+1)) )
+				except Exception:
+					time.sleep( min(0.6, 0.25 * (attempt+1)) )
+		if not silent and json_mode:
+			return None
+		return None
+
+	def _backend_ok(self):
+		if self._backend_state != 'ok':
+			self.status_label.setText(f"Connecté {self.api_base}")
+			self._backend_state = 'ok'
+
+	def _backend_fail(self):
+		if self._backend_state != 'fail':
+			self.status_label.setText(f"Backend injoignable ({self.api_base}) – lancer: python -m core.api.unified_api")
+			self._backend_state = 'fail'
 
 if __name__ == "__main__":
 	app = QApplication([])
