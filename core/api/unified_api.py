@@ -163,6 +163,32 @@ def version():
 def health():
     return {"status": "ok", "ts": time.time()}
 
+@app.route('/api/env')
+def env_info():
+    """Expose quelques drapeaux runtime (diagnostic)."""
+    flags = {}
+    # Imports facultatifs
+    try:
+        import torch  # type: ignore
+        flags['torch'] = True
+        flags['torch_cuda'] = bool(getattr(torch.cuda, 'is_available', lambda: False)())
+    except Exception:
+        flags['torch'] = False
+    try:
+        import transformers  # type: ignore
+        flags['transformers'] = True
+    except Exception:
+        flags['transformers'] = False
+    flags['onnx'] = bool(os.environ.get('VRM_DISABLE_ONNX') != '1')
+    flags['socketio_disabled'] = os.environ.get('VRM_DISABLE_SOCKETIO','0') in {'1','true','TRUE'}
+    flags['dashboard_minimal'] = os.environ.get('VRM_DASHBOARD_MINIMAL','0') in {'1','true','TRUE'}
+    flags['api_quota'] = int(os.environ.get('VRM_UNIFIED_API_QUOTA','0'))
+    flags['read_only'] = os.environ.get('VRM_READ_ONLY','0') in {'1','true','TRUE'}
+    flags['json_log'] = os.environ.get('VRM_LOG_JSON','0') in {'1','true','TRUE'}
+    flags['request_log'] = os.environ.get('VRM_REQUEST_LOG','0') in {'1','true','TRUE'}
+    flags['auth_secret_set'] = bool(os.environ.get('VRM_AUTH_SECRET'))
+    return flags
+
 @app.route('/api/login', methods=['POST'])
 def login():
     body = request.json or {}

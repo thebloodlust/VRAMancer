@@ -61,6 +61,7 @@ class DashboardQt(QWidget):
 		self.setGeometry(100, 100, 900, 700)
 		# ---------------- Configuration réseau / API ----------------
 		# Auto-détection du port API si VRM_API_BASE non défini: on tente 5030 puis 5010
+		self.api_debug = os.environ.get("VRM_API_DEBUG","0") in {"1","true","TRUE"}
 		_env_base = os.environ.get("VRM_API_BASE")
 		if _env_base:
 			self.api_base = _env_base.rstrip('/')
@@ -278,13 +279,19 @@ class DashboardQt(QWidget):
 		for base in expanded:
 			for attempt in range(self.api_retries):
 				try:
+					if self.api_debug:
+						print(f"[QT][HTTP] GET {base+path} attempt={attempt+1}/{self.api_retries}")
 					resp = requests.get(base + path, timeout=self.api_timeout)
 					if resp.ok:
+						if self.api_debug:
+							print(f"[QT][HTTP] OK {base+path} status={resp.status_code}")
 						if json_mode:
 							return resp.json()
 						return resp.content
 					time.sleep( min(0.6, 0.25 * (attempt+1)) )
-				except Exception:
+				except Exception as e:
+					if self.api_debug:
+						print(f"[QT][HTTP] FAIL {base+path} attempt={attempt+1} err={e}")
 					time.sleep( min(0.6, 0.25 * (attempt+1)) )
 		if not silent and json_mode:
 			return None
@@ -299,10 +306,16 @@ class DashboardQt(QWidget):
 		if requests:
 			for base in candidates:
 				try:
+					if self.api_debug:
+						print(f"[QT][AUTODETECT] probing {base}/api/health")
 					r = requests.get(base + '/api/health', timeout=0.8)
 					if r.ok:
+						if self.api_debug:
+							print(f"[QT][AUTODETECT] SELECT {base}")
 						return base
-				except Exception:
+				except Exception as e:
+					if self.api_debug:
+						print(f"[QT][AUTODETECT] fail {base} err={e}")
 					continue
 		return candidates[0]
 

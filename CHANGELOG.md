@@ -1,5 +1,30 @@
 ## Changelog
 
+### 0.2.3 (2025-10-04)
+Windows & Robustness:
+- Fallback ONNX (VRM_DISABLE_ONNX) + compute engine stubs sans crash.
+- Auto-détection port API dans dashboard Qt (5030→5010) + retries configurables.
+- Script `scripts/api_autodetect.py` pour diagnostics de connectivité.
+- Ajout VRM_API_DEBUG (traces HTTP) & VRM_STRICT_IMPORT (fail fast optionnel).
+- Dashboard Qt: indicateur visuel (pastille), bouton Reconnect, fallback 127.0.0.1, logs debug.
+
+API & Observabilité:
+- Endpoint `/api/env` exposant état runtime (features, flags, quotas, modes).
+
+Docs & Packaging:
+- README: section Windows tokenizers (wheel vs build), section Qt fiabilisation.
+- Ajout `requirements-windows.txt` (transformers 4.46.2 + tokenizers 0.20.1) pour éviter compilation Rust/MSVC.
+- Documentation variables supplémentaires (VRM_DISABLE_ONNX, VRM_API_DEBUG, VRM_STRICT_IMPORT).
+
+Tests:
+- Nouveau test `test_env_endpoint.py` validant `/api/env` + script autodetect JSON parse.
+
+Hardening:
+- Strict import mode pour environnements contrôlés CI/CD.
+
+Note:
+Port par défaut API interne: 5030 (le tableau env mentionne 5010: correction planifiée – rétrocompat maintenue via autodétection).
+
 ### 0.2.0 (2025-10-03)
 Features:
 - Unified API: quotas, read-only, XAI, FL weighted + clipping + noise, workflows listing, persistence (SQLite opt-in).

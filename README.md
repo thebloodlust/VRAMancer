@@ -125,6 +125,7 @@ Tout est guidé, plug-and-play, multi-OS, dashboards auto, cluster auto, onboard
 |----------|-------------|
 | `GET /api/version` | Version backend |
 | `GET /api/health` | Healthcheck léger (utilisé par Docker HEALTHCHECK) |
+| `GET /api/env` | Statut runtime (features actives, flags environnement) |
 | `POST /api/workflows` | Crée un workflow no-code (Pydantic validation) |
 | `GET /api/workflows` | Liste workflows (mémoire + persistence sqlite si activée) |
 | `POST /api/federated/round/start` | Démarre un round fédéré |
@@ -431,6 +432,7 @@ vramancer-health
 | VRM_RATE_MAX | Seuil rate limit (req/interval) | 60 |
 | VRM_DISABLE_ONNX | Désactive import/export ONNX (environnements légers) | 0 |
 | VRM_API_DEBUG | Verbose debug connexions dashboard (Qt) | 0 |
+| VRM_STRICT_IMPORT | Échec immédiat si import critique manquant | 0 |
 
 Pour le mode production ne pas définir `VRM_TEST_MODE` et laisser rotation active.
 

@@ -5,9 +5,12 @@ le démarrage des dashboards. `export VRM_DISABLE_ONNX=1` force la désactivatio
 """
 
 import os, time
+STRICT = os.environ.get('VRM_STRICT_IMPORT','0') in {'1','true','TRUE'}
 try:
     import torch  # type: ignore
-except Exception:  # pragma: no cover - torch absent
+except Exception as _e:  # pragma: no cover - torch absent
+    if STRICT:
+        raise RuntimeError(f"[STRICT_IMPORT] torch indisponible: {_e}")
     class _TorchStub:
         class nn:
             class Module: ...
@@ -33,7 +36,9 @@ try:  # ONNX optionnel
     if os.environ.get('VRM_DISABLE_ONNX') == '1':
         raise ImportError('ONNX disabled by VRM_DISABLE_ONNX=1')
     import onnx  # type: ignore
-except Exception:  # pragma: no cover - fallback silencieux
+except Exception as _e:  # pragma: no cover - fallback silencieux
+    if STRICT:
+        raise RuntimeError(f"[STRICT_IMPORT] onnx indisponible: {_e}")
     onnx = None
 import psutil
 try:
