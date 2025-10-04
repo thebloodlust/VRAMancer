@@ -176,6 +176,21 @@ python installers\dashboard\dashboard_web.py
 
 Variables utiles : `VRM_UNIFIED_API_QUOTA`, `VRM_READ_ONLY`, `VRM_LOG_JSON`, `VRM_REQUEST_LOG`, `VRM_DISABLE_SOCKETIO`.
 
+#### ⚠️ Windows : erreur build `tokenizers` / `link.exe not found`
+Si l'installation échoue sur `tokenizers` (compilation Rust/MSVC) avec Python 3.12 :
+1. Solution rapide (recommended) : utiliser le fichier `requirements-windows.txt` adapté :
+	```bash
+	pip install -r requirements-windows.txt
+	```
+	(Versions plus récentes : `transformers 4.46.2` + `tokenizers 0.20.1` avec wheels précompilés.)
+2. Ou installer toolchain :
+	- Installer Rust (`https://rustup.rs/`)
+	- Installer *Visual Studio Build Tools* avec composant "Desktop development with C++" (inclut `link.exe`)
+	- Relancer: `pip install -r requirements.txt`
+3. Fallback possible : définir `USE_SLOW_TOKENIZER=1` (le code force alors l'utilisation d'un tokenizer Python si dispo / ou stub silencieux).
+
+Mode minimal (aucun modèle / no HF): n'installe que `requirements-lite.txt` puis lancer l'API et dashboards (fonctionnalités ML avancées inactives).
+
 ### 🖥️ Qt Dashboard (fiabilisation connexions)
 Le dashboard Qt utilise maintenant des retries configurables + fallback `127.0.0.1` si `localhost` échoue.
 

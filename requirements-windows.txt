@@ -1,0 +1,32 @@
+# Windows-friendly requirements (Python 3.12) avoiding tokenizers source build
+# Use this if installation of transformers 4.34.0 fails building tokenizers 0.14.x
+# Prebuilt wheels exist for these versions on Python 3.12 (avoid needing Rust / MSVC toolchain)
+# Install with:  pip install -r requirements-windows.txt
+
+# Core (updated)
+torch==2.2.0          # Wheel available for win_amd64 cp312
+numpy==1.26.0
+pyyaml==6.0.1
+psutil==5.9.8
+# Explicit newer tokenizers before transformers to lock compatible wheel
+tokenizers==0.20.1    # Has Windows wheels for Py3.12
+transformers==4.46.2  # Compatible with tokenizers 0.20.x
+accelerate==0.27.2
+flask==3.0.2
+pydantic==2.8.2
+pycryptodome==3.20.0
+prometheus-client==0.21.0
+rich==13.9.4
+requests==2.32.3
+python-socketio==5.11.1
+PyJWT==2.9.0
+
+# Tests (optional)
+pytest==8.2.0
+pytest-cov==5.0.0
+flake8==7.1.0
+setuptools==69.0.3
+
+# Notes:
+# - If you still need transformers 4.34.0 pin, install Rust + Visual Studio Build Tools (C++), then use original requirements.txt.
+# - To force slow (pure Python) tokenizers behavior, export USE_SLOW_TOKENIZER=1 before launching (fallback already handled in utils).
