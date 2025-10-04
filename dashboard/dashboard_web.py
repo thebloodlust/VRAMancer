@@ -27,7 +27,12 @@ except Exception:
     def get_available_gpus():
         return []
 import subprocess
-from core.security import install_security
+try:
+    from core.security import install_security
+except Exception as _sec_err:  # Fallback Windows / extraction incomplète
+    def install_security(app):  # type: ignore
+        if os.environ.get('VRM_API_DEBUG','0') in {'1','true','TRUE'}:
+            print(f"[WARN] security layer indisponible: {_sec_err} -> fallback no-op")
 
 app = Flask(__name__)
 if SocketIO:
