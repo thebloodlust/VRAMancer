@@ -112,6 +112,7 @@ pytest -q
 ```
 
 **Windows** : `installers/install_windows.bat` (crée venv, installe deps, lance systray)<br>
+Alternative tout-en-un : `installers/start_windows_all.bat` (installe/MAJ deps + API + Web + Qt)
 **Linux** : `bash installers/install_linux.sh` (option GUI + API)<br>
 **macOS** : `bash installers/install_macos.sh`
 
