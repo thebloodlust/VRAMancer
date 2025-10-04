@@ -218,6 +218,11 @@ Debug verbeux (requêtes, ports testés) :
 export VRM_API_DEBUG=1
 python dashboard/dashboard_qt.py
 ```
+Note Windows: si le message "backend injoignable" persiste, définir manuellement :
+```bat
+set VRM_API_BASE=http://127.0.0.1:5030
+python installers\dashboard\dashboard_web.py
+```
 
 
 ---
@@ -422,7 +427,7 @@ vramancer-health
 ### Variables d'environnement essentielles (résumé)
 | Variable | Rôle | Valeur défaut |
 |----------|------|---------------|
-| VRM_API_PORT | Port API Flask | 5010 |
+| VRM_API_PORT | Port API Flask | 5030 |
 | VRM_METRICS_PORT | Port exposition Prometheus | 9108 |
 | VRM_HA_REPLICATION | Active journal & réplication HA | 0 |
 | VRM_HA_PEERS | Liste host:port pairs | (vide) |
