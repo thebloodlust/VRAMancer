@@ -257,7 +257,9 @@ class DashboardQt(QWidget):
 		if not data:
 			self._backend_fail(); return
 		self.edge_stats.clear()
-		for n in data:
+		# Extract nodes array from API response
+		nodes = data['nodes'] if isinstance(data, dict) and 'nodes' in data else data if isinstance(data, list) else []
+		for n in nodes:
 			self.edge_stats.append(f"{n['id']} | type={n.get('type')} | load={n.get('cpu_load_pct','?')}% | free_cores={n.get('free_cores','?')}")
 
 	# -------------------- Helpers HTTP avec retries --------------------

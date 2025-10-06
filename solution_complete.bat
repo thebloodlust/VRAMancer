@@ -97,7 +97,7 @@ echo.
 echo ===============================================
 echo   TEST API DIRECT
 echo ===============================================
-python -c "try: import requests; r=requests.get('http://localhost:5030/health', timeout=5); print('Status:', r.status_code); print('Response:', r.json()); except Exception as e: print('Erreur:', e)"
+python -c "try: import requests; r=requests.get('http://localhost:5030/health', timeout=5); print('Status:', r.status_code); print('Response:', r.json()); except Exception as e: print('Erreur:', str(e))"
 echo.
 pause
 goto menu
