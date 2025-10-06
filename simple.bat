@@ -34,10 +34,22 @@ REM Installation dependencies basique
 echo Installation des dependencies...
 python -m pip install flask requests PyQt5 >nul 2>&1
 
-REM Demarrage API automatique
-echo Demarrage API...
-start "API" /min python start_api.py
-timeout /t 8 /nobreak >nul
+REM Nettoyage port 5030
+echo Nettoyage port 5030...
+for /f "tokens=5" %%p in ('netstat -aon ^| findstr ":5030" 2^>nul') do taskkill /f /pid %%p >nul 2>&1
+
+REM Demarrage API avec fenetre visible pour debug
+echo Demarrage API (fenetre visible)...
+start "VRAMancer API - NE PAS FERMER" python start_api.py
+echo Attente demarrage API (12 secondes)...
+timeout /t 12 /nobreak >nul
+
+REM Test API
+python -c "import requests; requests.get('http://localhost:5030/health', timeout=2); print('API OK')" >nul 2>&1
+if %ERRORLEVEL% neq 0 (
+    echo ATTENTION: API peut ne pas etre prete
+    echo Verifiez la fenetre API pour les erreurs
+)
 
 :menu
 echo.

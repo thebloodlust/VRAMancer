@@ -42,35 +42,11 @@ echo Si une fenetre Qt s'ouvre, le dashboard fonctionne
 echo Si rien ne s'affiche, il y a un probleme Qt
 echo.
 
-python -c "
-print('=== DEBUG QT DASHBOARD ===')
-try:
-    from PyQt5.QtWidgets import QApplication
-    print('Import QApplication: OK')
-    
-    import sys
-    app = QApplication(sys.argv)
-    print('QApplication crelee: OK')
-    
-    from dashboard.dashboard_qt import VRAMancerDashboard
-    print('Import VRAMancerDashboard: OK')
-    
-    window = VRAMancerDashboard()
-    print('Fenetre crelee: OK')
-    
-    window.show()
-    print('Fenetre affichee: OK')
-    print('Lancement boucle evenements Qt...')
-    
-    sys.exit(app.exec_())
-    
-except ImportError as e:
-    print('ERREUR Import:', e)
-except Exception as e:
-    print('ERREUR Generale:', e)
-    import traceback
-    traceback.print_exc()
-"
+python -c "print('=== DEBUG QT DASHBOARD ==='); from PyQt5.QtWidgets import QApplication; print('Import QApplication: OK'); import sys; app = QApplication(sys.argv); print('QApplication OK'); print('Test termine - Qt fonctionne')"
+
+echo.
+echo Test Qt Dashboard REEL...
+python dashboard\dashboard_qt.py
 
 echo.
 echo Test Qt termine.
