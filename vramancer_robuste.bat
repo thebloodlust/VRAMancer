@@ -120,9 +120,9 @@ if %FILES_OK% neq 1 (
     pause
     goto start
 )
-echo 🚀 Lancement debug_web.py...
-echo 📱 Une page web devrait s'ouvrir sur http://localhost:8080
-echo ⏹️  Appuyez sur Ctrl+C pour arreter
+echo Lancement debug_web.py...
+echo Une page web devrait s'ouvrir sur http://localhost:8080
+echo Appuyez sur Ctrl+C pour arreter
 echo.
 python debug_web.py
 echo.
@@ -146,8 +146,8 @@ if not exist "dashboard\dashboard_qt.py" (
     pause
     goto start
 )
-echo 🚀 Lancement dashboard_qt.py...
-echo 🖥️  Interface Qt native devrait s'ouvrir
+echo Lancement dashboard_qt.py...
+echo Interface Qt native devrait s'ouvrir
 echo.
 python dashboard\dashboard_qt.py
 echo.
@@ -166,9 +166,9 @@ if %PYTHON_OK% neq 1 (
     pause
     goto start
 )
-echo 🧪 Test de l'API VRAMancer...
+echo Test de l'API VRAMancer...
 echo.
-python -c "try: import requests; r=requests.get('http://localhost:5030/health', timeout=3); print('✅ API Active:', r.json()); except Exception as e: print('❌ API Erreur:', e)"
+python -c "try: import requests; r=requests.get('http://localhost:5030/health', timeout=3); print('API Active:', r.json()); except Exception as e: print('API Erreur:', str(e))"
 echo.
 pause
 goto start
