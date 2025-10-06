@@ -240,7 +240,7 @@ class MinimalDashboardHandler(BaseHTTPRequestHandler):
             <div class="card">
                 <h2>🖥️ Système</h2>
                 <p>OS: Windows</p>
-                <p>Python: ''' + sys.version.split()[0] + '''</p>
+                <p>Python: """ + sys.version.split()[0] + """</p>
                 <p>Statut: <span class="status ok">Opérationnel</span></p>
             </div>
             
