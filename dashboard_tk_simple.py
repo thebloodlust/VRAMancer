@@ -131,17 +131,18 @@ class VRAMancerTkGUI:
         try:
             response = requests.get(f"{self.api_base}/health", timeout=3)
             if response.status_code == 200:
-                self.api_status.set("✅ API Active")
-                self.log("API Health Check: OK")
-                self.update_gpu_info()
-                self.update_nodes_info()
+                # Utiliser after() pour les updates GUI depuis un thread
+                self.root.after(0, lambda: self.api_status.set("✅ API Active"))
+                self.root.after(0, lambda: self.log("API Health Check: OK"))
+                self.root.after(0, self.update_gpu_info)
+                self.root.after(0, self.update_nodes_info)
                 return True
             else:
-                self.api_status.set(f"❌ Erreur {response.status_code}")
-                self.log(f"API Error: {response.status_code}")
+                self.root.after(0, lambda: self.api_status.set(f"❌ Erreur {response.status_code}"))
+                self.root.after(0, lambda: self.log(f"API Error: {response.status_code}"))
         except requests.exceptions.RequestException as e:
-            self.api_status.set("❌ API Inaccessible")
-            self.log(f"API Connection Error: {e}")
+            self.root.after(0, lambda: self.api_status.set("❌ API Inaccessible"))
+            self.root.after(0, lambda: self.log(f"API Connection Error: {e}"))
         return False
     
     def update_gpu_info(self):

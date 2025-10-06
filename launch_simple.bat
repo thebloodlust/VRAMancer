@@ -54,7 +54,9 @@ if "%choice%"=="1" (
 
 if "%choice%"=="2" (
     echo Lancement Dashboard Web...
-    if exist "dashboard\dashboard_web.py" (
+    if exist "dashboard_web_simple.py" (
+        start "VRAMancer Web" python dashboard_web_simple.py
+    ) else if exist "dashboard\dashboard_web.py" (
         start "VRAMancer Web" python dashboard\dashboard_web.py
         timeout /t 2 >nul
         start http://localhost:8080

@@ -71,11 +71,14 @@ def start_minimal_api(port=5030):
                 "nodes": [
                     {
                         "id": "local",
-                        "name": "Local Node",
+                        "name": "Local Node", 
                         "status": "active",
+                        "type": "standard",
                         "gpu_count": 1,
                         "memory_total": "8GB",
-                        "memory_used": "2GB"
+                        "memory_used": "2GB",
+                        "address": "127.0.0.1:5030",
+                        "capabilities": ["cuda", "inference"]
                     }
                 ],
                 "total_nodes": 1
