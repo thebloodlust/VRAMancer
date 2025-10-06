@@ -27,12 +27,13 @@ echo ===============================================
 echo 1. Interface Tkinter (recommandee)
 echo 2. Dashboard Web (si vous voulez le web)
 echo 3. DEBUG Web (diagnostic complet)
-echo 4. Test API seulement
-echo 5. Quitter
+echo 4. DEBUG Qt (diagnostic Qt + correctifs)
+echo 5. Test API seulement
+echo 6. Quitter
 echo.
 
 :MENU
-set /p choice="Votre choix (1-5): "
+set /p choice="Votre choix (1-6): "
 
 if "%choice%"=="1" (
     echo.
@@ -59,13 +60,21 @@ if "%choice%"=="3" (
 
 if "%choice%"=="4" (
     echo.
+    echo Lancement DEBUG Qt - Diagnostic Qt complet...
+    echo Analyse des erreurs Qt et generation de correctifs...
+    python debug_qt.py
+    goto END
+)
+
+if "%choice%"=="5" (
+    echo.
     echo Test de l'API...
     python -c "import requests; r=requests.get('http://localhost:5030/health'); print('API Health:', r.json()); r2=requests.get('http://localhost:5030/api/status'); print('API Status:', r2.json())"
     pause
     goto MENU
 )
 
-if "%choice%"=="5" (
+if "%choice%"=="6" (
     goto EXIT
 )
 
