@@ -244,7 +244,7 @@ def create_debug_web_server():
         <div class="debug-section">
             <h3>🧪 Tests API</h3>
             <button class="btn" onclick="testAllEndpoints()">Test Tous les Endpoints</button>
-            <button class="btn" onclick="testConnectivity()">Test Connectivité</button>
+            <button class="btn" onclick="testConnectivityButton()">Test Connectivité</button>
             <button class="btn" onclick="clearLog()">Effacer Log</button>
             <div id="api-results" class="log-area">Cliquez sur "Test Tous les Endpoints" pour commencer...</div>
         </div>
@@ -330,6 +330,7 @@ def create_debug_web_server():
         }}
         
         async function testConnectivity() {{
+            console.log('Fonction testConnectivity() appelée');
             log('Test de connectivité...', 'info');
             log(`URL testée: ${{API_BASE}}/health`, 'debug');
             
@@ -364,7 +365,7 @@ def create_debug_web_server():
                 if (error.name === 'TypeError' && error.message.includes('fetch')) {{
                     log('Possible problème CORS ou API non démarrée', 'warning');
                 }} else if (error.name === 'NetworkError') {{
-                    log('Problème de réseau - vérifiez que l\API est démarrée', 'warning');
+                    log('Problème de réseau - vérifiez que l\'API est démarrée', 'warning');
                 }}
             }}
         }}
@@ -453,6 +454,16 @@ def create_debug_web_server():
                 testConnectivity();
             }}, 30000);
         }});
+        
+        // Fonction wrapper pour le bouton
+        function testConnectivityButton() {{
+            console.log('Bouton Test Connectivité cliqué');
+            log('Déclenchement manuel du test de connectivité', 'info');
+            testConnectivity();
+        }}
+        
+        // Expose function globally
+        window.testConnectivityButton = testConnectivityButton;
     </script>
 </body>
 </html>
