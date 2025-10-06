@@ -122,6 +122,14 @@ def create_debug_web_server():
         
         app = Flask(__name__)
         
+        # Configuration CORS pour éviter les problèmes de connectivité
+        @app.after_request
+        def after_request(response):
+            response.headers.add('Access-Control-Allow-Origin', '*')
+            response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+            response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+            return response
+        
         # Variables globales pour debug
         debug_info = {
             "requests_count": 0,
@@ -323,18 +331,41 @@ def create_debug_web_server():
         
         async function testConnectivity() {{
             log('Test de connectivité...', 'info');
+            log(`URL testée: ${{API_BASE}}/health`, 'debug');
+            
             try {{
-                const response = await fetch(`${{API_BASE}}/health`);
+                const startTime = performance.now();
+                const response = await fetch(`${{API_BASE}}/health`, {{
+                    method: 'GET',
+                    mode: 'cors',
+                    headers: {{
+                        'Accept': 'application/json',
+                        'Content-Type': 'application/json'
+                    }}
+                }});
+                const endTime = performance.now();
+                const latency = Math.round(endTime - startTime);
+                
+                log(`Réponse reçue en ${{latency}}ms, status: ${{response.status}}`, 'debug');
+                
                 if (response.ok) {{
+                    const data = await response.json();
                     document.getElementById('api-status').innerHTML = '<span class="status-ok">✅ API Active</span>';
-                    log('API accessible', 'success');
+                    log(`API accessible: ${{JSON.stringify(data)}}`, 'success');
                 }} else {{
                     document.getElementById('api-status').innerHTML = '<span class="status-error">❌ API Erreur</span>';
-                    log(`API erreur: ${{response.status}}`, 'error');
+                    log(`API erreur HTTP: ${{response.status}} - ${{response.statusText}}`, 'error');
                 }}
             }} catch (error) {{
                 document.getElementById('api-status').innerHTML = '<span class="status-error">❌ API Inaccessible</span>';
-                log(`API inaccessible: ${{error.message}}`, 'error');
+                log(`Erreur réseau: ${{error.name}} - ${{error.message}}`, 'error');
+                
+                // Test de diagnostic supplémentaire
+                if (error.name === 'TypeError' && error.message.includes('fetch')) {{
+                    log('Possible problème CORS ou API non démarrée', 'warning');
+                }} else if (error.name === 'NetworkError') {{
+                    log('Problème de réseau - vérifiez que l\API est démarrée', 'warning');
+                }}
             }}
         }}
         

@@ -149,7 +149,11 @@ class DashboardQt(QWidget):
 	def refresh_nodes(self):
 		data = self._api_get_json('/api/nodes')
 		if data is not None:
-			self.nodes = data
+			# Extraire la liste des nodes depuis la réponse API
+			if isinstance(data, dict) and 'nodes' in data:
+				self.nodes = data['nodes']
+			else:
+				self.nodes = data
 			self.update_node_list()
 			self._backend_ok()
 		else:
