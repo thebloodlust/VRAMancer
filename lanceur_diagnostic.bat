@@ -45,7 +45,8 @@ echo.
 echo Test de l'API...
 python --version
 echo.
-python -c "import requests; r=requests.get('http://localhost:5030/health', timeout=5); print('API Status:', r.status_code, r.json())" 2>&1
+echo Test avec gestion d'erreur complete...
+python -c "try: import requests; print('Requests OK'); r=requests.get('http://localhost:5030/health', timeout=5); print('API Status:', r.status_code, r.json()); except ImportError: print('ERREUR: requests non installe'); except Exception as e: print('ERREUR API:', str(e))" 2>&1
 echo.
 echo Appuyez sur une touche pour revenir au menu...
 pause >nul
