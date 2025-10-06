@@ -77,7 +77,9 @@ if "%choice%"=="3" (
 
 if "%choice%"=="4" (
     echo Lancement Interface Tkinter...
-    if exist "dashboard\dashboard_tk.py" (
+    if exist "dashboard_tk_simple.py" (
+        python dashboard_tk_simple.py
+    ) else if exist "dashboard\dashboard_tk.py" (
         python dashboard\dashboard_tk.py
     ) else (
         python gui.py

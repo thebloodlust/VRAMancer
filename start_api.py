@@ -65,6 +65,37 @@ def start_minimal_api(port=5030):
                 "total_memory": "Detecting..."
             })
         
+        @app.route('/api/nodes')
+        def nodes():
+            return jsonify({
+                "nodes": [
+                    {
+                        "id": "local",
+                        "name": "Local Node",
+                        "status": "active",
+                        "gpu_count": 1,
+                        "memory_total": "8GB",
+                        "memory_used": "2GB"
+                    }
+                ],
+                "total_nodes": 1
+            })
+        
+        @app.route('/api/telemetry.bin')
+        def telemetry():
+            return jsonify({
+                "timestamp": "2025-10-06T21:00:00Z",
+                "metrics": {
+                    "gpu_usage": 45,
+                    "memory_usage": 60,
+                    "temperature": 65
+                }
+            })
+        
+        @app.route('/socket.io/')
+        def socketio_fallback():
+            return jsonify({"error": "SocketIO not implemented in minimal API"})
+        
         print_status(f"API minimale démarrée sur port {port}", "SUCCESS")
         app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
         
