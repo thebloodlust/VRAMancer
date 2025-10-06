@@ -1,8 +1,9 @@
 import uuid
 
 class MemoryBlock:
-    def __init__(self, size_mb, gpu_id, status="free"):
-        self.id = str(uuid.uuid4())
+    def __init__(self, size_mb, gpu_id: int = 0, status="free", id: str | None = None):
+        # Accepte param id explicite (tests persistence / eviction)
+        self.id = id or str(uuid.uuid4())
         self.size_mb = size_mb
         self.gpu_id = gpu_id
         self.status = status  # "free", "reserved", "allocated"

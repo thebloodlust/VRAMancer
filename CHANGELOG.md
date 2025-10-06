@@ -1,5 +1,16 @@
 ## Changelog
 
+### 0.2.4 (2025-10-04)
+Enhancements:
+- Fallback tokenizer Python pur (`BasicTokenizer`) activable via `VRM_FORCE_BASIC_TOKENIZER=1` ou automatiquement si `transformers` indisponible.
+- Support variable `USE_SLOW_TOKENIZER=1` pour forcer tentative `use_fast=False` avant fallback basic.
+- Tests à prévoir (non inclus dans cette entrée) pour header `X-Request-ID` et secure aggregation (documentation mise à jour).
+- Correction style requirements (espace accidentel supprimé avant pydantic si présent dans future commit).
+
+Notes:
+- Version interne incrémentée `0.2.4`.
+- Aucun changement d'API cassant; uniquement robustesse et diagnostics.
+
 ### 0.2.3 (2025-10-04)
 Windows & Robustness:
 - Fallback ONNX (VRM_DISABLE_ONNX) + compute engine stubs sans crash.

@@ -1,0 +1,18 @@
+
+[Unit]
+Description=VRAMancer Worker Node
+After=network.target
+
+[Service]
+Type=simple
+User=vramancer
+WorkingDirectory=/opt/vramancer
+Environment=VRM_NODE_ROLE=worker
+Environment=VRM_CLUSTER_MASTER_IP=192.168.1.100
+Environment=VRM_API_PORT=5031
+ExecStart=/opt/vramancer/.venv/bin/python -m vramancer.main
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

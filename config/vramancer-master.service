@@ -1,0 +1,20 @@
+
+[Unit]
+Description=VRAMancer Master Node
+After=network.target nvidia-persistenced.service
+
+[Service]
+Type=simple
+User=vramancer
+WorkingDirectory=/opt/vramancer
+Environment=VRM_NODE_ROLE=master
+Environment=VRM_CLUSTER_MASTER=true
+Environment=VRM_API_PORT=5030
+Environment=VRM_CUDA_DEVICES=0
+Environment=VRM_ROCM_DEVICES=0
+ExecStart=/opt/vramancer/.venv/bin/python -m vramancer.main
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

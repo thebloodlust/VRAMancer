@@ -54,6 +54,7 @@ import logging
 from core.memory_balancer import MemoryBalancer
 from core.stream_manager import StreamManager
 from core.monitor import GPUMonitor
+from core.metrics import ORCH_PLACEMENTS, ORCH_MIGRATIONS, ORCH_REBALANCE, ORCH_HIERARCHY_MOVE
 
 
 from core.storage_manager import load_block_from_disk, save_block_to_disk
@@ -86,13 +87,23 @@ class BlockOrchestrator:
         usage = self.monitor.status()
         candidates = preferred_gpus or list(usage.keys())
         best_gpu = min(candidates, key=lambda g: float(usage[str(g)].replace('% VRAM','').replace('%','')))
-        return self.balancer.allocate_block(block, int(best_gpu))
+        res = self.balancer.allocate_block(block, int(best_gpu))
+        try:
+            ORCH_PLACEMENTS.labels("vram").inc()
+        except Exception:
+            pass
+        return res
 
     def release_block(self, block, gpu_id):
         self.balancer.release_block(block, gpu_id)
 
     def migrate_block(self, block, src_gpu, dst_gpu):
-        return self.balancer.migrate_block(block, src_gpu, dst_gpu)
+        res = self.balancer.migrate_block(block, src_gpu, dst_gpu)
+        try:
+            ORCH_MIGRATIONS.inc()
+        except Exception:
+            pass
+        return res
 
     def rebalance(self, blocks, threshold=90.0, dram_limit=10):
         """
@@ -101,6 +112,10 @@ class BlockOrchestrator:
         """
         usage = {int(k): float(v.replace('% VRAM','').replace('%','')) for k,v in self.monitor.status().items()}
         self.balancer.balance(blocks, usage, threshold=threshold)
+        try:
+            ORCH_REBALANCE.inc()
+        except Exception:
+            pass
         # Si VRAM saturée, migrer les blocs les moins utilisés vers le niveau le plus rapide disponible
         if any(u > threshold for u in usage.values()):
             sorted_blocks = sorted(blocks, key=lambda b: getattr(b, 'last_access', 0))
@@ -110,15 +125,21 @@ class BlockOrchestrator:
                 if fastest == 'dram' and len(self.dram_cache) < dram_limit:
                     self.logger.info(f"[Orchestrator] Bloc {block.id} migré en DRAM (L4)")
                     self.dram_cache[block.id] = block.cpu()
+                    try: ORCH_HIERARCHY_MOVE.labels("dram").inc()
+                    except Exception: pass
                 elif fastest == 'nvme':
                     path = os.path.join(self.nvme_dir, f"{block.id}.pt")
                     save_block_to_disk(block.cpu(), path)
                     self.logger.info(f"[Orchestrator] Bloc {block.id} migré sur NVMe (L5) : {path}")
+                    try: ORCH_HIERARCHY_MOVE.labels("nvme").inc()
+                    except Exception: pass
                 elif fastest == 'network':
                     for node in self.remote_nodes:
                         try:
                             send_block(block, target_device=node)
                             self.logger.info(f"[Orchestrator] Bloc {block.id} migré sur le réseau (L6) : {node}")
+                            try: ORCH_HIERARCHY_MOVE.labels("network").inc()
+                            except Exception: pass
                             break
                         except Exception as e:
                             self.logger.warning(f"[Orchestrator] Erreur migration réseau {node} : {e}")

@@ -1,6 +1,6 @@
 from core.hierarchical_memory import HierarchicalMemoryManager
 from core.memory_block import MemoryBlock
-from core.metrics import MEMORY_PROMOTIONS, MEMORY_DEMOTIONS
+from core.metrics import MEMORY_PROMOTIONS, MEMORY_DEMOTIONS, counter_value
 
 def test_promotion_demotion_metrics():
     h = HierarchicalMemoryManager()
@@ -13,5 +13,5 @@ def test_promotion_demotion_metrics():
     h.policy_demote_if_needed(b, gpu_over_pct=99)
     # cannot assert absolute values reliably (depends path) but ensure counters exist
     # Pull internal samples
-    assert MEMORY_PROMOTIONS._value.get() >= 0
-    assert MEMORY_DEMOTIONS._value.get() >= 0
+    assert counter_value(MEMORY_PROMOTIONS) >= 0
+    assert counter_value(MEMORY_DEMOTIONS) >= 0

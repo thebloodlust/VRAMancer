@@ -1,0 +1,75 @@
+
+version: '3.8'
+
+services:
+  vramancer-master:
+    build: .
+    hostname: epyc-server
+    environment:
+      - VRM_NODE_ROLE=master
+      - VRM_CLUSTER_MASTER=true
+      - VRM_API_PORT=5030
+      - VRM_CUDA_DEVICES=0
+      - VRM_ROCM_DEVICES=0
+      - VRM_FASTPATH_IF=enp1s0
+    ports:
+      - "5030:5030"
+      - "5000:5000"  # Dashboard
+      - "5040:5040"  # FastPath
+    volumes:
+      - /dev/nvidia0:/dev/nvidia0
+      - /dev/kfd:/dev/kfd
+      - ./models:/app/models
+    networks:
+      - vramancer-net
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  vramancer-worker-laptop:
+    build: .
+    hostname: laptop-i5
+    environment:
+      - VRM_NODE_ROLE=worker
+      - VRM_CLUSTER_MASTER_IP=epyc-server
+      - VRM_API_PORT=5031
+      - VRM_CUDA_DEVICES=0
+    ports:
+      - "5031:5031"
+    volumes:
+      - /dev/nvidia0:/dev/nvidia0
+    networks:
+      - vramancer-net
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  vramancer-worker-mac:
+    build: .
+    hostname: macbook-m4
+    environment:
+      - VRM_NODE_ROLE=worker
+      - VRM_CLUSTER_MASTER_IP=epyc-server
+      - VRM_API_PORT=5032
+      - VRM_MPS_DEVICE=0
+      - VRM_POWER_PROFILE=low_power
+    ports:
+      - "5032:5032"
+    networks:
+      - vramancer-net
+    # Note: MPS devices nécessitent configuration spéciale sur macOS
+
+networks:
+  vramancer-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 192.168.100.0/24

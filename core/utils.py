@@ -5,7 +5,7 @@ Utility helpers for GPU‑aware inference.
 
 from __future__ import annotations
 
-import os, sys
+import os, sys, re
 from typing import Iterable, Sequence, Optional, List, Dict, Any
 
 if os.environ.get('VRM_MINIMAL_TEST'):
@@ -31,8 +31,11 @@ if os.environ.get('VRM_MINIMAL_TEST'):
         return None
     def is_tokenizers_available():  # pragma: no cover
         return False
-else:  # mode normal mais on protège chaque import lourd
-    try:
+else:  # mode normal mais on protège chaque import lourd + fallback tokenizer pur Python
+    FORCE_BASIC = os.environ.get('VRM_FORCE_BASIC_TOKENIZER') in {'1','true','TRUE'} or \
+                  os.environ.get('USE_SLOW_TOKENIZER') in {'1','true','TRUE'}
+
+    try:  # Torch (tolérant)
         import torch  # type: ignore
     except Exception:
         class _TorchLite:
@@ -51,18 +54,63 @@ else:  # mode normal mais on protège chaque import lourd
             @staticmethod
             def device(name): return name
         torch = _TorchLite()  # type: ignore
-    try:
-        from transformers import AutoTokenizer  # type: ignore
-        from transformers.utils import is_tokenizers_available  # type: ignore
-        def get_tokenizer(model_name: str):  # noqa
-            try:
-                return AutoTokenizer.from_pretrained(model_name, use_fast=True)
-            except Exception as e:  # pragma: no cover - fallback
-                print(f"[Tokenizer] Fast indisponible ({e}) -> slow")
-                return AutoTokenizer.from_pretrained(model_name, use_fast=False)
-    except Exception:
-        def get_tokenizer(model_name: str):  # pragma: no cover
-            return None
+
+    class BasicTokenizer:
+        """Tokenizer pur Python très simple (fallback) – non performant.
+
+        - Normalise en lower + supprime espaces multiples
+        - Découpe sur espaces
+        - encode() -> ids basés sur hash stable tronqué
+        - decode() -> reconstruction approximative (perte possible)
+        """
+        fallback = True
+        def __init__(self):
+            self._vocab: dict[str,int] = {}
+            self._rev: dict[int,str] = {}
+            self._next_id = 5  # réserver 0..4 pour spéciaux
+        def tokenize(self, text: str):
+            text = re.sub(r"\s+"," ", text.strip().lower())
+            return text.split(' ') if text else []
+        def _assign(self, tok: str):
+            if tok not in self._vocab:
+                self._vocab[tok] = self._next_id
+                self._rev[self._next_id] = tok
+                self._next_id += 1
+            return self._vocab[tok]
+        def encode(self, text: str):
+            return [self._assign(t) for t in self.tokenize(text)]
+        def decode(self, ids):
+            return ' '.join(self._rev.get(i,'?') for i in ids)
+    _BASIC_SINGLETON: BasicTokenizer | None = None
+    def _basic():  # pas de nonlocal (module scope variable)
+        global _BASIC_SINGLETON
+        if _BASIC_SINGLETON is None:
+            _BASIC_SINGLETON = BasicTokenizer()
+            print("[Tokenizer] Utilisation du BasicTokenizer fallback (transformers indisponible ou forcé)")
+        return _BASIC_SINGLETON
+
+    if not FORCE_BASIC:
+        try:
+            from transformers import AutoTokenizer  # type: ignore
+            from transformers.utils import is_tokenizers_available  # type: ignore
+            def get_tokenizer(model_name: str):  # noqa
+                if os.environ.get('VRM_FORCE_BASIC_TOKENIZER') in {'1','true','TRUE'}:
+                    return _basic()
+                try:
+                    return AutoTokenizer.from_pretrained(model_name, use_fast=True)
+                except Exception as e:  # pragma: no cover - fallback slow ou basic
+                    if os.environ.get('USE_SLOW_TOKENIZER') in {'1','true','TRUE'}:
+                        print(f"[Tokenizer] Fast indisponible ({e}) -> slow")
+                        try:
+                            return AutoTokenizer.from_pretrained(model_name, use_fast=False)
+                        except Exception:
+                            return _basic()
+                    return _basic()
+        except Exception:
+            FORCE_BASIC = True
+    if FORCE_BASIC:
+        def get_tokenizer(model_name: str):  # pragma: no cover - trivial
+            return _basic()
         def is_tokenizers_available():  # pragma: no cover
             return False
 
@@ -87,10 +135,22 @@ def detect_backend() -> str:
       4. CPU       – fallback
     """
     try:
+        # Vérification ROCm en premier (AMD GPUs avec support HIP)
         if hasattr(torch.version, 'hip') and torch.version.hip:  # build ROCm
             return 'rocm'
+        
+        # CUDA standard (NVIDIA)
         if torch.cuda.is_available():
+            # Double-check pour AMD GPUs sur build CUDA+ROCm hybride
+            try:
+                device_name = torch.cuda.get_device_name(0).upper()
+                if 'AMD' in device_name or 'RADEON' in device_name or 'INSTINCT' in device_name:
+                    return 'rocm'  # AMD GPU détectée
+            except Exception:
+                pass
             return 'cuda'
+        
+        # Apple Silicon MPS
         if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
             return 'mps'
     except Exception:

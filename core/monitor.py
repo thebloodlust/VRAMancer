@@ -5,6 +5,7 @@ Simple GPU‑monitor.
 
 import torch
 from typing import Dict, List, Any
+from core.utils import enumerate_devices, detect_backend
 
 class GPUMonitor:
     """
@@ -13,38 +14,25 @@ class GPUMonitor:
 
     def __init__(self) -> None:
         self.gpus: List[Dict[str, Any]] = []
-        for i in range(torch.cuda.device_count()):
-            gpu_info = {
-                "index": i,
-                "name": torch.cuda.get_device_name(i),
-                "type": "cuda",
-                "total_memory": torch.cuda.get_device_properties(i).total_memory,
-            }
-            self.gpus.append(gpu_info)
-
-        # ROCm/hip
-        if getattr(torch, "hip", None) is not None:
-            for i in range(torch.cuda.device_count()):
-                if torch.cuda.get_device_properties(i).name.startswith("AMD"):
-                    self.gpus[i]["type"] = "rocm"
-
-        # MPS
-        if hasattr(torch, "mps") and torch.mps.is_available():
+        for d in enumerate_devices():
             self.gpus.append({
-                "index": "mps",
-                "name": "Apple Silicon MPS",
-                "type": "mps",
-                "total_memory": None,
+                'index': d['index'] if d['backend'] != 'mps' else 'mps',
+                'name': d['name'],
+                'type': d['backend'],
+                'total_memory': d['total_memory'],
             })
 
     # ----------------------------------------------------------------------
     # 1️⃣  Memory helpers
     # ----------------------------------------------------------------------
     def memory_allocated(self, idx: int | str) -> int:
-        if isinstance(idx, int) and idx < torch.cuda.device_count():
-            return torch.cuda.memory_allocated(idx)
-        if idx == "mps" and hasattr(torch, "mps"):
-            return torch.mps.memory_allocated()
+        try:
+            if isinstance(idx, int) and torch.cuda.is_available() and idx < torch.cuda.device_count():
+                return torch.cuda.memory_allocated(idx)
+            if idx == "mps" and hasattr(torch, "mps") and torch.mps.is_available():
+                return torch.mps.memory_allocated()
+        except Exception:
+            return 0
         return 0
 
     def memory_reserved(self, idx: int | str) -> int:
@@ -53,10 +41,13 @@ class GPUMonitor:
         return 0
 
     def total_memory(self, idx: int | str) -> int | None:
-        if isinstance(idx, int) and idx < torch.cuda.device_count():
-            return torch.cuda.get_device_properties(idx).total_memory
-        if idx == "mps" and hasattr(torch, "mps"):
-            return torch.mps.get_total_memory()
+        try:
+            if isinstance(idx, int) and torch.cuda.is_available() and idx < torch.cuda.device_count():
+                return torch.cuda.get_device_properties(idx).total_memory
+            if idx == "mps" and hasattr(torch, "mps") and torch.mps.is_available():
+                return torch.mps.get_total_memory()
+        except Exception:
+            return None
         return None
 
     # ----------------------------------------------------------------------

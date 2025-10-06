@@ -8,34 +8,32 @@ def get_unused_gpus(used_gpu_ids=None):
         used_gpu_ids = [0]  # convention : GPU0 principal
     return [gpu for gpu in gpus if gpu["id"] not in used_gpu_ids and gpu["is_available"]]
 import torch
+from core.utils import enumerate_devices, detect_backend
 
 def get_available_gpus():
-    """
-    Retourne une liste des GPU disponibles avec leurs propriétés.
-    """
-    gpus = []
-    gpu_count = torch.cuda.device_count()
-
-    for i in range(gpu_count):
-        try:
-            props = torch.cuda.get_device_properties(i)
-            total_vram_mb = round(props.total_memory / (1024 ** 2), 2)
-            gpus.append({
-                "id": i,
-                "name": props.name,
-                "total_vram_mb": total_vram_mb,
-                "is_available": torch.cuda.get_device_capability(i) is not None
+    """Retourne une liste normalisée des accélérateurs (CUDA/ROCm/MPS)."""
+    devices = enumerate_devices()
+    out = []
+    for d in devices:
+        if d['backend'] in ('cuda', 'rocm'):
+            # Convertir total_memory en MB
+            tm_mb = round(d['total_memory'] / (1024**2), 2) if d['total_memory'] else None
+            out.append({
+                'id': d['index'],
+                'backend': d['backend'],
+                'name': d['name'],
+                'total_vram_mb': tm_mb or 0,
+                'is_available': True,
             })
-        except Exception as e:
-            gpus.append({
-                "id": i,
-                "name": "Unknown",
-                "total_vram_mb": 0,
-                "is_available": False,
-                "error": str(e)
+        elif d['backend'] == 'mps':
+            out.append({
+                'id': 'mps',
+                'backend': 'mps',
+                'name': d['name'],
+                'total_vram_mb': 0,
+                'is_available': True,
             })
-
-    return gpus
+    return out or [{'id': 'cpu', 'backend': 'cpu', 'name': 'CPU', 'total_vram_mb': 0, 'is_available': True}]
 
 def print_gpu_summary():
     """

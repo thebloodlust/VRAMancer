@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=69", "wheel", "build"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vramancer"
+version = "0.1.0"
+description = "Run large AI models across multiple GPUs with smart memory balancing"
+readme = "README.md"
+authors = [ { name="Jérémie" } ]
+license = { text = "MIT" }
+requires-python = ">=3.9"
+# On délègue les dépendances principales à setup.cfg pour garder compat rétro.
+
+[project.urls]
+Homepage = "https://github.com/thebloodlust/VRAMancer"
+
+[tool.setuptools]
+# Utilise setup.cfg + setup.py pour la logique existante

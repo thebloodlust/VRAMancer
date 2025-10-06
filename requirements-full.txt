@@ -1,0 +1,19 @@
+# Full feature requirements (GUI + vision + tracing + compression)
+# Généré manuellement pour l'instant (peut être automatisé via pip-tools)
+
+-r requirements.txt
+# GUI / dashboards
+PyQt5==5.15.9
+flask-socketio==5.3.6
+python-socketio==5.11.1
+dash==2.15.0
+plotly==5.22.0
+# Vision
+torchvision==0.17.0
+# Compression avancée
+lz4==4.3.3
+zstandard==0.22.0
+# Tracing
+opentelemetry-api==1.25.0
+opentelemetry-sdk==1.25.0
+opentelemetry-exporter-otlp==1.25.0

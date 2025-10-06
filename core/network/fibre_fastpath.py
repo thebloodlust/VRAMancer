@@ -18,6 +18,20 @@ import hashlib
 from core.logger import LoggerAdapter
 from core.metrics import FASTPATH_BYTES, FASTPATH_LATENCY
 
+_BENCH_CACHE: dict[str, tuple[float, float]] = {}
+_BENCH_TTL = float(os.environ.get('VRM_FASTPATH_BENCH_TTL', '30'))  # secondes
+
+_RDMA_AVAILABLE = False
+try:  # Détection légère de pyverbs ou rdma-core python
+    import pyverbs  # type: ignore
+    _RDMA_AVAILABLE = True
+except Exception:  # pragma: no cover
+    try:
+        import rdma  # type: ignore
+        _RDMA_AVAILABLE = True
+    except Exception:
+        _RDMA_AVAILABLE = False
+
 log = LoggerAdapter("fibre")
 
 def detect_fast_interfaces():
@@ -35,6 +49,17 @@ def detect_fast_interfaces():
             candidates.append({"type":"sfp","if":n})
     except Exception:
         pass
+    if _RDMA_AVAILABLE:
+        candidates.append({"type":"rdma","if":"verbs0"})
+    # Interface spécifique demandée ? (ex: export VRM_FASTPATH_IF=eth1,usb4,rdma)
+    prefer_if = os.environ.get('VRM_FASTPATH_IF')
+    if prefer_if:
+        # Remonter l'interface demandée en tête si trouvée
+        for i, it in enumerate(candidates):
+            if it.get('if') == prefer_if or it.get('type') == prefer_if:
+                if i != 0:
+                    candidates.insert(0, candidates.pop(i))
+                break
     return candidates
 
 @dataclass
@@ -44,6 +69,13 @@ class FastHandle:
     latency_us: int = 40  # valeur par défaut simulée
     shm_path: Optional[str] = None
     _last_sent_len: int = 0
+    def capabilities(self):  # simple introspection
+        return {
+            'kind': self.kind,
+            'latency_us': self.latency_us,
+            'zero_copy': self.kind in {'rdma','usb4','sfp'},
+            'rdma_available': _RDMA_AVAILABLE,
+        }
 
     def _ensure_segment(self, size: int):
         if not self.shm_path:
@@ -93,8 +125,36 @@ def open_low_latency_channel(prefer: Optional[str] = None) -> Optional[FastHandl
     if prefer:
         for it in interfaces:
             if it['type'] == prefer:
+                if it['type'] == 'rdma' and _RDMA_AVAILABLE:
+                    return FastHandle(kind='rdma', meta=it, latency_us=20)
                 return FastHandle(kind=it['type'], meta=it, latency_us=50 if it['type']=="usb4" else 70)
     it = interfaces[0]
+    if it['type'] == 'rdma' and _RDMA_AVAILABLE:
+        return FastHandle(kind='rdma', meta=it, latency_us=20)
     return FastHandle(kind=it['type'], meta=it, latency_us=50 if it['type']=="usb4" else 70)
 
 __all__ = ["open_low_latency_channel", "FastHandle", "detect_fast_interfaces"]
+
+def benchmark_interfaces(sample_size: int = 3, force: bool = False):
+    now = time.time()
+    results = []
+    interfaces = detect_fast_interfaces()
+    for it in interfaces:
+        ident = it.get('if') or it.get('path') or it['type']
+        cached = _BENCH_CACHE.get(ident)
+        if (not force) and cached and (now - cached[0] < _BENCH_TTL):
+            results.append({"interface": ident, "kind": it['type'], "latency_s": cached[1], "cached": True})
+            continue
+        # Simule latence
+        lat = 0.0
+        payload = b'x'*4096
+        fh = FastHandle(kind=it['type'], meta=it)
+        for _ in range(sample_size):
+            start = time.perf_counter()
+            fh.send(payload)
+            fh.recv()
+            lat += (time.perf_counter()-start)
+        avg = lat / sample_size if sample_size else 0.0
+        _BENCH_CACHE[ident] = (now, avg)
+        results.append({"interface": ident, "kind": it['type'], "latency_s": avg, "cached": False})
+    return results

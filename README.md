@@ -178,6 +178,14 @@ set VRM_DASHBOARD_MINIMAL=1
 python installers\dashboard\dashboard_web.py
 ```
 
+Fallback tokenizer (environnements Windows sans Rust / build tokenizers) :
+```bash
+export VRM_FORCE_BASIC_TOKENIZER=1  # force BasicTokenizer Python (très simple)
+# ou pour tenter version lente transformers avant fallback
+export USE_SLOW_TOKENIZER=1
+```
+Variables supplémentaires utiles : `VRM_FORCE_BASIC_TOKENIZER`, `USE_SLOW_TOKENIZER`.
+
 Variables utiles : `VRM_UNIFIED_API_QUOTA`, `VRM_READ_ONLY`, `VRM_LOG_JSON`, `VRM_REQUEST_LOG`, `VRM_DISABLE_SOCKETIO`.
 
 #### ⚠️ Windows : erreur build `tokenizers` / `link.exe not found`

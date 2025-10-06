@@ -1,6 +1,6 @@
 # core/__init__.py
 import os as _os
-__version__ = "0.2.3"
+__version__ = "0.2.4"
 _STRICT = _os.environ.get('VRM_STRICT_IMPORT','0') in {'1','true','TRUE'}
 
 if not _os.environ.get('VRM_MINIMAL_TEST'):

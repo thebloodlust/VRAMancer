@@ -1,4 +1,19 @@
-# ... (le code que vous aviez déjà) ...
+"""Visualizer helpers (stub simplifié pour tests).
+
+Ce fichier expose `render_bar` attendu par `dashboard.cli_dashboard`.
+La GUI avancée (Tk/Qt) peut étendre ce module ultérieurement.
+"""
+
+def render_bar(label: str, value: int, total: int, width: int = 30) -> str:
+    """Retourne une barre ASCII simple.
+    Exemple: ████----- (40%).
+    """
+    pct = 0 if total <= 0 else min(1.0, value / total)
+    fill = int(pct * width)
+    return f"{label} |" + "█"*fill + "-"*(width-fill) + f"| {pct*100:4.1f}%"
+
+def launch_tk_dashboard():  # pragma: no cover - stub test
+    print("[Visualizer] launch_tk_dashboard stub")
 
 class GpuMonitorGUI:
     # … votre constructeur existant …

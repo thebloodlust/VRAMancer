@@ -1,13 +1,9 @@
 from __future__ import annotations
 import typing as T
 import logging
-
-from __future__ import annotations
-import typing as T
-import logging
 from collections import OrderedDict
 
-from core.utils import assign_block_to_device, get_device_type
+from core.utils import assign_block_to_device
 from core.scheduler import SimpleScheduler
 
 class MemoryBalancer:
