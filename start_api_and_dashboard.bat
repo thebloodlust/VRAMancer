@@ -51,22 +51,8 @@ python -c "import requests; requests.get('http://localhost:5030/health', timeout
 if errorlevel 1 (
     echo API non demarree, tentative alternative...
     
-    REM Tentative 2: core.unified_api direct
-    start "VRAMancer API Alt" /min python -c "
-import sys
-sys.path.append('.')
-try:
-    from core.api.unified_api import app
-    app.run(host='0.0.0.0', port=5030, debug=False)
-except ImportError:
-    from flask import Flask
-    app = Flask(__name__)
-    @app.route('/health')
-    def health(): return {'status': 'ok'}
-    @app.route('/api/status')  
-    def status(): return {'backend': 'running', 'version': '1.0'}
-    app.run(host='0.0.0.0', port=5030, debug=False)
-"
+    REM Tentative 2: Utilisation du lanceur Python
+    start "VRAMancer API Alt" /min python start_api.py
     
     REM Attendre encore
     timeout /t 5 /nobreak >nul
@@ -202,17 +188,7 @@ goto END
 :CHECK_API
 echo.
 echo Verification de l'API...
-python -c "
-import requests
-try:
-    r = requests.get('http://localhost:5030/health', timeout=5)
-    print('✅ API Active:', r.json())
-    r2 = requests.get('http://localhost:5030/api/status', timeout=5)
-    print('✅ Status:', r2.json())
-except Exception as e:
-    print('❌ API Inactive:', e)
-    print('Verifiez que l\API est bien demarree.')
-"
+python -c "import requests; r=requests.get('http://localhost:5030/health',timeout=5); print('API Active:', r.json())" 2>nul && echo ✅ API OK || echo ❌ API Inactive
 pause
 goto INTERFACE_MENU
 
