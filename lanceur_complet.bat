@@ -32,16 +32,17 @@ echo 5. Dashboard Tk (interface Tkinter)
 echo.
 echo === INTERFACES SPECIALISEES ===
 echo 6. Dashboard CLI (ligne de commande)
-echo 7. Launcher Principal (auto-detection)
-echo 8. Mobile Dashboard (interface adaptee)
+echo 7. System Tray (monitoring permanent)
+echo 8. Launcher Principal (auto-detection)
+echo 9. Mobile Dashboard (interface adaptee)
 echo.
 echo === OUTILS ===
-echo 9. Test API rapide
-echo 10. Relancer API
-echo 11. Quitter
+echo 10. Test API rapide
+echo 11. Relancer API
+echo 12. Quitter
 echo.
 
-set /p choice=Choix (1-11): 
+set /p choice=Choix (1-12): 
 
 if "%choice%"=="1" goto qt_dash
 if "%choice%"=="2" goto debug_web
@@ -49,11 +50,12 @@ if "%choice%"=="3" goto debug_simple
 if "%choice%"=="4" goto web_advanced
 if "%choice%"=="5" goto tk_dash
 if "%choice%"=="6" goto cli_dash
-if "%choice%"=="7" goto launcher
-if "%choice%"=="8" goto mobile_dash
-if "%choice%"=="9" goto test_api
-if "%choice%"=="10" goto restart_api
-if "%choice%"=="11" exit /b 0
+if "%choice%"=="7" goto systray_dash
+if "%choice%"=="8" goto launcher
+if "%choice%"=="9" goto mobile_dash
+if "%choice%"=="10" goto test_api
+if "%choice%"=="11" goto restart_api
+if "%choice%"=="12" exit /b 0
 
 echo Choix invalide
 goto menu
@@ -111,6 +113,18 @@ if exist "dashboard\dashboard_cli.py" (
     python dashboard\dashboard_cli.py
 ) else (
     echo Fichier non trouve: dashboard\dashboard_cli.py
+    pause
+)
+goto menu
+
+:systray_dash
+echo.
+echo === SYSTEM TRAY (Monitoring Permanent) ===
+echo Interface systray avec monitoring permanent
+if exist "systray_vramancer.py" (
+    python systray_vramancer.py
+) else (
+    echo Fichier non trouve: systray_vramancer.py
     pause
 )
 goto menu
