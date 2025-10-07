@@ -1,13 +1,13 @@
 @echo off
-title VRAMancer - Launcher Auto CORRIGE
+title VRAMancer - CLI Dashboard CORRIGE
 
 cls
 echo ===============================================================================
-echo                   VRAMANCER - LAUNCHER AUTO CORRIGE
+echo                   VRAMANCER - CLI DASHBOARD CORRIGE
 echo ===============================================================================
 echo.
-echo Detection automatique des interfaces disponibles
-echo Lance la meilleure interface selon votre configuration
+echo Dashboard en mode ligne de commande
+echo Interface textuelle avec rafraichissement
 echo.
 
 echo Test prerequis...
@@ -24,14 +24,19 @@ python -c "import requests" >nul 2>&1 || (
 )
 
 echo.
-echo Lancement Launcher Auto VRAMancer...
-echo Detection des interfaces disponibles...
+echo Lancement CLI Dashboard VRAMancer...
+echo Version non-bloquante pour demonstration
 echo.
 
 cd /d "%~dp0"
 
-python launcher_auto.py
+REM Essai version simplifiee d'abord
+if exist "cli_simple.py" (
+    python cli_simple.py
+) else (
+    python dashboard\dashboard_cli.py
+)
 
 echo.
-echo Launcher Auto termine
+echo CLI Dashboard arrete
 pause

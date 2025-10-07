@@ -48,7 +48,9 @@ def update_from_api():
         cluster_state["logs"].append(f"[{time.strftime('%H:%M:%S')}] API Error: {str(e)}")
 
 # Mise à jour initiale
-update_from_api()rt Flask, render_template_string, request, jsonify
+update_from_api()
+
+from flask import Flask, render_template_string, request, jsonify
 import threading
 import time
 

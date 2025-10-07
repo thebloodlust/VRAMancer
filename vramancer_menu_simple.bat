@@ -168,44 +168,44 @@ goto menu
 
 :system_tray
 cls
-echo ================ SYSTEM TRAY ================
+echo ================ SYSTEM TRAY CORRIGE ================
 echo.
-echo Monitoring permanent systeme
+echo Monitoring permanent systeme (CORRIGE)
 echo.
-start "System Tray" cmd /c "cd /d "%~dp0" && python dashboard\systray_vramancer.py && pause"
+start "System Tray" cmd /c "cd /d "%~dp0" && lanceur_systray.bat"
 echo System Tray lance dans une nouvelle fenetre
 pause
 goto menu
 
 :cli_dashboard
 cls
-echo ================ CLI DASHBOARD ================
+echo ================ CLI DASHBOARD CORRIGE ================
 echo.
-echo Interface ligne de commande
+echo Interface ligne de commande (CORRIGE)
 echo.
-start "CLI Dashboard" cmd /c "cd /d "%~dp0" && set PYTHONPATH=%cd% && python dashboard\dashboard_cli.py && pause"
+start "CLI Dashboard" cmd /c "cd /d "%~dp0" && lanceur_cli.bat"
 echo CLI Dashboard lance dans une nouvelle fenetre
 pause
 goto menu
 
 :tkinter_dashboard
 cls
-echo ================ TKINTER DASHBOARD ================
+echo ================ TKINTER DASHBOARD CORRIGE ================
 echo.
-echo Interface Tkinter stable
+echo Interface Tkinter stable (CORRIGE)
 echo.
-start "Tkinter Dashboard" cmd /c "cd /d "%~dp0" && set PYTHONPATH=%cd% && python dashboard\dashboard_tk.py && pause"
+start "Tkinter Dashboard" cmd /c "cd /d "%~dp0" && lanceur_tkinter.bat"
 echo Tkinter Dashboard lance dans une nouvelle fenetre
 pause
 goto menu
 
 :launcher_auto
 cls
-echo ================ LAUNCHER AUTO ================
+echo ================ LAUNCHER AUTO CORRIGE ================
 echo.
-echo Auto-detection meilleure interface
+echo Auto-detection meilleure interface (CORRIGE)
 echo.
-start "Launcher Auto" cmd /c "cd /d "%~dp0" && set PYTHONPATH=%cd% && python dashboard\launcher.py && pause"
+start "Launcher Auto" cmd /c "cd /d "%~dp0" && lanceur_auto.bat"
 echo Launcher Auto lance dans une nouvelle fenetre
 pause
 goto menu
