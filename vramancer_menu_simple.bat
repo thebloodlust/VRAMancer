@@ -138,7 +138,7 @@ echo.
 echo Supervision cluster avancee
 echo Ouverture sur http://localhost:5000
 echo.
-start "Dashboard Web Avance" cmd /c "cd /d "%~dp0" && python dashboard\dashboard_web_advanced.py && pause"
+start "Dashboard Web Avance" cmd /c "cd /d "%~dp0" && lanceur_web_avance.bat"
 echo Dashboard Web Avance lance dans une nouvelle fenetre
 pause
 goto menu
@@ -150,7 +150,7 @@ echo.
 echo Interface optimisee mobile
 echo Ouverture sur http://localhost:5003
 echo.
-start "Mobile Dashboard" cmd /c "cd /d "%~dp0" && python mobile\dashboard_mobile.py && pause"
+start "Mobile Dashboard" cmd /c "cd /d "%~dp0" && lanceur_mobile.bat"
 echo Mobile Dashboard lance dans une nouvelle fenetre
 pause
 goto menu
@@ -220,7 +220,7 @@ echo Duree estimee: 2-3 minutes
 echo.
 echo Appuyez sur une touche pour demarrer...
 pause >nul
-start "Test Complet" cmd /c "cd /d "%~dp0" && vramancer_test_standalone.bat"
+start "Test Complet" cmd /c "cd /d "%~dp0" && vramancer_test_interfaces_fixe.bat"
 echo.
 echo Test complet lance dans une nouvelle fenetre
 echo Les resultats seront sauves dans vramancer_test_results.txt

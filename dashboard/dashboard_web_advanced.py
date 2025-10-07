@@ -255,4 +255,21 @@ def api_state():
     return jsonify(cluster_state)
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8080, debug=True)
+    print("=" * 60)
+    print("  VRAMANCER DASHBOARD WEB AVANCÉ")
+    print("=" * 60)
+    print()
+    print("🌐 URL: http://localhost:5000")
+    print("📊 Supervision cluster en temps réel")
+    print("🔄 Auto-refresh activé")
+    print()
+    print("Appuyez sur Ctrl+C pour arrêter")
+    print("=" * 60)
+    
+    try:
+        # Test initial API
+        update_from_api()
+        app.run(host="0.0.0.0", port=5000, debug=False)
+    except Exception as e:
+        print(f"Erreur démarrage serveur: {e}")
+        input("Appuyez sur Entrée pour fermer...")

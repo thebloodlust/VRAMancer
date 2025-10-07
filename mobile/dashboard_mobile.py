@@ -141,8 +141,24 @@ def mobile_api_test():
             "api_connected": False, 
             "error": str(e)
         })
+
+if __name__ == "__main__":
+    print("=" * 60)
+    print("  VRAMANCER MOBILE DASHBOARD")
+    print("=" * 60)
+    print()
+    print("📱 URL: http://localhost:5003")
+    print("🌐 Interface mobile responsive")
+    print("📊 Tests API intégrés")
+    print()
+    print("Appuyez sur Ctrl+C pour arrêter")
+    print("=" * 60)
+    
+    try:
+        app.run(host="0.0.0.0", port=5003, debug=False)
     except Exception as e:
-        return f"erreur: {e}", 500, {'Content-Type':'text/plain'}
+        print(f"Erreur démarrage serveur: {e}")
+        input("Appuyez sur Entrée pour fermer...")
 
 if __name__ == "__main__":
     app.run(port=5003, debug=True)
