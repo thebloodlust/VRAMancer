@@ -1,0 +1,99 @@
+===============================================================================
+                        ORDRE DE LANCEMENT VRAMANCER
+===============================================================================
+
+⚠️  IMPORTANT: L'API doit être lancée EN PREMIER avant toute interface !
+
+===============================================================================
+                            ÉTAPE 1 - API (OBLIGATOIRE)
+===============================================================================
+
+🚀 LANCEMENT API PERMANENTE:
+
+   Option A - Automatique:
+   vramancer_auto.bat
+   → Lance l'API automatiquement et propose les interfaces
+
+   Option B - Manuel:
+   api_permanente.bat
+   → Gardez cette fenêtre ouverte en permanence
+
+   Option C - Via menu:
+   vramancer_menu_simple.bat → Option 1
+
+VÉRIFICATION:
+✅ Une fenêtre reste ouverte avec "API VRAMancer sur port 5030"
+✅ Le script check_api.py confirme l'API active
+
+===============================================================================
+                            ÉTAPE 2 - INTERFACE AU CHOIX
+===============================================================================
+
+🎯 INTERFACES RECOMMANDÉES (nécessitent l'API):
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 11. Qt Dashboard           → Interface native complète (RECOMMANDÉ)        │
+│ 10. Debug Web Ultra        → Interface web avec outils debug               │
+│ 12. Dashboard Web Avancé   → Supervision cluster avancée                   │
+│ 13. Mobile Dashboard       → Interface mobile optimisée                    │
+│ 20. System Tray           → Monitoring permanent (Windows)                 │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+🔧 INTERFACES INDÉPENDANTES (sans API):
+21. CLI Dashboard Simple    → Affichage texte basique
+Diagnostic/Test tools       → Vérifications système
+
+===============================================================================
+                               PROBLÈMES COURANTS
+===============================================================================
+
+❌ ERREUR: "API VRAMancer NON ACCESSIBLE"
+   SOLUTION: Lancez d'abord api_permanente.bat
+
+❌ ERREUR: Interface reste "en chargement"
+   SOLUTION: Vérifiez que l'API fonctionne (fenêtre ouverte)
+
+❌ ERREUR: "Port 5030 occupé"
+   SOLUTION: Tuez les processus Python puis relancez l'API
+
+❌ ERREUR: Interface Qt/Tkinter ne s'ouvre pas
+   SOLUTION: Utilisez les interfaces web (10, 12, 13)
+
+===============================================================================
+                               MÉTHODES DE LANCEMENT
+===============================================================================
+
+🚀 MÉTHODE 1 - TOUT AUTOMATIQUE (RECOMMANDÉE):
+   vramancer_auto.bat
+   → Vérifie et lance l'API, puis propose les interfaces
+
+🚀 MÉTHODE 2 - MENU PRINCIPAL:
+   vramancer_menu_simple.bat
+   → Option 1 (API) puis votre interface
+
+🚀 MÉTHODE 3 - MANUEL:
+   1. api_permanente.bat (gardez ouvert)
+   2. python dashboard\dashboard_qt.py (par exemple)
+
+🚀 MÉTHODE 4 - VÉRIFICATION:
+   python check_api.py
+   → Teste l'API et propose le lancement
+
+===============================================================================
+                                   RÉSUMÉ
+===============================================================================
+
+✅ ORDRE CORRECT:
+   1. API Permanente (OBLIGATOIRE)
+   2. Interface de votre choix
+
+✅ SIGNAUX D'UNE API ACTIVE:
+   - Fenêtre "API VRAMancer sur port 5030" ouverte
+   - check_api.py affiche "API ACTIVE"
+   - Interfaces se connectent sans erreur
+
+✅ INTERFACE RECOMMANDÉE:
+   Qt Dashboard (option 11) pour usage complet
+
+Toutes les interfaces modernes de VRAMancer nécessitent l'API !
+===============================================================================
