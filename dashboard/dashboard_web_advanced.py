@@ -15,7 +15,7 @@ cluster_state = {
 }
 
 def update_from_api():
-    """Met à jour l'état depuis l'API VRAMancer"""
+    """Met à jour l'état depuis l'API VRAMancer avec détails étendus"""
     try:
         # Test API connection
         health_response = requests.get('http://localhost:5030/health', timeout=2)
@@ -23,28 +23,112 @@ def update_from_api():
             cluster_state["api_connected"] = True
             cluster_state["last_update"] = time.strftime("%Y-%m-%d %H:%M:%S")
             
-            # Get nodes info
+            # Get enhanced nodes info
             try:
-                nodes_response = requests.get('http://localhost:5030/api/nodes', timeout=2)
-                if nodes_response.status_code == 200:
-                    api_nodes = nodes_response.json()
-                    # Format pour affichage
-                    if isinstance(api_nodes, dict) and "nodes" in api_nodes:
-                        cluster_state["nodes"] = api_nodes["nodes"]
-                    else:
-                        cluster_state["nodes"] = api_nodes if isinstance(api_nodes, list) else []
-                else:
-                    cluster_state["nodes"] = [{"host": "API-Node", "status": "error", "info": f"Status {nodes_response.status_code}"}]
+                # Essayer plusieurs endpoints pour plus d'infos
+                nodes_data = []
+                
+                # 1. Nodes basiques
+                try:
+                    nodes_response = requests.get('http://localhost:5030/api/nodes', timeout=2)
+                    if nodes_response.status_code == 200:
+                        api_nodes = nodes_response.json()
+                        if isinstance(api_nodes, dict) and "nodes" in api_nodes:
+                            nodes_data = api_nodes["nodes"]
+                        elif isinstance(api_nodes, list):
+                            nodes_data = api_nodes
+                except:
+                    pass
+                
+                # 2. Infos système détaillées
+                try:
+                    system_response = requests.get('http://localhost:5030/api/system', timeout=2)
+                    if system_response.status_code == 200:
+                        system_data = system_response.json()
+                        # Enrichir avec infos système
+                        if nodes_data:
+                            for node in nodes_data:
+                                node.update({
+                                    'memory': system_data.get('memory_gb', 'N/A'),
+                                    'cpu': system_data.get('cpu_count', 'N/A'),
+                                    'load': system_data.get('cpu_percent', 0),
+                                    'os': system_data.get('platform', 'Unknown'),
+                                    'uptime': system_data.get('uptime', 'N/A')
+                                })
+                        else:
+                            # Créer node local avec infos système
+                            nodes_data = [{
+                                'host': 'localhost',
+                                'name': 'Local VRAMancer Node',
+                                'status': 'active',
+                                'ip': '127.0.0.1',
+                                'port': 5030,
+                                'memory': system_data.get('memory_gb', 'N/A'),
+                                'cpu': system_data.get('cpu_count', 'N/A'),
+                                'load': system_data.get('cpu_percent', 0),
+                                'os': system_data.get('platform', 'Unknown'),
+                                'uptime': system_data.get('uptime', 'N/A'),
+                                'backend': system_data.get('backend', 'Unknown')
+                            }]
+                except:
+                    pass
+                
+                # 3. Infos GPU
+                try:
+                    gpu_response = requests.get('http://localhost:5030/api/gpu', timeout=2)
+                    if gpu_response.status_code == 200:
+                        gpu_data = gpu_response.json()
+                        if nodes_data and gpu_data.get('devices'):
+                            for node in nodes_data:
+                                if gpu_data['devices']:
+                                    gpu = gpu_data['devices'][0]  # Premier GPU
+                                    node.update({
+                                        'gpu_name': gpu.get('name', 'Unknown GPU'),
+                                        'vram': gpu.get('memory_total', 0) // (1024*1024) if gpu.get('memory_total') else 'N/A',
+                                        'backend': gpu.get('backend', 'Unknown')
+                                    })
+                except:
+                    pass
+                
+                # Fallback si aucune donnée
+                if not nodes_data:
+                    nodes_data = [{
+                        'host': 'API-Connected',
+                        'name': 'VRAMancer API Node',
+                        'status': 'active',
+                        'info': 'API accessible mais pas de données de nodes',
+                        'ip': 'localhost',
+                        'port': 5030
+                    }]
+                
+                cluster_state["nodes"] = nodes_data
+                
             except Exception as e:
-                cluster_state["nodes"] = [{"host": "API-Error", "status": "error", "info": str(e)}]
+                cluster_state["nodes"] = [{
+                    'host': 'API-Error',
+                    'name': 'Erreur de récupération',
+                    'status': 'error',
+                    'info': f'Erreur lors de la récupération des données: {str(e)}'
+                }]
                 
         else:
             cluster_state["api_connected"] = False
-            cluster_state["nodes"] = [{"host": "API-Disconnected", "status": "disconnected", "info": f"HTTP {health_response.status_code}"}]
+            cluster_state["nodes"] = [{
+                'host': 'API-Disconnected',
+                'name': 'API Non connectée',
+                'status': 'disconnected',
+                'info': f'HTTP {health_response.status_code} - API non accessible'
+            }]
             
     except Exception as e:
         cluster_state["api_connected"] = False
-        cluster_state["nodes"] = [{"host": "API-Unavailable", "status": "unavailable", "info": str(e)}]
+        cluster_state["nodes"] = [{
+            'host': 'API-Unavailable',
+            'name': 'API Indisponible',
+            'status': 'unavailable',
+            'info': f'Impossible de contacter l\'API: {str(e)}',
+            'suggestion': 'Lancez api_permanente.bat'
+        }]
         cluster_state["logs"].append(f"[{time.strftime('%H:%M:%S')}] API Error: {str(e)}")
 
 # Mise à jour initiale
@@ -121,25 +205,97 @@ TEMPLATE = """
             <button onclick="window.open('/api/test', '_blank')">🧪 Test API</button>
         </div>
         
-        <h2>📊 Cluster Nodes ({{ nodes|length }})</h2>
+        <h2>📊 Cluster Nodes Détaillés ({{ nodes|length }})</h2>
         {% if nodes %}
         {% for node in nodes %}
             <div class='node {{ node.status or "unknown" }}'>
-                <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <div>
-                        <b>{{ node.host or node.name or "Unknown" }}</b>
-                        {% if node.os %} ({{ node.os }}) {% endif %}
-                        {% if node.vram %} | VRAM: {{ node.vram }} MB {% endif %}
-                        {% if node.cpu %} | CPU: {{ node.cpu }} {% endif %}
-                        {% if node.info %} | Info: {{ node.info }} {% endif %}
-                    </div>
-                    <div>
-                        Status: <span style="font-weight: bold;">{{ node.status or "unknown" }}</span>
+                <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+                    <div style="flex: 1;">
+                        <div style="display: flex; align-items: center; margin-bottom: 8px;">
+                            <h3 style="margin: 0; color: #4CAF50;">
+                                🖥️ {{ node.host or node.name or "Node-Unknown" }}
+                            </h3>
+                            <span style="margin-left: 15px; padding: 4px 8px; background: rgba(76,175,80,0.2); border-radius: 4px; font-size: 12px;">
+                                {{ node.status or "unknown" }}
+                            </span>
+                        </div>
+                        
+                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; margin-top: 10px;">
+                            {% if node.os %}
+                            <div style="background: rgba(255,255,255,0.05); padding: 8px; border-radius: 4px;">
+                                <strong>💻 OS:</strong> {{ node.os }}
+                            </div>
+                            {% endif %}
+                            
+                            {% if node.cpu %}
+                            <div style="background: rgba(255,255,255,0.05); padding: 8px; border-radius: 4px;">
+                                <strong>🔧 CPU:</strong> {{ node.cpu }} cores
+                            </div>
+                            {% endif %}
+                            
+                            {% if node.vram %}
+                            <div style="background: rgba(255,255,255,0.05); padding: 8px; border-radius: 4px;">
+                                <strong>🎮 VRAM:</strong> {{ node.vram }} MB
+                            </div>
+                            {% endif %}
+                            
+                            {% if node.memory %}
+                            <div style="background: rgba(255,255,255,0.05); padding: 8px; border-radius: 4px;">
+                                <strong>💾 RAM:</strong> {{ node.memory }} GB
+                            </div>
+                            {% endif %}
+                            
+                            {% if node.gpu_name %}
+                            <div style="background: rgba(255,255,255,0.05); padding: 8px; border-radius: 4px;">
+                                <strong>🎮 GPU:</strong> {{ node.gpu_name }}
+                            </div>
+                            {% endif %}
+                            
+                            {% if node.backend %}
+                            <div style="background: rgba(255,255,255,0.05); padding: 8px; border-radius: 4px;">
+                                <strong>⚙️ Backend:</strong> {{ node.backend }}
+                            </div>
+                            {% endif %}
+                            
+                            {% if node.ip %}
+                            <div style="background: rgba(255,255,255,0.05); padding: 8px; border-radius: 4px;">
+                                <strong>🌐 IP:</strong> {{ node.ip }}
+                            </div>
+                            {% endif %}
+                            
+                            {% if node.port %}
+                            <div style="background: rgba(255,255,255,0.05); padding: 8px; border-radius: 4px;">
+                                <strong>🔌 Port:</strong> {{ node.port }}
+                            </div>
+                            {% endif %}
+                            
+                            {% if node.uptime %}
+                            <div style="background: rgba(255,255,255,0.05); padding: 8px; border-radius: 4px;">
+                                <strong>⏱️ Uptime:</strong> {{ node.uptime }}
+                            </div>
+                            {% endif %}
+                            
+                            {% if node.load %}
+                            <div style="background: rgba(255,255,255,0.05); padding: 8px; border-radius: 4px;">
+                                <strong>📊 Load:</strong> {{ node.load }}%
+                            </div>
+                            {% endif %}
+                        </div>
+                        
+                        {% if node.info %}
+                        <div style="margin-top: 10px; padding: 8px; background: rgba(255,255,255,0.1); border-radius: 4px; font-size: 12px;">
+                            <strong>ℹ️ Info:</strong> {{ node.info }}
+                        </div>
+                        {% endif %}
                     </div>
                 </div>
+                
                 {% if node.status == 'error' or node.status == 'disconnected' or node.status == 'unavailable' %}
-                <div style="margin-top: 10px; padding: 8px; background: rgba(255,0,0,0.1); border-radius: 5px;">
-                    ⚠️ Problème détecté: {{ node.info or "Erreur inconnue" }}
+                <div style="margin-top: 15px; padding: 12px; background: rgba(255,0,0,0.1); border-left: 4px solid #f44336; border-radius: 4px;">
+                    <strong>⚠️ Problème détecté:</strong> {{ node.info or "Erreur inconnue" }}
+                    <div style="margin-top: 5px; font-size: 12px; opacity: 0.8;">
+                        💡 Vérifiez la connectivité réseau et l'état du service sur ce node
+                    </div>
                 </div>
                 {% endif %}
             </div>
