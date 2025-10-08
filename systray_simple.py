@@ -15,19 +15,22 @@ def main():
         # Test import Qt
         try:
             from PyQt5.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QAction
-            from PyQt5.QtGui import QIcon
-            from PyQt5.QtCore import QTimer, pyqtSignal, QObject
+            from PyQt5.QtGui import QIcon, QPixmap
+            from PyQt5.QtCore import QTimer, pyqtSignal, QObject, Qt
             qt_available = True
+            qt_version = "PyQt5"
             print("✓ PyQt5 détecté")
         except ImportError:
             try:
                 from PyQt6.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QAction
-                from PyQt6.QtGui import QIcon
-                from PyQt6.QtCore import QTimer, pyqtSignal, QObject
+                from PyQt6.QtGui import QIcon, QPixmap
+                from PyQt6.QtCore import QTimer, pyqtSignal, QObject, Qt
                 qt_available = True
+                qt_version = "PyQt6"
                 print("✓ PyQt6 détecté")
             except ImportError:
                 qt_available = False
+                qt_version = None
                 print("❌ Aucune librairie Qt trouvée")
         
         if not qt_available:
@@ -53,8 +56,30 @@ def main():
         print("✓ System Tray supporté")
         print("Démarrage du System Tray...")
         
-        # Création du System Tray
+        # Création du System Tray avec icône VRAMancer
         tray_icon = QSystemTrayIcon()
+        
+        # Recherche et chargement de l'icône vramancer.png
+        icon_paths = [
+            os.path.join(os.path.dirname(__file__), "vramancer.png"),
+            os.path.join(os.getcwd(), "vramancer.png"),
+            "vramancer.png"
+        ]
+        
+        icon_loaded = False
+        for icon_path in icon_paths:
+            if os.path.exists(icon_path):
+                tray_icon.setIcon(QIcon(icon_path))
+                print(f"✓ Icône VRAMancer chargée: {icon_path}")
+                icon_loaded = True
+                break
+        
+        if not icon_loaded:
+            # Icône de fallback bleue
+            pixmap = QPixmap(32, 32)
+            pixmap.fill(Qt.blue)
+            tray_icon.setIcon(QIcon(pixmap))
+            print("⚠️  Icône par défaut utilisée (vramancer.png non trouvé)")
         
         # Menu du tray
         menu = QMenu()
@@ -73,8 +98,6 @@ def main():
         menu.addAction(action_quit)
         
         tray_icon.setContextMenu(menu)
-        
-        # Icône par défaut (si pas d'icône spécifique)
         tray_icon.setToolTip("VRAMancer System Tray")
         
         # Affichage

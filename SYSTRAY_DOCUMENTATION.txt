@@ -1,0 +1,78 @@
+===============================================================================
+                        SYSTEM TRAY VRAMANCER - DOCUMENTATION
+===============================================================================
+
+CONFIGURATION ICÔNE:
+✓ Fichier: vramancer.png (1.2 MB, format PNG valide)
+✓ Emplacement: Racine du projet VRAMancer
+✓ Détection automatique: 3 chemins testés
+✓ Fallback: Icône bleue par défaut si fichier absent
+
+FONCTIONNEMENT:
+
+1. DÉTECTION AUTOMATIQUE DE L'ICÔNE:
+   Le System Tray recherche vramancer.png dans cet ordre:
+   - Même dossier que le script
+   - Répertoire de travail courant  
+   - Chemin relatif "vramancer.png"
+
+2. CHARGEMENT INTELLIGENT:
+   - Si trouvée: Utilise l'icône VRAMancer officielle
+   - Si absente: Crée une icône bleue 32x32 de fallback
+
+3. COMPATIBILITÉ SYSTÈME:
+   ✓ Windows: Fonctionne parfaitement
+   ✓ Linux Desktop: Fonctionne avec interface graphique
+   ❌ Container Linux: Pas d'interface graphique disponible
+
+VERSIONS DISPONIBLES:
+
+1. systray_vramancer.py (VERSION COMPLÈTE):
+   - Menu complet avec toutes les actions
+   - Lancement des dashboards Qt/Web
+   - Actions mémoire (promote/demote)
+   - Commandes CLI intégrées
+   - Icône VRAMancer automatique
+
+2. systray_simple.py (VERSION SIMPLIFIÉE):
+   - Menu basique pour test
+   - Icône VRAMancer intégrée
+   - Auto-fermeture après 30s
+   - Compatible environnements limités
+
+UTILISATION:
+
+1. LANCEMENT DIRECT:
+   python systray_vramancer.py
+
+2. LANCEMENT VIA MENU:
+   vramancer_menu_simple.bat → Option 20
+
+3. LANCEMENT SPÉCIALISÉ:
+   lanceur_systray.bat
+
+DÉPENDANCES:
+- PyQt5 ou PyQt6 (pip install PyQt5)
+- Interface graphique système
+- System Tray supporté par l'OS
+
+DIAGNOSTIC:
+Utilisez test_systray_icon.py pour vérifier:
+- Présence de l'icône
+- Validité du format PNG
+- Compatibilité Qt
+- Configuration environnement
+
+===============================================================================
+                                RÉSUMÉ
+===============================================================================
+
+✅ L'icône vramancer.png est correctement configurée
+✅ Le System Tray utilise automatiquement l'icône VRAMancer
+✅ Système de fallback en cas de problème
+✅ Compatible Windows et Linux desktop
+
+Pour les environnements sans interface graphique (containers),
+utilisez les interfaces web (options 10-13 du menu principal).
+
+===============================================================================
