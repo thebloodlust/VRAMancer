@@ -209,9 +209,9 @@ class VRAMancerTray:
     # ------------------------------------------------------------------
     def _resolve_icon(self) -> QIcon:
         candidates = [
-            os.path.join(os.path.dirname(__file__), "vramancer.png"),
             os.path.join(os.getcwd(), "vramancer.png"),
             os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "vramancer.png"),
+            "vramancer.png",
         ]
         for c in candidates:
             if os.path.exists(c):
