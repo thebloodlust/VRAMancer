@@ -50,7 +50,23 @@ class VRAMancerTray:
 
         cli_menu = self.menu.addMenu("CLI")
         self.cli_health = QAction("Healthcheck")
-        self.cli_health.triggered.connect(lambda: QProcess.startDetached(sys.executable, ['-m','core.health']))
+        self.cli_health.triggered.connect(
+            lambda: QProcess.startDetached(
+                sys.executable,
+                [
+                    '-c',
+                    'import sys,os; sys.path.insert(0, os.getcwd()); '
+                    'from core.utils import detect_backend, enumerate_devices; '
+                    'print("=== VRAMancer Health Check ==="); '
+                    'print(f"Backend: {detect_backend()}"); '
+                    'devices = enumerate_devices(); '
+                    'print(f"Devices: {len(devices)}"); '
+                    '[print(f"  - {d[\"name\"]} ({d[\"backend\"]})") for d in devices]; '
+                    'print("=== Health OK ==="); '
+                    'input("Appuyez sur Entrée...")'
+                ]
+            )
+        )
         cli_menu.addAction(self.cli_health)
         self.cli_list = QAction("Lister GPUs")
         self.cli_list.triggered.connect(
@@ -58,8 +74,12 @@ class VRAMancerTray:
                 sys.executable,
                 [
                     '-c',
-                    'import sys,os; sys.path.insert(0, os.path.dirname(__file__)); '
-                    'from utils.helpers import get_available_gpus; print(get_available_gpus())'
+                    'import sys,os; sys.path.insert(0, os.getcwd()); '
+                    'from core.utils import enumerate_devices; '
+                    'devices = enumerate_devices(); '
+                    'print("=== GPUs VRAMancer ==="); '
+                    '[print(f"GPU {d[\"id\"]}: {d[\"name\"]} ({d[\"backend\"]})") for d in devices]; '
+                    'input("Appuyez sur Entrée...")'
                 ]
             )
         )

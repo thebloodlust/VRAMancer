@@ -13,6 +13,39 @@ cluster_state = {
     "api_connected": False,
     "last_update": None
 }
+    print("=" * 60)
+    print("    VRAMANCER - DASHBOARD WEB AVANCÉ")
+    print("=" * 60)
+    print()
+    print("🌐 Démarrage serveur Flask...")
+    print("📊 Supervision cluster avancée")
+    print("🔗 URL: http://localhost:5000")
+    print("📋 Mise à jour automatique toutes les 5 secondes")
+    print()
+    print("Appuyez sur Ctrl+C pour arrêter")
+    print("=" * 60)
+    
+    try:
+        # Test initial API
+        update_from_api()
+        
+        # Ouverture automatique du navigateur
+        import webbrowser
+        import threading
+        def open_browser():
+            time.sleep(1.5)  # Attendre que le serveur démarre
+            try:
+                webbrowser.open('http://localhost:5000')
+                print("✅ Navigateur ouvert automatiquement")
+            except:
+                print("⚠️  Ouvrez manuellement: http://localhost:5000")
+        
+        threading.Thread(target=open_browser, daemon=True).start()
+        app.run(host="0.0.0.0", port=5000, debug=False)
+    except Exception as e:
+        print(f"Erreur démarrage serveur: {e}")
+        input("Appuyez sur Entrée pour fermer...")last_update": None
+}
 
 def update_from_api():
     """Met à jour l'état depuis l'API VRAMancer"""
@@ -265,12 +298,26 @@ if __name__ == "__main__":
     print("📊 Supervision cluster en temps réel")
     print("🔄 Auto-refresh activé")
     print()
-    print("Appuyez sur Ctrl+C pour arrêter")
-    print("=" * 60)
     
     try:
         # Test initial API
         update_from_api()
+        
+        # Ouverture automatique navigateur
+        import webbrowser
+        import threading
+        def open_browser():
+            time.sleep(1.5)  # Attendre que Flask démarre
+            webbrowser.open('http://localhost:5000')
+        
+        browser_thread = threading.Thread(target=open_browser)
+        browser_thread.daemon = True
+        browser_thread.start()
+        
+        print("🚀 Ouverture automatique navigateur...")
+        print("Appuyez sur Ctrl+C pour arrêter")
+        print("=" * 60)
+        
         app.run(host="0.0.0.0", port=5000, debug=False)
     except Exception as e:
         print(f"Erreur démarrage serveur: {e}")

@@ -1,4 +1,4 @@
-as  # core/utils.py
+# core/utils.py
 """
 Utility helpers for GPU‑aware inference.
 """

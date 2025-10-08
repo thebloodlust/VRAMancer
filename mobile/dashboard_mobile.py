@@ -4,6 +4,44 @@ Interface mobile/tablette CORRIGÉE :
 - Vue responsive, accès sécurisé, API fixée
 """
 from flask import Flask, render_template_string, jsonify
+    print("📱 Interface optimisée mobile/tablette")
+    print("⚡ Test API intégré")
+    print()
+    print("Appuyez sur Ctrl+C pour arrêter")
+    print("=" * 60)
+    
+    try:
+        # Ouverture automatique du navigateur
+        import webbrowser
+        import threading
+        import time
+        def open_browser():
+            time.sleep(1.5)  # Attendre que le serveur démarre
+            try:
+                webbrowser.open('http://localhost:5003')
+                print("✅ Navigateur ouvert automatiquement")
+            except:
+                print("⚠️  Ouvrez manuellement: http://localhost:5003")
+        
+        threading.Thread(target=open_browser, daemon=True).start()
+        app.run(host="0.0.0.0", port=5003, debug=False)
+    except Exception as e:
+        print(f"Erreur démarrage serveur: {e}")
+        input("Appuyez sur Entrée pour fermer...")
+
+if __name__ == "__main__":
+    # Version avec ouverture navigateur automatique
+    import webbrowser
+    import threading
+    import time
+    def open_browser():
+        time.sleep(1.5)
+        try:
+            webbrowser.open('http://localhost:5003')
+        except:
+            pass
+    threading.Thread(target=open_browser, daemon=True).start()
+    app.run(port=5003, debug=False)k, render_template_string, jsonify
 import requests, json, os
 
 MOBILE_JS = """
@@ -151,10 +189,24 @@ if __name__ == "__main__":
     print("🌐 Interface mobile responsive")
     print("📊 Tests API intégrés")
     print()
-    print("Appuyez sur Ctrl+C pour arrêter")
-    print("=" * 60)
     
     try:
+        # Ouverture automatique navigateur
+        import webbrowser
+        import threading
+        import time
+        def open_browser():
+            time.sleep(1.5)  # Attendre que Flask démarre
+            webbrowser.open('http://localhost:5003')
+        
+        browser_thread = threading.Thread(target=open_browser)
+        browser_thread.daemon = True
+        browser_thread.start()
+        
+        print("🚀 Ouverture automatique navigateur...")
+        print("Appuyez sur Ctrl+C pour arrêter")
+        print("=" * 60)
+        
         app.run(host="0.0.0.0", port=5003, debug=False)
     except Exception as e:
         print(f"Erreur démarrage serveur: {e}")
