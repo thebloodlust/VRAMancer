@@ -15,21 +15,30 @@ class VRAMancerTray:
             print("[Systray] System tray non disponible sur ce système / session (RDP ?)")
         self.menu = QMenu()
 
-        self.install_action = QAction("Installation graphique VRAMancer")
-        self.install_action.triggered.connect(self.launch_installer)
-        self.menu.addAction(self.install_action)
-
-        self.supervision_action = QAction("Supervision / Dashboard")
-        self.supervision_action.triggered.connect(self.launch_supervision)
-        self.menu.addAction(self.supervision_action)
-
-        self.gui_qt_action = QAction("Dashboard Qt")
+        # Menu principal des interfaces
+        interfaces_menu = self.menu.addMenu("🚀 Interfaces")
+        
+        self.gui_qt_action = QAction("Qt Dashboard (Recommandé)")
         self.gui_qt_action.triggered.connect(self.launch_gui_qt)
-        self.menu.addAction(self.gui_qt_action)
+        interfaces_menu.addAction(self.gui_qt_action)
 
-        self.gui_web_action = QAction("Dashboard Web")
-        self.gui_web_action.triggered.connect(self.launch_gui_web)
-        self.menu.addAction(self.gui_web_action)
+        self.gui_web_ultra_action = QAction("Debug Web Ultra")
+        self.gui_web_ultra_action.triggered.connect(self.launch_debug_web_ultra)
+        interfaces_menu.addAction(self.gui_web_ultra_action)
+
+        self.supervision_action = QAction("Dashboard Web Avancé")
+        self.supervision_action.triggered.connect(self.launch_supervision)
+        interfaces_menu.addAction(self.supervision_action)
+
+        self.mobile_action = QAction("Mobile Dashboard")
+        self.mobile_action.triggered.connect(self.launch_mobile)
+        interfaces_menu.addAction(self.mobile_action)
+
+        interfaces_menu.addSeparator()
+
+        self.install_action = QAction("Installation VRAMancer")
+        self.install_action.triggered.connect(self.launch_installer)
+        interfaces_menu.addAction(self.install_action)
 
         mem_menu = self.menu.addMenu("Mémoire")
         self.promote_action = QAction("Promouvoir 1er bloc")
@@ -56,7 +65,16 @@ class VRAMancerTray:
         )
         cli_menu.addAction(self.cli_list)
 
-        self.quit_action = QAction("Quitter")
+        self.menu.addSeparator()
+
+        # Actions système
+        self.api_check = QAction("🔍 Vérifier API VRAMancer")
+        self.api_check.triggered.connect(self.check_api_status)
+        self.menu.addAction(self.api_check)
+
+        self.menu.addSeparator()
+
+        self.quit_action = QAction("❌ Quitter")
         self.quit_action.triggered.connect(self.app.quit)
         self.menu.addAction(self.quit_action)
 
@@ -66,33 +84,102 @@ class VRAMancerTray:
 
     def launch_installer(self):
         # Lance l'installateur graphique
-        QProcess.startDetached(sys.executable, ["installer_gui.py"])
+        if os.path.exists("installer_gui.py"):
+            success = QProcess.startDetached(sys.executable, ["installer_gui.py"])
+            if success:
+                self.tray.showMessage("VRAMancer", "Installateur VRAMancer lancé", QSystemTrayIcon.Information, 3000)
+            else:
+                self.tray.showMessage("VRAMancer", "Erreur lancement installateur", QSystemTrayIcon.Critical, 3000)
+        else:
+            self.tray.showMessage("VRAMancer", "Installateur non trouvé", QSystemTrayIcon.Warning, 3000)
 
     def launch_supervision(self):
-        # Lance le dashboard supervision (exemple)
-        QProcess.startDetached(sys.executable, ["dashboard/dashboard_web.py"])
+        # Lance le dashboard web avancé (supervision cluster)
+        if os.path.exists("dashboard/dashboard_web_advanced.py"):
+            success = QProcess.startDetached(sys.executable, ["dashboard/dashboard_web_advanced.py"])
+            if success:
+                self.tray.showMessage("VRAMancer", "Dashboard Web Avancé démarré\nURL: http://localhost:5000", QSystemTrayIcon.Information, 5000)
+            else:
+                self.tray.showMessage("VRAMancer", "Erreur lancement Dashboard Web Avancé", QSystemTrayIcon.Critical, 3000)
+        elif os.path.exists("dashboard/dashboard_web.py"):
+            success = QProcess.startDetached(sys.executable, ["dashboard/dashboard_web.py"])
+            if success:
+                self.tray.showMessage("VRAMancer", "Dashboard Web démarré", QSystemTrayIcon.Information, 3000)
+        else:
+            self.tray.showMessage("VRAMancer", "Aucun dashboard web trouvé", QSystemTrayIcon.Warning, 3000)
 
     def launch_gui_qt(self):
-        QProcess.startDetached(sys.executable, ["dashboard/dashboard_qt.py"])
+        if os.path.exists("dashboard/dashboard_qt.py"):
+            success = QProcess.startDetached(sys.executable, ["dashboard/dashboard_qt.py"])
+            if success:
+                self.tray.showMessage("VRAMancer", "Qt Dashboard en cours de lancement...", QSystemTrayIcon.Information, 3000)
+            else:
+                self.tray.showMessage("VRAMancer", "Erreur lancement Qt Dashboard", QSystemTrayIcon.Critical, 3000)
+        else:
+            self.tray.showMessage("VRAMancer", "Qt Dashboard non trouvé", QSystemTrayIcon.Warning, 3000)
 
     def launch_gui_web(self):
-        QProcess.startDetached(sys.executable, ["dashboard/dashboard_web.py"])
+        # Priorité: debug_web_ultra > dashboard_web_advanced > dashboard_web
+        if os.path.exists("debug_web_ultra.py"):
+            QProcess.startDetached(sys.executable, ["debug_web_ultra.py"])
+        elif os.path.exists("dashboard/dashboard_web_advanced.py"):
+            QProcess.startDetached(sys.executable, ["dashboard/dashboard_web_advanced.py"])
+        elif os.path.exists("dashboard/dashboard_web.py"):
+            QProcess.startDetached(sys.executable, ["dashboard/dashboard_web.py"])
+        else:
+            print("[Systray] Aucun dashboard web trouvé")
+
+    def launch_debug_web_ultra(self):
+        if os.path.exists("debug_web_ultra.py"):
+            success = QProcess.startDetached(sys.executable, ["debug_web_ultra.py"])
+            if success:
+                self.tray.showMessage("VRAMancer", "Debug Web Ultra démarré\nURL: http://localhost:8080", QSystemTrayIcon.Information, 5000)
+            else:
+                self.tray.showMessage("VRAMancer", "Erreur lancement Debug Web Ultra", QSystemTrayIcon.Critical, 3000)
+        else:
+            self.tray.showMessage("VRAMancer", "Debug Web Ultra non trouvé", QSystemTrayIcon.Warning, 3000)
+
+    def launch_mobile(self):
+        if os.path.exists("mobile/dashboard_mobile.py"):
+            success = QProcess.startDetached(sys.executable, ["mobile/dashboard_mobile.py"])
+            if success:
+                self.tray.showMessage("VRAMancer", "Mobile Dashboard démarré\nURL: http://localhost:5003", QSystemTrayIcon.Information, 5000)
+            else:
+                self.tray.showMessage("VRAMancer", "Erreur lancement Mobile Dashboard", QSystemTrayIcon.Critical, 3000)
+        else:
+            self.tray.showMessage("VRAMancer", "Mobile Dashboard non trouvé", QSystemTrayIcon.Warning, 3000)
 
     def call_memory_endpoint(self, action):
         # Appelle l'API /api/memory pour un bloc arbitraire (premier) promote/demote
         import urllib.request, json
         try:
-            data = json.loads(urllib.request.urlopen('http://localhost:5000/api/memory').read().decode())
+            # Utilise le bon port API (5030, pas 5000)
+            data = json.loads(urllib.request.urlopen('http://localhost:5030/api/memory').read().decode())
             blocks = list(data.get('blocks', {}).keys())
             if not blocks:
+                print(f"[Systray] Aucun bloc mémoire trouvé pour {action}")
                 return
             first = blocks[0][:8]
             if action == 'promote':
-                urllib.request.urlopen(f'http://localhost:5000/api/memory/promote?id={first}')
+                urllib.request.urlopen(f'http://localhost:5030/api/memory/promote?id={first}')
+                print(f"[Systray] Bloc {first} promu")
             else:
-                urllib.request.urlopen(f'http://localhost:5000/api/memory/demote?id={first}')
-        except Exception:
-            pass
+                urllib.request.urlopen(f'http://localhost:5030/api/memory/demote?id={first}')
+                print(f"[Systray] Bloc {first} démonté")
+        except Exception as e:
+            print(f"[Systray] Erreur API mémoire: {e}")
+
+    def check_api_status(self):
+        """Vérifie le statut de l'API VRAMancer."""
+        try:
+            import urllib.request
+            response = urllib.request.urlopen('http://localhost:5030/health', timeout=3)
+            if response.getcode() == 200:
+                self.tray.showMessage("VRAMancer API", "✅ API active sur port 5030\nToutes les fonctions disponibles", QSystemTrayIcon.Information, 5000)
+            else:
+                self.tray.showMessage("VRAMancer API", f"⚠️ API répond avec code {response.getcode()}", QSystemTrayIcon.Warning, 5000)
+        except Exception as e:
+            self.tray.showMessage("VRAMancer API", f"❌ API non accessible\nLancez api_permanente.bat", QSystemTrayIcon.Critical, 5000)
 
     def run(self):
         sys.exit(self.app.exec_())

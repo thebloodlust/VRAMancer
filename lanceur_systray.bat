@@ -41,9 +41,23 @@ python -c "from PyQt5.QtWidgets import QApplication" >nul 2>&1 || (
 )
 
 echo.
-echo Lancement System Tray VRAMancer...
-echo Icone VRAMancer sera utilisee automatiquement
-echo Recherche de l'icone dans la barre des taches
+echo === LANCEMENT SYSTEM TRAY VRAMANCER ===
+echo.
+echo ✅ Icone VRAMancer utilisee automatiquement
+echo ✅ Menu contextuel avec toutes les interfaces
+echo ✅ Notifications de lancement integrees
+echo ✅ Verification API incluse
+echo.
+echo Fonctionnalites disponibles:
+echo   - Qt Dashboard (interface native)
+echo   - Debug Web Ultra (http://localhost:8080)
+echo   - Dashboard Web Avance (http://localhost:5000)
+echo   - Mobile Dashboard (http://localhost:5003)
+echo   - Actions memoire (promote/demote)
+echo   - Verification API VRAMancer
+echo.
+echo Recherchez l'icone VRAMancer dans la barre des taches
+echo Clic droit sur l'icone pour acceder au menu
 echo.
 
 cd /d "%~dp0"
