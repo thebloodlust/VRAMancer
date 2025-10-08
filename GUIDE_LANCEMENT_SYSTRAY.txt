@@ -1,0 +1,102 @@
+===============================================
+    🚀 GUIDE LANCEMENT VRAMANCER - RTX 4060
+===============================================
+
+🎯 MÉTHODE RECOMMANDÉE : SYSTEM TRAY
+=====================================
+
+✅ LANCEMENT OPTIMAL (1 étape) :
+   systray_vramancer.bat
+
+💡 POURQUOI LE SYSTEM TRAY ?
+- 🖱️  Accès à TOUT depuis le menu contextuel (clic droit)
+- 📍 Icône VRAMancer dans la barre des tâches
+- 🚀 Lance toutes les interfaces d'un clic
+- 🔧 Contrôles mémoire GPU intégrés
+- 💻 CLI health check et listing GPU
+- 📊 Vérification API intégrée
+- 🔄 Pas besoin de plusieurs terminaux
+
+🎛️ MENU SYSTEM TRAY COMPLET :
+===============================
+
+📋 🚀 Interfaces :
+   ├── Qt Dashboard (Recommandé)      → Interface native monitoring
+   ├── Debug Web Ultra                → Port 8080 debug
+   ├── Dashboard Web Avancé           → Port 5000 supervision
+   ├── Mobile Dashboard               → Port 5003 mobile
+   └── Installation VRAMancer         → Setup assistant
+
+📋 Mémoire :
+   ├── Promouvoir 1er bloc            → Gestion VRAM
+   └── Démonter 1er bloc              → Optimisation
+
+📋 CLI :
+   ├── Healthcheck                    → Test backend/GPU
+   └── Lister GPUs                    → Enum RTX 4060
+
+📋 Actions :
+   ├── 🔍 Vérifier API VRAMancer      → Test port 5030
+   └── ❌ Quitter                     → Fermer systray
+
+⚡ ALTERNATIVES DIRECTES (si besoin) :
+=====================================
+
+🔧 API d'abord (obligatoire) :
+   api_permanente.bat
+
+🖥️ Interfaces directes :
+   dashboard_qt.bat           → Interface Qt native
+   dashboard_web_avance.bat   → Web supervision (port 5000)
+   dashboard_mobile.bat       → Mobile responsive (port 5003)
+
+🧪 Tests spéciaux :
+   test_cuda_ok.bat          → Vérification RTX 4060 + CUDA
+   diagnostic_cuda.py        → Diagnostic complet GPU
+   test_final.bat            → Validation complète
+
+📊 ORDRE DE PRIORITÉ RECOMMANDÉ :
+=================================
+
+1️⃣ PRINCIPAL : systray_vramancer.bat
+   → Icône tray + menu complet
+
+2️⃣ MONITORING : Qt Dashboard (depuis le tray)
+   → Ressources système + GPU temps réel
+
+3️⃣ WEB : Dashboard Web Avancé (depuis le tray)
+   → Supervision cluster détaillée
+
+4️⃣ MOBILE : Dashboard Mobile (depuis le tray)
+   → Interface responsive détaillée
+
+💡 CONSEILS D'UTILISATION :
+===========================
+
+✅ Workflow optimal :
+1. Lancez : systray_vramancer.bat
+2. Clic droit sur l'icône VRAMancer
+3. Choisissez l'interface souhaitée
+4. L'API se lance automatiquement si nécessaire
+
+⚠️  Dépannage :
+- Si l'icône n'apparaît pas : Vérifiez vramancer.png
+- Si erreur CLI : git pull pour les dernières corrections
+- Si API non accessible : Lancez api_permanente.bat manuellement
+
+🎮 SPÉCIAL RTX 4060 LAPTOP GPU :
+================================
+
+Le System Tray détecte automatiquement :
+✅ PyTorch CUDA 2.5.1
+✅ RTX 4060 Laptop GPU
+✅ Backend CUDA activé
+✅ Monitoring VRAM temps réel
+
+🚀 CONCLUSION :
+===============
+
+OUI, lancez toujours systray_vramancer.bat !
+C'est votre hub central pour accéder à tout VRAMancer.
+
+===============================================

@@ -99,8 +99,16 @@ class VRAMancerTray:
         self.menu.addAction(self.quit_action)
 
         self.tray.setContextMenu(self.menu)
-        self.tray.setToolTip("VRAMancer est lancé")
+        self.tray.setToolTip("🚀 VRAMancer System Tray\n🖱️ Clic droit pour le menu complet\n🎮 RTX 4060 Laptop GPU supporté")
         self.tray.show()
+        
+        # Message de bienvenue
+        self.tray.showMessage(
+            "🚀 VRAMancer System Tray", 
+            "✅ Lancé avec succès !\n🖱️ Clic droit sur l'icône pour accéder à toutes les interfaces\n🎮 RTX 4060 Laptop GPU détecté", 
+            QSystemTrayIcon.Information, 
+            5000
+        )
 
     def launch_installer(self):
         # Lance l'installateur graphique
