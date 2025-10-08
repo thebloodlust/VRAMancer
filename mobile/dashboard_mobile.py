@@ -4,44 +4,6 @@ Interface mobile/tablette CORRIGÉE :
 - Vue responsive, accès sécurisé, API fixée
 """
 from flask import Flask, render_template_string, jsonify
-    print("📱 Interface optimisée mobile/tablette")
-    print("⚡ Test API intégré")
-    print()
-    print("Appuyez sur Ctrl+C pour arrêter")
-    print("=" * 60)
-    
-    try:
-        # Ouverture automatique du navigateur
-        import webbrowser
-        import threading
-        import time
-        def open_browser():
-            time.sleep(1.5)  # Attendre que le serveur démarre
-            try:
-                webbrowser.open('http://localhost:5003')
-                print("✅ Navigateur ouvert automatiquement")
-            except:
-                print("⚠️  Ouvrez manuellement: http://localhost:5003")
-        
-        threading.Thread(target=open_browser, daemon=True).start()
-        app.run(host="0.0.0.0", port=5003, debug=False)
-    except Exception as e:
-        print(f"Erreur démarrage serveur: {e}")
-        input("Appuyez sur Entrée pour fermer...")
-
-if __name__ == "__main__":
-    # Version avec ouverture navigateur automatique
-    import webbrowser
-    import threading
-    import time
-    def open_browser():
-        time.sleep(1.5)
-        try:
-            webbrowser.open('http://localhost:5003')
-        except:
-            pass
-    threading.Thread(target=open_browser, daemon=True).start()
-    app.run(port=5003, debug=False)k, render_template_string, jsonify
 import requests, json, os
 
 MOBILE_JS = """
@@ -96,7 +58,7 @@ app = Flask(__name__)
 TEMPLATE = '''
 <!DOCTYPE html><html><head>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>VRAMancer Mobile CORRIGÉ</title>
+<title>VRAMancer Mobile</title>
 <style>
 body { font-family: system-ui, sans-serif; margin:0; padding:0; background:#111; color:#eee; }
 .header { background:#1976D2; color:#fff; padding:1em; text-align:center; font-weight:600; }
@@ -111,7 +73,7 @@ code { font-size:0.75em; line-height:1.3em; display:block; white-space:pre-wrap;
 </style>
 <script>''' + MOBILE_JS + '''</script>
 </head><body>
-<div class="header">📱 VRAMancer Mobile CORRIGÉ</div>
+<div class="header">📱 VRAMancer Mobile</div>
 <div class="section">
   <div class="card">
     <b>📊 Status API</b>
@@ -211,6 +173,3 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"Erreur démarrage serveur: {e}")
         input("Appuyez sur Entrée pour fermer...")
-
-if __name__ == "__main__":
-    app.run(port=5003, debug=True)

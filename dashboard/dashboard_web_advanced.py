@@ -13,39 +13,6 @@ cluster_state = {
     "api_connected": False,
     "last_update": None
 }
-    print("=" * 60)
-    print("    VRAMANCER - DASHBOARD WEB AVANCÉ")
-    print("=" * 60)
-    print()
-    print("🌐 Démarrage serveur Flask...")
-    print("📊 Supervision cluster avancée")
-    print("🔗 URL: http://localhost:5000")
-    print("📋 Mise à jour automatique toutes les 5 secondes")
-    print()
-    print("Appuyez sur Ctrl+C pour arrêter")
-    print("=" * 60)
-    
-    try:
-        # Test initial API
-        update_from_api()
-        
-        # Ouverture automatique du navigateur
-        import webbrowser
-        import threading
-        def open_browser():
-            time.sleep(1.5)  # Attendre que le serveur démarre
-            try:
-                webbrowser.open('http://localhost:5000')
-                print("✅ Navigateur ouvert automatiquement")
-            except:
-                print("⚠️  Ouvrez manuellement: http://localhost:5000")
-        
-        threading.Thread(target=open_browser, daemon=True).start()
-        app.run(host="0.0.0.0", port=5000, debug=False)
-    except Exception as e:
-        print(f"Erreur démarrage serveur: {e}")
-        input("Appuyez sur Entrée pour fermer...")last_update": None
-}
 
 def update_from_api():
     """Met à jour l'état depuis l'API VRAMancer"""
@@ -83,22 +50,6 @@ def update_from_api():
 # Mise à jour initiale
 update_from_api()
 
-from flask import Flask, render_template_string, request, jsonify
-import threading
-import time
-
-app = Flask(__name__)
-
-# Simule l’état du cluster
-cluster_state = {
-    "nodes": [
-        {"host": "nodeA", "os": "Linux", "vram": 8192, "cpu": 8, "status": "active"},
-        {"host": "nodeB", "os": "Windows", "vram": 16384, "cpu": 16, "status": "active"},
-        {"host": "nodeC", "os": "macOS", "vram": 4096, "cpu": 4, "status": "idle"}
-    ],
-    "logs": []
-}
-
 # Template HTML avancé corrigé
 TEMPLATE = """
 <!DOCTYPE html>
@@ -106,7 +57,7 @@ TEMPLATE = """
 <head>
     <meta charset='UTF-8'>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VRAMancer Dashboard Web Avancé CORRIGÉ</title>
+    <title>VRAMancer Dashboard Web Avancé</title>
     <style>
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); color: #eee; margin: 0; padding: 20px; }
         .container { max-width: 1200px; margin: 0 auto; }
@@ -154,7 +105,7 @@ TEMPLATE = """
 <body>
     <div class="container">
         <div class="header">
-            <h1>🌐 VRAMancer Dashboard Web Avancé CORRIGÉ</h1>
+            <h1>🌐 VRAMancer Dashboard Web Avancé</h1>
             <p>Supervision cluster hétérogène en temps réel</p>
         </div>
         
