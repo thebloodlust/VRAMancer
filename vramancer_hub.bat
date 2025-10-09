@@ -1,6 +1,5 @@
 @echo off
-chcp 65001 >nul
-title VRAMancer - Hub Central RTX 4060
+title VRAMancer Hub RTX 4060
 color 0A
 
 echo.

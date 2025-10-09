@@ -1,5 +1,4 @@
 @echo off
-chcp 65001 >nul
 cls
 title VRAMancer - Post Telechargement
 color 0A
@@ -9,9 +8,9 @@ echo      VRAMANCER - LANCEMENT RAPIDE
 echo =====================================================
 echo.
 echo Toutes les corrections appliquees :
-echo • Mobile Dashboard : Erreur GPU corrigee
-echo • Hub : Caracteres compatibles Windows
-echo • GPU adaptatif RTX 4060 : MB/GB selon usage
+echo - Mobile Dashboard : Erreur GPU corrigee
+echo - Hub : Caracteres compatibles Windows  
+echo - GPU adaptatif RTX 4060 : MB/GB selon usage
 echo.
 
 REM Nettoyage processus precedents
