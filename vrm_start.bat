@@ -1,18 +1,16 @@
 @echo off
-title VRAMancer
+title VRAMancer Quick
 
-echo Starting VRAMancer...
+echo VRAMancer Quick Start
 echo.
-
-taskkill /f /im python.exe >nul 2>&1
-
-echo [1] System Tray
-echo [2] Qt Dashboard  
+echo [1] System Tray (Hub)
+echo [2] Qt Dashboard
 echo [3] Web Dashboard
 echo [4] Mobile Dashboard
 echo.
 set /p choice="Choice (1-4): "
 
+taskkill /f /im python.exe >nul 2>&1
 start "API" cmd /k "python api_simple.py"
 timeout /t 3 /nobreak >nul
 
@@ -27,4 +25,5 @@ if "%choice%"=="4" (
     python mobile/dashboard_mobile.py
 )
 
+echo VRAMancer started!
 pause
