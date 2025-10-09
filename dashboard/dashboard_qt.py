@@ -80,27 +80,56 @@ class SystemMonitor(QThread):
                 time.sleep(5)
     
     def get_gpu_info(self):
-        """Récupère infos GPU"""
+        """Récupère infos GPU avec détails VRAM précis"""
         gpu_data = []
         
-        # PyTorch CUDA
+        # PyTorch CUDA avec plus de précision
         try:
             import torch
             if torch.cuda.is_available():
                 for i in range(torch.cuda.device_count()):
                     props = torch.cuda.get_device_properties(i)
-                    memory_used = torch.cuda.memory_allocated(i) // (1024**3)
-                    memory_total = props.total_memory // (1024**3)
+                    
+                    # Mémoire en MB pour plus de précision
+                    memory_used_mb = torch.cuda.memory_allocated(i) // (1024**2)
+                    memory_total_mb = props.total_memory // (1024**2)
+                    memory_cached_mb = torch.cuda.memory_reserved(i) // (1024**2)
+                    
+                    # Convertir en GB pour affichage
+                    memory_used_gb = memory_used_mb / 1024
+                    memory_total_gb = memory_total_mb / 1024
+                    memory_cached_gb = memory_cached_mb / 1024
+                    
+                    memory_percent = (memory_used_mb / memory_total_mb * 100) if memory_total_mb > 0 else 0
+                    
                     gpu_data.append({
                         'name': props.name,
-                        'memory_used': memory_used,
-                        'memory_total': memory_total,
-                        'memory_percent': (memory_used / memory_total * 100) if memory_total > 0 else 0,
+                        'memory_used': memory_used_gb,
+                        'memory_total': memory_total_gb,
+                        'memory_cached': memory_cached_gb,
+                        'memory_used_mb': memory_used_mb,
+                        'memory_total_mb': memory_total_mb,
+                        'memory_percent': memory_percent,
                         'backend': 'CUDA',
-                        'compute': f"{props.major}.{props.minor}"
+                        'compute': f"{props.major}.{props.minor}",
+                        'temperature': self.get_gpu_temperature(i) if hasattr(self, 'get_gpu_temperature') else 'N/A'
                     })
-        except:
-            pass
+        except Exception as e:
+            print(f"GPU detection error: {e}")
+            # Fallback avec info basique
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    gpu_data.append({
+                        'name': 'GPU CUDA Détecté',
+                        'memory_used': 0,
+                        'memory_total': 'N/A',
+                        'memory_percent': 0,
+                        'backend': 'CUDA',
+                        'status': 'Détecté mais sans détails VRAM'
+                    })
+            except:
+                pass
         
         # VRAMancer devices
         try:
@@ -289,34 +318,98 @@ class VRAMancerDashboardQt(QMainWindow):
         self.update_vramancer_status()
     
     def update_gpu_display(self, gpu_info):
-        # Clear
+        # Clear existing GPU widgets
         for i in reversed(range(self.gpu_layout.count())):
             widget = self.gpu_layout.itemAt(i).widget()
             if widget:
                 widget.setParent(None)
         
         if not gpu_info:
-            no_gpu = QLabel("❌ Aucun GPU CUDA détecté")
+            no_gpu = QLabel("❌ Aucun GPU CUDA détecté\n💡 Vérifiez PyTorch CUDA installation")
+            no_gpu.setStyleSheet("color: #ff9800; font-size: 12px;")
             self.gpu_layout.addWidget(no_gpu)
         else:
-            for gpu in gpu_info:
+            for i, gpu in enumerate(gpu_info):
                 gpu_widget = QWidget()
                 gpu_layout = QVBoxLayout(gpu_widget)
                 
-                name_label = QLabel(f"🎮 {gpu['name']} ({gpu['backend']})")
-                name_label.setStyleSheet("font-weight: bold; color: #4CAF50;")
+                # GPU Name and specs
+                gpu_name = f"🎮 {gpu['name']} ({gpu['backend']})"
+                if 'compute' in gpu:
+                    gpu_name += f" - Compute {gpu['compute']}"
+                
+                name_label = QLabel(gpu_name)
+                name_label.setStyleSheet("font-weight: bold; color: #4CAF50; font-size: 13px;")
                 gpu_layout.addWidget(name_label)
                 
-                if 'memory_total' in gpu and gpu['memory_total'] > 0:
-                    mem_text = f"VRAM: {gpu['memory_used']}/{gpu['memory_total']} GB"
+                # VRAM Usage avec détails - Affichage adaptatif MB/GB
+                if 'memory_total' in gpu and gpu['memory_total'] != 'N/A':
+                    # Mémoire détaillée avec unité adaptative
+                    if gpu['memory_total'] > 0:
+                        # Logique adaptative pour l'affichage
+                        used_gb = gpu['memory_used']
+                        total_gb = gpu['memory_total']
+                        
+                        # Si usage < 1GB, afficher en MB pour plus de précision
+                        if used_gb < 1.0:
+                            used_mb = used_gb * 1024
+                            total_mb = total_gb * 1024
+                            mem_text = f"VRAM: {used_mb:.0f}/{total_mb:.0f} MB ({gpu['memory_percent']:.1f}%)"
+                            if 'memory_cached' in gpu and gpu['memory_cached'] > 0:
+                                cached_mb = gpu['memory_cached'] * 1024
+                                mem_text += f" | Cached: {cached_mb:.0f} MB"
+                        else:
+                            # Affichage en GB pour usage significatif
+                            mem_text = f"VRAM: {used_gb:.1f}/{total_gb:.1f} GB ({gpu['memory_percent']:.1f}%)"
+                            if 'memory_cached' in gpu and gpu['memory_cached'] > 0:
+                                mem_text += f" | Cached: {gpu['memory_cached']:.1f} GB"
+                    else:
+                        mem_text = "VRAM: Disponible mais pas utilisée actuellement"
+                    
                     mem_label = QLabel(mem_text)
+                    mem_label.setStyleSheet("color: #ffffff; font-size: 11px;")
                     gpu_layout.addWidget(mem_label)
                     
+                    # Barre de progression VRAM
                     mem_progress = QProgressBar()
                     mem_progress.setMaximum(100)
                     mem_progress.setValue(int(gpu['memory_percent']))
+                    mem_progress.setMinimumHeight(20)
+                    
+                    # Couleur selon usage
+                    if gpu['memory_percent'] > 80:
+                        mem_progress.setStyleSheet("QProgressBar::chunk { background-color: #f44336; }")
+                    elif gpu['memory_percent'] > 50:
+                        mem_progress.setStyleSheet("QProgressBar::chunk { background-color: #ff9800; }")
+                    else:
+                        mem_progress.setStyleSheet("QProgressBar::chunk { background-color: #4CAF50; }")
+                    
                     gpu_layout.addWidget(mem_progress)
+                    
+                    # Infos techniques supplémentaires avec unité adaptative
+                    if 'memory_used_mb' in gpu:
+                        used_mb = gpu['memory_used_mb']
+                        total_mb = gpu['memory_total_mb']
+                        
+                        # Affichage technique adaptatif
+                        if used_mb < 1024:  # < 1GB
+                            tech_info = f"Détails: {used_mb:.0f} MB utilisés / {total_mb/1024:.1f} GB total"
+                        else:
+                            tech_info = f"Détails: {used_mb/1024:.1f} GB utilisés / {total_mb/1024:.1f} GB total"
+                        
+                        tech_label = QLabel(tech_info)
+                        tech_label.setStyleSheet("color: #aaa; font-size: 9px; font-style: italic;")
+                        gpu_layout.addWidget(tech_label)
                 
+                else:
+                    # GPU détecté mais pas de détails VRAM
+                    status_text = gpu.get('status', 'GPU détecté - Détails VRAM non disponibles')
+                    status_label = QLabel(f"Status: {status_text}")
+                    status_label.setStyleSheet("color: #ffcc02; font-size: 11px;")
+                    gpu_layout.addWidget(status_label)
+                
+                # Séparateur visuel
+                gpu_widget.setStyleSheet("border-bottom: 1px solid #444; padding-bottom: 10px; margin-bottom: 10px;")
                 self.gpu_layout.addWidget(gpu_widget)
     
     def update_vramancer_status(self):

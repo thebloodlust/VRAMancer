@@ -73,7 +73,7 @@ def update_from_api():
                 except:
                     pass
                 
-                # 3. Infos GPU
+                # 3. Infos GPU détaillées
                 try:
                     gpu_response = requests.get('http://localhost:5030/api/gpu', timeout=2)
                     if gpu_response.status_code == 200:
@@ -82,13 +82,55 @@ def update_from_api():
                             for node in nodes_data:
                                 if gpu_data['devices']:
                                     gpu = gpu_data['devices'][0]  # Premier GPU
+                                    memory_total_gb = gpu.get('memory_total', 0) / (1024**3) if gpu.get('memory_total') else 0
+                                    memory_used_gb = gpu.get('memory_used', 0) / (1024**3) if gpu.get('memory_used') else 0
+                                    memory_percent = (memory_used_gb / memory_total_gb * 100) if memory_total_gb > 0 else 0
+                                    
                                     node.update({
                                         'gpu_name': gpu.get('name', 'Unknown GPU'),
-                                        'vram': gpu.get('memory_total', 0) // (1024*1024) if gpu.get('memory_total') else 'N/A',
-                                        'backend': gpu.get('backend', 'Unknown')
+                                        'vram': round(memory_total_gb, 1) if memory_total_gb > 0 else 'N/A',
+                                        'vram_used': round(memory_used_gb, 1) if memory_used_gb > 0 else 0,
+                                        'vram_percent': round(memory_percent, 1),
+                                        'gpu_backend': gpu.get('backend', 'Unknown'),
+                                        'compute_capability': gpu.get('compute_capability', 'N/A'),
+                                        'gpu_id': gpu.get('id', 0)
                                     })
-                except:
-                    pass
+                                    
+                                    # Ajout de détails réseau et performance
+                                    node.update({
+                                        'network_status': 'Local',
+                                        'connection_type': 'Direct',
+                                        'latency': '< 1ms',
+                                        'bandwidth': 'Max',
+                                        'memory_usage': f"{memory_used_gb:.1f}/{memory_total_gb:.1f} GB" if memory_total_gb > 0 else "N/A",
+                                        'gpu_utilization': f"{memory_percent:.1f}%" if memory_percent > 0 else "0%"
+                                    })
+                        elif nodes_data:
+                            # Pas de GPU détecté
+                            for node in nodes_data:
+                                node.update({
+                                    'gpu_name': 'No CUDA GPU',
+                                    'vram': 'N/A',
+                                    'vram_used': 0,
+                                    'vram_percent': 0,
+                                    'gpu_backend': 'None',
+                                    'compute_capability': 'N/A',
+                                    'network_status': 'Local',
+                                    'connection_type': 'Direct',
+                                    'latency': '< 1ms',
+                                    'bandwidth': 'Max'
+                                })
+                except Exception as e:
+                    # En cas d'erreur GPU, ajouter infos réseau quand même
+                    if nodes_data:
+                        for node in nodes_data:
+                            node.update({
+                                'gpu_name': 'GPU Error',
+                                'vram': 'Error',
+                                'network_status': 'Local',
+                                'connection_type': 'Direct',
+                                'gpu_error': str(e)
+                            })
                 
                 # Fallback si aucune donnée
                 if not nodes_data:
@@ -277,7 +319,49 @@ TEMPLATE = """
                             
                             {% if node.load %}
                             <div style="background: rgba(255,255,255,0.05); padding: 8px; border-radius: 4px;">
-                                <strong>📊 Load:</strong> {{ node.load }}%
+                                <strong>📊 CPU Load:</strong> {{ node.load }}%
+                            </div>
+                            {% endif %}
+                            
+                            {% if node.memory_usage %}
+                            <div style="background: rgba(255,255,255,0.05); padding: 8px; border-radius: 4px;">
+                                <strong>🎮 VRAM Usage:</strong> {{ node.memory_usage }}
+                            </div>
+                            {% endif %}
+                            
+                            {% if node.gpu_utilization %}
+                            <div style="background: rgba(255,255,255,0.05); padding: 8px; border-radius: 4px;">
+                                <strong>⚡ GPU Util:</strong> {{ node.gpu_utilization }}
+                            </div>
+                            {% endif %}
+                            
+                            {% if node.compute_capability %}
+                            <div style="background: rgba(255,255,255,0.05); padding: 8px; border-radius: 4px;">
+                                <strong>🔬 Compute:</strong> {{ node.compute_capability }}
+                            </div>
+                            {% endif %}
+                            
+                            {% if node.network_status %}
+                            <div style="background: rgba(255,255,255,0.05); padding: 8px; border-radius: 4px;">
+                                <strong>🌐 Network:</strong> {{ node.network_status }}
+                            </div>
+                            {% endif %}
+                            
+                            {% if node.connection_type %}
+                            <div style="background: rgba(255,255,255,0.05); padding: 8px; border-radius: 4px;">
+                                <strong>🔗 Connection:</strong> {{ node.connection_type }}
+                            </div>
+                            {% endif %}
+                            
+                            {% if node.latency %}
+                            <div style="background: rgba(255,255,255,0.05); padding: 8px; border-radius: 4px;">
+                                <strong>⚡ Latency:</strong> {{ node.latency }}
+                            </div>
+                            {% endif %}
+                            
+                            {% if node.bandwidth %}
+                            <div style="background: rgba(255,255,255,0.05); padding: 8px; border-radius: 4px;">
+                                <strong>📶 Bandwidth:</strong> {{ node.bandwidth }}
                             </div>
                             {% endif %}
                         </div>
@@ -285,6 +369,33 @@ TEMPLATE = """
                         {% if node.info %}
                         <div style="margin-top: 10px; padding: 8px; background: rgba(255,255,255,0.1); border-radius: 4px; font-size: 12px;">
                             <strong>ℹ️ Info:</strong> {{ node.info }}
+                        </div>
+                        {% endif %}
+                        
+                        <!-- Section GPU détaillée -->
+                        {% if node.gpu_name and node.gpu_name != 'Unknown GPU' and node.gpu_name != 'No CUDA GPU' %}
+                        <div style="margin-top: 15px; padding: 12px; background: rgba(76,175,80,0.1); border-left: 4px solid #4CAF50; border-radius: 4px;">
+                            <h4 style="margin: 0 0 8px 0; color: #4CAF50;">🎮 GPU Détaillé</h4>
+                            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; font-size: 11px;">
+                                <div><strong>Nom:</strong> {{ node.gpu_name }}</div>
+                                {% if node.compute_capability %}<div><strong>Compute:</strong> {{ node.compute_capability }}</div>{% endif %}
+                                {% if node.gpu_backend %}<div><strong>Backend:</strong> {{ node.gpu_backend }}</div>{% endif %}
+                                {% if node.memory_usage %}<div><strong>VRAM:</strong> {{ node.memory_usage }}</div>{% endif %}
+                                {% if node.gpu_utilization %}<div><strong>Utilisation:</strong> {{ node.gpu_utilization }}</div>{% endif %}
+                            </div>
+                        </div>
+                        {% endif %}
+                        
+                        <!-- Section Réseau détaillée -->
+                        {% if node.network_status %}
+                        <div style="margin-top: 10px; padding: 12px; background: rgba(33,150,243,0.1); border-left: 4px solid #2196F3; border-radius: 4px;">
+                            <h4 style="margin: 0 0 8px 0; color: #2196F3;">🌐 Réseau & Performance</h4>
+                            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; font-size: 11px;">
+                                <div><strong>Status:</strong> {{ node.network_status }}</div>
+                                {% if node.connection_type %}<div><strong>Type:</strong> {{ node.connection_type }}</div>{% endif %}
+                                {% if node.latency %}<div><strong>Latence:</strong> {{ node.latency }}</div>{% endif %}
+                                {% if node.bandwidth %}<div><strong>Bande passante:</strong> {{ node.bandwidth }}</div>{% endif %}
+                            </div>
                         </div>
                         {% endif %}
                     </div>

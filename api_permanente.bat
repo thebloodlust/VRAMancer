@@ -16,8 +16,8 @@ echo Lancement API VRAMancer...
 echo IMPORTANT: Ne fermez pas cette fenetre
 echo.
 
-REM Lancement API avec relance automatique
-python start_api.py
+REM Lancement API simple avec améliorations récentes
+python api_simple.py
 
 echo.
 echo ===============================================

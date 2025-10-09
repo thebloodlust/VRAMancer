@@ -7,12 +7,12 @@ from flask import Flask, render_template_string, jsonify
 import requests, json, os
 
 MOBILE_JS = """
-const API_BASE = 'http://localhost:5030';
+const API_BASE = '';  // Utilise les routes locales du dashboard mobile
 
 async function refresh(){
     try {
-        // Test API health
-        const health = await fetch(`${API_BASE}/health`);
+        // Test API health via proxy local
+        const health = await fetch('/health');
         if (health.ok) {
             const healthData = await health.json();
             document.getElementById('api-status').innerHTML = '✅ API Connectée';
@@ -23,24 +23,44 @@ async function refresh(){
                 </div>
             `;
             
-            // Get GPU info
+            // Get GPU info via proxy local
             try {
-                const gpuResp = await fetch(`${API_BASE}/api/gpu`);
+                const gpuResp = await fetch('/api/gpu');
                 if (gpuResp.ok) {
                     const gpuData = await gpuResp.json();
                     let gpuHtml = '';
-                    if (gpuData.devices && gpuData.devices.length > 0) {
+                    
+                    // Gestion d'erreur dans la réponse
+                    if (gpuData.error) {
+                        gpuHtml = `❌ Erreur GPU: ${gpuData.error}`;
+                    } else if (gpuData.devices && gpuData.devices.length > 0) {
                         gpuData.devices.forEach(gpu => {
-                            const memUsed = gpu.memory_used ? (gpu.memory_used / (1024*1024*1024)).toFixed(1) : 'N/A';
-                            const memTotal = gpu.memory_total ? (gpu.memory_total / (1024*1024*1024)).toFixed(1) : 'N/A';
-                            const memPercent = gpu.memory_used && gpu.memory_total ? 
-                                ((gpu.memory_used / gpu.memory_total) * 100).toFixed(1) : 0;
+                            const memUsedBytes = gpu.memory_used || 0;
+                            const memTotalBytes = gpu.memory_total || 0;
+                            const memPercent = memUsedBytes && memTotalBytes ? 
+                                ((memUsedBytes / memTotalBytes) * 100).toFixed(1) : 0;
+                            
+                            // Affichage adaptatif MB/GB pour lisibilité
+                            let memUsedStr, memTotalStr;
+                            const memUsedGB = memUsedBytes / (1024*1024*1024);
+                            const memTotalGB = memTotalBytes / (1024*1024*1024);
+                            
+                            if (memUsedGB < 1.0) {
+                                // Affichage en MB si usage < 1GB
+                                const memUsedMB = memUsedBytes / (1024*1024);
+                                memUsedStr = `${memUsedMB.toFixed(0)} MB`;
+                                memTotalStr = `${memTotalGB.toFixed(1)} GB`;
+                            } else {
+                                // Affichage en GB pour usage significatif
+                                memUsedStr = `${memUsedGB.toFixed(1)} GB`;
+                                memTotalStr = `${memTotalGB.toFixed(1)} GB`;
+                            }
                             
                             gpuHtml += `
                                 <div style="margin: 8px 0;">
                                     <div><strong>🎮 ${gpu.name}</strong> (${gpu.backend})</div>
                                     <div style="margin: 4px 0;">
-                                        VRAM: ${memUsed}/${memTotal} GB (${memPercent}%)
+                                        VRAM: ${memUsedStr}/${memTotalStr} (${memPercent}%)
                                         <div class="progress-bar">
                                             <div class="progress-fill" style="width: ${memPercent}%"></div>
                                         </div>
@@ -53,42 +73,49 @@ async function refresh(){
                     }
                     document.getElementById('gpu-info').innerHTML = gpuHtml;
                 } else {
-                    document.getElementById('gpu-info').innerHTML = '❌ Erreur récupération GPU';
+                    gpuHtml = '⚠️ Aucun GPU CUDA détecté';
                 }
+                document.getElementById('gpu-info').innerHTML = gpuHtml;
             } catch(e) {
-                document.getElementById('gpu-info').innerHTML = '❌ GPU non disponible';
+                document.getElementById('gpu-info').innerHTML = `❌ Erreur récupération GPU: ${e.message}`;
             }
             
-            // Get system info
+            // Get system info via proxy local
             try {
-                const sysResp = await fetch(`${API_BASE}/api/system`);
+                const sysResp = await fetch('/api/system');
                 if (sysResp.ok) {
                     const sysData = await sysResp.json();
-                    document.getElementById('system-resources').innerHTML = `
-                        <div class="detail-grid">
-                            <div class="detail-item">
-                                <span class="detail-label">CPU:</span><br>
-                                ${sysData.cpu_percent || 0}% (${sysData.cpu_count || 'N/A'} cores)
+                    
+                    // Gestion d'erreur dans la réponse
+                    if (sysData.error) {
+                        document.getElementById('system-resources').innerHTML = `❌ Erreur système: ${sysData.error}`;
+                    } else {
+                        document.getElementById('system-resources').innerHTML = `
+                            <div class="detail-grid">
+                                <div class="detail-item">
+                                    <span class="detail-label">CPU:</span><br>
+                                    ${sysData.cpu_percent || 0}% (${sysData.cpu_count || 'N/A'} cores)
+                                </div>
+                                <div class="detail-item">
+                                    <span class="detail-label">RAM:</span><br>
+                                    ${sysData.memory_gb || 'N/A'} GB
+                                </div>
+                                <div class="detail-item">
+                                    <span class="detail-label">OS:</span><br>
+                                    ${sysData.platform || 'Unknown'}
+                                </div>
+                                <div class="detail-item">
+                                    <span class="detail-label">Backend:</span><br>
+                                    ${sysData.backend || 'Unknown'}
+                                </div>
                             </div>
-                            <div class="detail-item">
-                                <span class="detail-label">RAM:</span><br>
-                                ${sysData.memory_gb || 'N/A'} GB
-                            </div>
-                            <div class="detail-item">
-                                <span class="detail-label">OS:</span><br>
-                                ${sysData.platform || 'Unknown'}
-                            </div>
-                            <div class="detail-item">
-                                <span class="detail-label">Backend:</span><br>
-                                ${sysData.backend || 'Unknown'}
-                            </div>
-                        </div>
-                    `;
+                        `;
+                    }
                 } else {
-                    document.getElementById('system-resources').innerHTML = '❌ Erreur système';
+                    document.getElementById('system-resources').innerHTML = '❌ Erreur connexion système';
                 }
             } catch(e) {
-                document.getElementById('system-resources').innerHTML = '❌ Données système non disponibles';
+                document.getElementById('system-resources').innerHTML = `❌ Système non disponible: ${e.message}`;
             }
             
             // Get telemetry
@@ -248,6 +275,78 @@ code { font-size:0.7em; line-height:1.3em; display:block; white-space:pre-wrap; 
 @app.route("/")
 def mobile_dashboard():
     return render_template_string(TEMPLATE)
+
+@app.route('/api/gpu')
+def mobile_gpu_proxy():
+    """Proxy GPU info pour dashboard mobile"""
+    try:
+        response = requests.get('http://localhost:5030/api/gpu', timeout=5)
+        if response.status_code == 200:
+            data = response.json()
+            # S'assurer que la structure est correcte
+            if 'devices' not in data:
+                data = {"devices": data.get('gpus', []), "cuda_available": True}
+            return jsonify(data)
+        else:
+            return jsonify({
+                "devices": [],
+                "cuda_available": False,
+                "error": f"API returned {response.status_code}"
+            }), 200  # Retourner 200 pour éviter erreurs côté client
+    except Exception as e:
+        return jsonify({
+            "devices": [],
+            "cuda_available": False,
+            "error": f"Connexion API échoué: {str(e)}"
+        }), 200
+
+@app.route('/api/system')
+def mobile_system_proxy():
+    """Proxy System info pour dashboard mobile"""
+    try:
+        response = requests.get('http://localhost:5030/api/system', timeout=5)
+        if response.status_code == 200:
+            return jsonify(response.json())
+        else:
+            return jsonify({
+                "platform": "Unknown",
+                "cpu_count": 0,
+                "cpu_percent": 0,
+                "memory_gb": 0,
+                "backend": "Error",
+                "error": f"API returned {response.status_code}"
+            }), 200  # Retourner 200 pour éviter erreurs côté client
+    except Exception as e:
+        return jsonify({
+            "platform": "Unknown",
+            "cpu_count": 0,
+            "cpu_percent": 0,
+            "memory_gb": 0,
+            "backend": "API Error",
+            "error": f"Connexion échouée: {str(e)}"
+        }), 200
+
+@app.route('/health')
+def mobile_health_proxy():
+    """Proxy Health pour dashboard mobile"""
+    try:
+        response = requests.get('http://localhost:5030/health', timeout=5)
+        if response.status_code == 200:
+            return jsonify(response.json())
+        else:
+            return jsonify({
+                "status": "error",
+                "service": "vramancer-mobile",
+                "uptime": 0,
+                "error": f"API returned {response.status_code}"
+            }), 200  # Retourner 200 pour éviter erreurs côté client
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "service": "vramancer-mobile",
+            "uptime": 0,
+            "error": f"API non accessible: {str(e)}"
+        }), 200
 
 @app.route('/telemetry')
 def mobile_telemetry_proxy():
