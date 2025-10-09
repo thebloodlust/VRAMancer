@@ -73,9 +73,8 @@ async function refresh(){
                     }
                     document.getElementById('gpu-info').innerHTML = gpuHtml;
                 } else {
-                    gpuHtml = '⚠️ Aucun GPU CUDA détecté';
+                    document.getElementById('gpu-info').innerHTML = `❌ Erreur connexion GPU (Status: ${gpuResp.status})`;
                 }
-                document.getElementById('gpu-info').innerHTML = gpuHtml;
             } catch(e) {
                 document.getElementById('gpu-info').innerHTML = `❌ Erreur récupération GPU: ${e.message}`;
             }
