@@ -34,6 +34,12 @@ BUILD_DIR="build_macos"
 echo "📦 Version détectée : $VERSION"
 echo "📦 Archive : $ARCHIVE"
 
+# Nettoyer les extractions précédentes
+if [ -d "$BUILD_DIR" ]; then
+    echo "🧹 Nettoyage de l'extraction précédente..."
+    rm -rf "$BUILD_DIR"
+fi
+
 echo "📦 Extraction de l'archive..."
 tar -xzf "$ARCHIVE"
 
