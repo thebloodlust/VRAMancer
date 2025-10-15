@@ -1,0 +1,193 @@
+╔═══════════════════════════════════════════════════════════════════╗
+║              VRAMancer - Installateur macOS créé !                ║
+║                     Version 1.0.0 - 2025                          ║
+╚═══════════════════════════════════════════════════════════════════╝
+
+✅ AUDIT COMPLET EFFECTUÉ
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Le projet VRAMancer a été analysé en profondeur :
+• Architecture complète documentée
+• Tous les composants identifiés et inclus
+• Points d'entrée multiples disponibles
+• Documentation complète en FR/EN
+
+✅ INSTALLATEUR macOS CRÉÉ
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📦 Fichiers générés :
+
+1. VRAMancer-1.0.0-macOS.tar.gz (1.6 MB)
+   → Archive contenant le bundle .app complet
+
+2. create_dmg_on_macos.sh
+   → Script pour créer le .dmg sur macOS
+
+3. build_macos_dmg.sh
+   → Script de build (pour régénérer si besoin)
+
+4. GUIDE_INSTALLATION_MACOS.md
+   → Guide complet d'installation et utilisation
+
+5. AUDIT_ET_DMG_RESUME.md
+   → Résumé technique de l'audit et du build
+
+📋 CONTENU DU BUNDLE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+VRAMancer.app contient :
+✓ API REST (Flask, port 5030)
+✓ System Tray (PyQt5)
+✓ Dashboard Web avancé
+✓ Dashboard Qt natif
+✓ Dashboard Mobile responsive
+✓ Orchestrateur IA multi-GPU
+✓ Clustering automatique
+✓ Monitoring temps réel
+✓ Documentation complète
+✓ Exemples et quickstart
+
+🚀 POUR INSTALLER SUR VOTRE MAC
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ÉTAPE 1 : Transférer les fichiers
+──────────────────────────────────
+Copiez sur votre Mac :
+• VRAMancer-1.0.0-macOS.tar.gz
+• create_dmg_on_macos.sh
+
+ÉTAPE 2 : Créer le .dmg
+────────────────────────
+Ouvrez un Terminal sur votre Mac :
+
+  cd ~/Downloads  # (ou dossier des fichiers)
+  chmod +x create_dmg_on_macos.sh
+  ./create_dmg_on_macos.sh
+
+→ Crée : VRAMancer-1.0.0-macOS.dmg
+
+ÉTAPE 3 : Installer
+────────────────────
+• Double-cliquez sur VRAMancer-1.0.0-macOS.dmg
+• Glissez VRAMancer.app dans Applications
+• Lancez depuis Launchpad
+
+ÉTAPE 4 : Premier lancement
+────────────────────────────
+• Double-clic sur VRAMancer dans Applications
+• Si "App non vérifiée" : clic droit → Ouvrir
+• Installation auto des dépendances (2-5 min)
+• API démarre sur http://localhost:5030
+• Interface s'ouvre automatiquement
+
+🎮 INTERFACES DISPONIBLES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. System Tray (barre de menu)
+   → Icône en haut à droite
+   → Nécessite PyQt5 (auto-installé)
+
+2. Dashboard Web
+   → http://localhost:5030
+   → Interface moderne
+
+3. Dashboard Qt
+   → Interface graphique native
+
+4. Dashboard Mobile
+   → http://localhost:5003
+   → Design responsive
+
+🔧 LANCEMENT MANUEL (si besoin)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Terminal :
+  cd /Applications/VRAMancer.app/Contents/MacOS
+  source .venv/bin/activate
+  ./vrm_start.sh
+
+Ou directement :
+  open -a VRAMancer
+
+📚 DOCUMENTATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+• GUIDE_INSTALLATION_MACOS.md  → Guide complet
+• AUDIT_ET_DMG_RESUME.md       → Résumé technique
+• README.md                    → Doc principale
+• MANUEL_FR.md                 → Guide français
+• MANUAL_EN.md                 → English manual
+
+Web : http://localhost:5030/docs (quand API lancée)
+
+🛠️ DÉPANNAGE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+API ne démarre pas :
+  lsof -i :5030          # Vérifier le port
+  kill -9 <PID>          # Libérer le port
+
+Python non trouvé :
+  https://www.python.org/downloads/macos/
+
+PyQt5 manquant :
+  pip3 install PyQt5
+
+Logs :
+  ~/.vramancer/logs/api.log
+  ~/.vramancer/logs/app.log
+
+📞 SUPPORT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+• GitHub : https://github.com/thebloodlust/VRAMancer
+• Issues : https://github.com/thebloodlust/VRAMancer/issues
+• Docs   : http://localhost:5030/docs
+
+📊 CARACTÉRISTIQUES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+✓ Orchestration IA multi-GPU
+✓ Support CUDA, Metal (Apple Silicon), ROCm
+✓ Répartition automatique VRAM
+✓ Clustering distribué
+✓ Dashboard temps réel
+✓ API REST complète
+✓ WebSocket temps réel
+✓ Mobile friendly
+✓ Auto-scaling
+✓ Monitoring avancé
+✓ Multi-backend (PyTorch, ONNX, TensorRT, etc.)
+
+🎯 CHECKLIST
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+☐ Fichiers transférés sur Mac
+☐ create_dmg_on_macos.sh exécuté
+☐ VRAMancer-1.0.0-macOS.dmg créé
+☐ VRAMancer.app installé dans Applications
+☐ Premier lancement effectué
+☐ Dépendances installées
+☐ API accessible (http://localhost:5030/health)
+☐ Interface fonctionnelle
+☐ Documentation consultée
+
+✨ PRÊT À UTILISER !
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+VRAMancer est maintenant prêt à orchestrer vos modèles IA !
+
+Commande rapide :
+  open -a VRAMancer
+
+Ou depuis Launchpad :
+  Chercher "VRAMancer" → Cliquer
+
+───────────────────────────────────────────────────────────────────
+
+Version  : 1.0.0
+Date     : Octobre 2025
+Licence  : MIT
+Créateur : Jérémie / thebloodlust
+
+───────────────────────────────────────────────────────────────────
