@@ -1,5 +1,98 @@
 ## Changelog
 
+### 1.1.0 (2025-10-15) - Production-Ready Release 🚀
+
+**Major Changes:**
+- **API Production-Ready**: Nouveau `core/production_api.py` avec logging structuré, error handling robuste, validation complète
+- **Logging Unifié**: Migration de `print()` vers logger structuré avec support JSON, rotation, multi-niveaux
+- **Sécurité Renforcée**: Documentation complète sécurité production, validation automatique, alertes credentials par défaut
+- **Scripts de Validation**: `scripts/check_production_ready.sh` - validation automatique configuration production
+- **Migration Guide**: Documentation complète migration dev → production
+
+**Security Enhancements:**
+- ⚠️ **WARNING**: Credentials admin/admin par défaut documentés comme dangereux
+- Ajout `VRM_DISABLE_DEFAULT_ADMIN` pour désactiver compte par défaut
+- Validation obligatoire `VRM_AUTH_SECRET` (32+ caractères) en production
+- Script de détection secrets hardcodés et debug mode activé
+- Guide complet sécurisation: `SECURITY_PRODUCTION.md`
+
+**API Improvements:**
+- Health check endpoints: `/health`, `/ready` (Kubernetes/Docker ready)
+- Error handlers structurés (404, 500) avec logging
+- Middleware request/response logging (mode debug)
+- Validation robuste GPU/System/Nodes endpoints
+- Gestion d'erreurs complète avec fallbacks
+
+**Logging:**
+- Logger centralisé dans `core/logger.py` (existant, documenté)
+- Support JSON structuré (ELK/Splunk ready)
+- Rotation automatique logs (10 MB, 5 backups)
+- Colored formatter pour développement
+- Context logging pour traçabilité
+
+**Documentation:**
+- `SECURITY_PRODUCTION.md` (375 lignes) : Guide sécurité complet, checklist pré-production
+- `MIGRATION_GUIDE.md` (420 lignes) : Guide migration dev → production
+- `scripts/check_production_ready.sh` : Validation automatique (8 sections de vérification)
+
+**Deployment:**
+- Exemples systemd, Docker, Kubernetes
+- Configuration `.env.production` type
+- Scripts de rollback
+- Monitoring Prometheus ready
+
+**Breaking Changes:**
+- **AUCUN** : 100% rétrocompatible via `api.py` wrapper
+- Mode simple accessible via `VRM_PRODUCTION=0`
+- Migration progressive recommandée
+
+**Environment Variables (New):**
+- `VRM_PRODUCTION` : Active mode production (défaut: 1)
+- `VRM_DISABLE_DEFAULT_ADMIN` : Désactive admin/admin (défaut: 0)
+- `VRM_LOG_JSON` : Format JSON pour logs (défaut: 0)
+- `VRM_LOG_CONSOLE` : Active sortie console (défaut: 1)
+- `VRM_LOG_DIR` : Répertoire logs (défaut: logs/)
+
+**Migration Path:**
+```bash
+# Ancien (dev)
+python api_simple.py
+
+# Nouveau (production)
+export VRM_AUTH_SECRET=$(openssl rand -hex 32)
+export VRM_PRODUCTION=1
+python api.py
+```
+
+**Files Added:**
+- `core/production_api.py` : API production-ready
+- `api.py` : Wrapper avec fallback
+- `SECURITY_PRODUCTION.md` : Guide sécurité
+- `MIGRATION_GUIDE.md` : Guide migration
+- `scripts/check_production_ready.sh` : Script validation
+
+**Files Preserved:**
+- `api_simple.py` : Conservé pour développement/debug
+- Tous les dashboards `*_simple.py` : Conservés (migration future)
+
+**Testing:**
+- Validation script testé sur Linux/macOS
+- API production testée endpoints critiques
+- Fallback api_simple.py fonctionnel
+
+**Known Issues:**
+- Dashboards `*_simple.py` toujours en mode prototype (migration à venir)
+- `debug=True` présent dans certains fichiers dashboard (warning émis)
+
+**Recommendations:**
+1. Exécuter `./scripts/check_production_ready.sh` avant déploiement
+2. Lire `SECURITY_PRODUCTION.md` intégralement
+3. Changer mot de passe admin immédiatement
+4. Définir `VRM_AUTH_SECRET` en production
+5. Activer logging JSON en production
+
+---
+
 ### 0.2.4 (2025-10-04)
 Enhancements:
 - Fallback tokenizer Python pur (`BasicTokenizer`) activable via `VRM_FORCE_BASIC_TOKENIZER=1` ou automatiquement si `transformers` indisponible.
