@@ -12,7 +12,7 @@ echo ""
 
 # Variables
 APP_NAME="VRAMancer"
-VERSION="1.0.0"
+VERSION="1.1.0"
 DMG_NAME="${APP_NAME}-${VERSION}-macOS"
 BUILD_DIR="build_macos"
 APP_BUNDLE="${BUILD_DIR}/${APP_NAME}.app"
