@@ -1,657 +1,330 @@
-<div align="center"># 🆕 Nouveautés 2025
+# 🆕 Nouveautés 2025
 
-  <img src="vramancer.png" width="120" alt="VRAMancer logo"/>
+- **API No-code Workflows IA** : création et exécution de pipelines IA sans coder
+- **Dashboard web/mobile responsive** : supervision avancée, heatmap, actions distantes, logs, mobile friendly
+- **Sandbox / Digital Twin avancé** : simulation, replay, prédiction, tests
+- **Auditabilité / XAI / Fairness** : explications IA, logs, rapport d’audit, conformité
+- **Actions distantes avancées** : auto-scale, failover, migration live, reboot, offload
+- **Packaging universel** : archive unique avec tous les installateurs, docs, guides, rapport PDF
+- **Guide ultra-débutant** : instructions simplifiées pour chaque OS
+- **Modules premium, edge, mobile, cloud, marketplace, onboarding vidéo**
 
-  <h1>VRAMancer</h1>- **API No-code Workflows IA** : création et exécution de pipelines IA sans coder
+---
 
-  <p><b>Orchestrateur IA multi-GPU pour modèles d'apprentissage profond</b></p>- **Dashboard web/mobile responsive** : supervision avancée, heatmap, actions distantes, logs, mobile friendly
+# 🚀 Installation ultra-débutant
 
-  <p>- **Sandbox / Digital Twin avancé** : simulation, replay, prédiction, tests
-
-    <a href="https://github.com/thebloodlust/VRAMancer/releases"><img src="https://img.shields.io/github/v/release/thebloodlust/VRAMancer" alt="Release"/></a>- **Auditabilité / XAI / Fairness** : explications IA, logs, rapport d’audit, conformité
-
-    <a href="https://github.com/thebloodlust/VRAMancer/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License"/></a>- **Actions distantes avancées** : auto-scale, failover, migration live, reboot, offload
-
-    <a href="https://github.com/thebloodlust/VRAMancer/stargazers"><img src="https://img.shields.io/github/stars/thebloodlust/VRAMancer" alt="Stars"/></a>- **Packaging universel** : archive unique avec tous les installateurs, docs, guides, rapport PDF
-
-  </p>- **Guide ultra-débutant** : instructions simplifiées pour chaque OS
-
-</div>- **Modules premium, edge, mobile, cloud, marketplace, onboarding vidéo**
-
-
-
-------
-
-
-
-## 🎯 Qu'est-ce que VRAMancer ?# 🚀 Installation ultra-débutant
-
-
-
-**VRAMancer** est un orchestrateur IA permettant d'exécuter des modèles de deep learning sur plusieurs GPUs (même hétérogènes) avec une gestion intelligente de la VRAM.
 
 ## 📦 Installation du bundle ZIP
+### ⚠️ Astuce Windows : chemins et nom de dossier
 
-### 🚀 Pourquoi VRAMancer ?### ⚠️ Astuce Windows : chemins et nom de dossier
+Si vous téléchargez plusieurs fois l’archive ZIP, Windows ajoute une parenthèse et un chiffre au nom du dossier (ex : `VRAMancer-main (2)`).
+Pour éviter les problèmes de chemins dans les scripts, renommez le dossier extrait en `VRAMancer-main` (sans parenthèse ni chiffre) avant de lancer l’installation.
+Lancez toujours les scripts depuis le dossier `release_bundle`.
+### ⚠️ Note Windows : Installation de Rust
 
+Certains modules (ex : tokenizers) nécessitent Rust pour s’installer sous Windows. Si une erreur apparaît lors de l’installation, installez Rust via :
 
-
-- **Optimisation VRAM** : Répartition automatique de la charge mémoireSi vous téléchargez plusieurs fois l’archive ZIP, Windows ajoute une parenthèse et un chiffre au nom du dossier (ex : `VRAMancer-main (2)`).
-
-- **Multi-GPU** : Support CUDA, Metal (Apple Silicon), ROCmPour éviter les problèmes de chemins dans les scripts, renommez le dossier extrait en `VRAMancer-main` (sans parenthèse ni chiffre) avant de lancer l’installation.
-
-- **Clustering** : Découverte automatique et orchestration distribuéeLancez toujours les scripts depuis le dossier `release_bundle`.
-
-- **Interfaces multiples** : System Tray, Web, Qt, Mobile, CLI### ⚠️ Note Windows : Installation de Rust
-
-- **Plug & Play** : Configuration automatique, zéro configuration
-
-- **Open Source** : Licence MIT, gratuit et extensibleCertains modules (ex : tokenizers) nécessitent Rust pour s’installer sous Windows. Si une erreur apparaît lors de l’installation, installez Rust via :
-
-
-
----https://
-
+https://
 rustup.rs/
-
-## 📦 Installation rapide
 
 Puis relancez l’installation.
 
-### macOS
 
-
-
-```bash1. Téléchargez le fichier : `vramancer_release_bundle.zip`
-
-# Option 1 : Depuis une Release (recommandé)2. Extrayez l’archive ZIP :
-
-curl -L -O https://github.com/thebloodlust/VRAMancer/releases/latest/download/VRAMancer-1.0.0-macOS.tar.gz	```bash
-
-tar -xzf VRAMancer-1.0.0-macOS.tar.gz	unzip vramancer_release_bundle.zip
-
-chmod +x create_dmg_on_macos.sh	```
-
-./create_dmg_on_macos.sh3. Ouvrez le dossier extrait : `release_bundle`
-
-open VRAMancer-1.0.0-macOS.dmg4. Choisissez votre OS :
-
+1. Téléchargez le fichier : `vramancer_release_bundle.zip`
+2. Extrayez l’archive ZIP :
+	```bash
+	unzip vramancer_release_bundle.zip
+	```
+3. Ouvrez le dossier extrait : `release_bundle`
+4. Choisissez votre OS :
 	- **Linux** : lancez `installers/install_linux.sh` ou installez le `.deb`
+	- **macOS** : lancez `installers/install_macos.sh`
+	- **Windows** : lancez `installers/install_windows.bat`
+5. Suivez les instructions à l’écran
+6. Consultez le guide ultra-débutant dans `docs/INSTALL_ULTRA_DEBUTANT.md` (ajouté)
 
-# Option 2 : Depuis les sources	- **macOS** : lancez `installers/install_macos.sh`
-
-git clone https://github.com/thebloodlust/VRAMancer.git	- **Windows** : lancez `installers/install_windows.bat`
-
-cd VRAMancer5. Suivez les instructions à l’écran
-
-chmod +x build_macos_dmg.sh6. Consultez le guide ultra-débutant dans `docs/INSTALL_ULTRA_DEBUTANT.md` (ajouté)
-
-./build_macos_dmg.sh
-
-```Tout est automatisé, plug-and-play, multi-OS, dashboards auto, cluster auto, onboarding vidéo/interactive.
-
-
-
-📖 **Documentation** : [GUIDE_INSTALLATION_MACOS.md](GUIDE_INSTALLATION_MACOS.md)----
-
-
-
-### Linux# �📝 Rapport d’audit complet – Octobre 2025
-
-
-
-```bashLe projet VRAMancer est complet, modulaire, disruptif, prêt pour la production et l’extension. Toutes les briques demandées sont présentes : orchestration IA, clustering, dashboards, sécurité, marketplace, XAI, digital twin, API no-code, audit, actions distantes, mobile, edge, cloud, onboarding, packaging pro, tests, documentation.
-
-git clone https://github.com/thebloodlust/VRAMancer.git
-
-cd VRAMancer**Modules principaux** : Orchestration IA multi-backend, découpage adaptatif VRAM, clustering dynamique, dashboards (Qt, Tk, Web, Mobile, CLI), supervision avancée, marketplace/plugins IA générative, auto-réparation, confidential computing, federated learning, digital twin, API no-code, auditabilité/XAI/fairness, orchestration cloud/edge/hybride, documentation complète.
-
-bash Install.sh
-
-source .venv/bin/activate**Packaging/installateurs** : setup.py, build_deb.sh, Install.sh, installateurs Linux/macOS/Windows, Makefile, Makefile.lite, build_lite.sh, archive, .deb, scripts, version Lite CLI, benchmarks, onboarding, dashboards auto, cluster auto.
-
-./vrm_start.sh
-
-```**Documentation** : README.md complet, docs/ guides API, quickstart, sécurité, mobile, collective, automation, edge, hybrid cloud, README_LITE.md, ONBOARDING.md, MANUEL_FR.md, MANUAL_EN.md, RELEASE.md, ROADMAP_IDEES.md, PROTECT.md.
-
-
-
-📖 **Documentation** : [Install.sh](Install.sh)**Tests/validation** : tests/ unitaires, stress, scheduler, monitor, imports, testutils, scripts de build, benchmark, install, onboarding, plugin, automatisés.
-
-
-
-### Windows**À améliorer/vérifier** : Inclusion des nouveaux modules dans installateurs et packaging, mise à jour du README et du guide d’installation ultra-débutant, cohérence des versions/dépendances, tests sur chaque OS, publication à jour sur le repository en ligne.
-
-
-
-```bash----
-
-git clone https://github.com/thebloodlust/VRAMancer.git
-
-cd VRAMancer<div align="center">
-
-.\installers\install_windows.bat	<img src="vramancer.png" width="120" alt="VRAMancer logo"/>
-
-```	<h1>VRAMancer</h1>
-
-	<b>Orchestrateur IA universel, multi-backend, edge/cloud, plug-and-play, sécurité, dashboards, marketplace, automatisation, XAI, digital twin…</b><br>
-
-📖 **Documentation** : [INSTALL_WINDOWS.md](INSTALL_WINDOWS.md)	<a href="https://github.com/thebloodlust/VRAMancer/actions/workflows/ci.yml"><img src="https://github.com/thebloodlust/VRAMancer/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-
-</div>
-
----
+Tout est automatisé, plug-and-play, multi-OS, dashboards auto, cluster auto, onboarding vidéo/interactive.
 
 ----
 
-## 🎮 Démarrage rapide
+# �📝 Rapport d’audit complet – Octobre 2025
+
+Le projet VRAMancer est complet, modulaire, disruptif, prêt pour la production et l’extension. Toutes les briques demandées sont présentes : orchestration IA, clustering, dashboards, sécurité, marketplace, XAI, digital twin, API no-code, audit, actions distantes, mobile, edge, cloud, onboarding, packaging pro, tests, documentation.
+
+**Modules principaux** : Orchestration IA multi-backend, découpage adaptatif VRAM, clustering dynamique, dashboards (Qt, Tk, Web, Mobile, CLI), supervision avancée, marketplace/plugins IA générative, auto-réparation, confidential computing, federated learning, digital twin, API no-code, auditabilité/XAI/fairness, orchestration cloud/edge/hybride, documentation complète.
+
+**Packaging/installateurs** : setup.py, build_deb.sh, Install.sh, installateurs Linux/macOS/Windows, Makefile, Makefile.lite, build_lite.sh, archive, .deb, scripts, version Lite CLI, benchmarks, onboarding, dashboards auto, cluster auto.
+
+**Documentation** : README.md complet, docs/ guides API, quickstart, sécurité, mobile, collective, automation, edge, hybrid cloud, README_LITE.md, ONBOARDING.md, MANUEL_FR.md, MANUAL_EN.md, RELEASE.md, ROADMAP_IDEES.md, PROTECT.md.
+
+**Tests/validation** : tests/ unitaires, stress, scheduler, monitor, imports, testutils, scripts de build, benchmark, install, onboarding, plugin, automatisés.
+
+**À améliorer/vérifier** : Inclusion des nouveaux modules dans installateurs et packaging, mise à jour du README et du guide d’installation ultra-débutant, cohérence des versions/dépendances, tests sur chaque OS, publication à jour sur le repository en ligne.
+
+----
+
+<div align="center">
+	<img src="vramancer.png" width="120" alt="VRAMancer logo"/>
+	<h1>VRAMancer</h1>
+	<b>Orchestrateur IA universel, multi-backend, edge/cloud, plug-and-play, sécurité, dashboards, marketplace, automatisation, XAI, digital twin…</b><br>
+	<a href="https://github.com/thebloodlust/VRAMancer/actions/workflows/ci.yml"><img src="https://github.com/thebloodlust/VRAMancer/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+</div>
+
+----
 
 ## 🗂️ Sommaire
-
-### Lancer VRAMancer- [Installation ultra-débutant / Ultra-beginner install](#installation-ultra-débutant--ultra-beginner-install)
-
+- [Installation ultra-débutant / Ultra-beginner install](#installation-ultra-débutant--ultra-beginner-install)
 - [Fonctionnalités clés / Key features](#fonctionnalités-clés--key-features)
-
-```bash- [Super features disruptives](#super-features-disruptives)
-
-# Méthode 1 : Script de démarrage (toutes plateformes)- [Tableau des modules](#tableau-des-modules)
-
-./vrm_start.sh    # Linux/macOS- [Documentation & guides](#documentation--guides)
-
-.\vrm_start.bat   # Windows- [FAQ & Support](#faq--support)
-
+- [Super features disruptives](#super-features-disruptives)
+- [Tableau des modules](#tableau-des-modules)
+- [Documentation & guides](#documentation--guides)
+- [FAQ & Support](#faq--support)
 - [Roadmap](#roadmap)
 
-# Méthode 2 : Commande directe
-
-python api_simple.py---
-
-```
+---
 
 ## 🚀 Installation ultra-débutant / Ultra-beginner install
 
-### Interfaces disponibles
-
 Chemin rapide (Linux/macOS) :
-
-Une fois lancé, choisissez votre interface :```bash
-
+```bash
 git clone https://github.com/thebloodlust/VRAMancer.git \
-
-1. **System Tray** - Icône dans la barre de menu (recommandé)	&& cd VRAMancer \
-
-2. **Dashboard Web** - http://localhost:5030	&& bash Install.sh \
-
-3. **Dashboard Qt** - Interface graphique native	&& source .venv/bin/activate \
-
-4. **Dashboard Mobile** - http://localhost:5003	&& python -m core.api.unified_api
-
-5. **CLI** - Interface ligne de commande```
-
+	&& cd VRAMancer \
+	&& bash Install.sh \
+	&& source .venv/bin/activate \
+	&& python -m core.api.unified_api
+```
 Puis ouvrir: `http://localhost:5030/api/version`
 
----
-
 ### 🧭 Parcours express (Étapes 1 → 5)
-
-## ✨ Fonctionnalités principales| Étape | Action | Commandes / Détails |
-
+| Étape | Action | Commandes / Détails |
 |-------|--------|---------------------|
-
-### 🚀 Orchestration IA| 1 | Cloner & créer venv | `git clone ... && cd VRAMancer && bash Install.sh` (crée `.venv`) |
-
+| 1 | Cloner & créer venv | `git clone ... && cd VRAMancer && bash Install.sh` (crée `.venv`) |
 | 2 | Vérifier dépendances lourdes optionnelles | GPU libs (CUDA/ROCm), zstd/lz4, tracing OTEL (facultatif) |
-
-- **Multi-backend** : PyTorch, ONNX, TensorRT, vLLM| 3 | Lancer serveur de base | `python -m vramancer.main` (auto backend heuristique) |
-
-- **Découpage adaptatif** : Répartition automatique des modèles| 4 | Ouvrir dashboard / métriques | Web: `--mode web`, Prometheus: `curl :9108/metrics` |
-
-- **Load balancing** : Distribution intelligente de la charge| 5 | Activer features avancées | HA: `export VRM_HA_REPLICATION=1`; Tracing: `export VRM_TRACING=1`; Fastpath: `export VRM_FASTPATH_IF=eth0` |
-
-- **Auto-scaling** : Ajustement dynamique des ressources
+| 3 | Lancer serveur de base | `python -m vramancer.main` (auto backend heuristique) |
+| 4 | Ouvrir dashboard / métriques | Web: `--mode web`, Prometheus: `curl :9108/metrics` |
+| 5 | Activer features avancées | HA: `export VRM_HA_REPLICATION=1`; Tracing: `export VRM_TRACING=1`; Fastpath: `export VRM_FASTPATH_IF=eth0` |
 
 Cheat‑sheet rapide (désactiver limites pour tests) :
-
-### 🌐 Clustering distribué```bash
-
+```bash
 export VRM_DISABLE_RATE_LIMIT=1
-
-- **Découverte automatique** : Plug & Play, zéro configurationexport VRM_TEST_MODE=1
-
-- **Hétérogène** : NVIDIA + AMD + Apple Silicon dans le même clusterpytest -q
-
-- **Failover** : Haute disponibilité automatique```
-
-- **Migration live** : Déplacement des modèles sans interruption
+export VRM_TEST_MODE=1
+pytest -q
+```
 
 **Windows** : `installers/install_windows.bat` (crée venv, installe deps, lance systray)<br>
-
-### 📊 Monitoring temps réelAlternative tout-en-un : `installers/start_windows_all.bat` (installe/MAJ deps + API + Web + Qt)
-
+Alternative tout-en-un : `installers/start_windows_all.bat` (installe/MAJ deps + API + Web + Qt)
 **Linux** : `bash installers/install_linux.sh` (option GUI + API)<br>
+**macOS** : `bash installers/install_macos.sh`
 
-- **Dashboard web** : Métriques GPU, VRAM, températures**macOS** : `bash installers/install_macos.sh`
-
-- **Heatmaps** : Visualisation de l'utilisation des ressources
-
-- **Alertes** : Notifications personnalisablesTout est guidé, plug-and-play, multi-OS, dashboards auto, cluster auto, onboarding vidéo/interactive.
-
-- **Logs** : Traçabilité complète
+Tout est guidé, plug-and-play, multi-OS, dashboards auto, cluster auto, onboarding vidéo/interactive.
 
 ---
-
-### 🔒 Sécurité
 
 ### 🌐 Endpoints principaux (API unifiée)
 
-- **Authentification** : JWT, OAuth2
-
-- **Chiffrement** : TLS/SSL, chiffrement des données| Endpoint | Description |
-
-- **Audit** : Logs détaillés, conformité|----------|-------------|
-
-- **Isolation** : Sandboxing, conteneurisation| `GET /api/version` | Version backend |
-
+| Endpoint | Description |
+|----------|-------------|
+| `GET /api/version` | Version backend |
 | `GET /api/health` | Healthcheck léger (utilisé par Docker HEALTHCHECK) |
-
----| `GET /api/env` | Statut runtime (features actives, flags environnement) |
-
+| `GET /api/env` | Statut runtime (features actives, flags environnement) |
 | `POST /api/workflows` | Crée un workflow no-code (Pydantic validation) |
-
-## 📚 Documentation| `GET /api/workflows` | Liste workflows (mémoire + persistence sqlite si activée) |
-
+| `GET /api/workflows` | Liste workflows (mémoire + persistence sqlite si activée) |
 | `POST /api/federated/round/start` | Démarre un round fédéré |
-
-### Guides d'installation| `POST /api/federated/round/submit` | Soumet une mise à jour (poids + valeur) |
-
+| `POST /api/federated/round/submit` | Soumet une mise à jour (poids + valeur) |
 | `GET /api/federated/round/aggregate` | Agrégation pondérée (clipping + bruit optionnel) |
-
-- [📘 macOS](GUIDE_INSTALLATION_MACOS.md) - Installation complète sur macOS| `GET /api/federated/secure` | État secure aggregation (masquage basique) |
-
-- [📗 Linux](Install.sh) - Script d'installation Linux| `POST /api/federated/secure {enabled:true|false}` | Active/désactive masquage simple |
-
-- [📙 Windows](INSTALL_WINDOWS.md) - Guide d'installation Windows| `POST /api/xai/explain` | Explication XAI (baseline feature attribution) |
-
+| `GET /api/federated/secure` | État secure aggregation (masquage basique) |
+| `POST /api/federated/secure {enabled:true|false}` | Active/désactive masquage simple |
+| `POST /api/xai/explain` | Explication XAI (baseline feature attribution) |
 | `GET /api/xai/explainers` | Liste des explainers disponibles |
-
-### Guides utilisateur| `GET /api/marketplace/plugins` | Plugins + signatures (sandbox run expérimental) |
-
+| `GET /api/marketplace/plugins` | Plugins + signatures (sandbox run expérimental) |
 | `POST /api/quota/reset` | Reset compteurs quotas (outillage/tests) |
 
-- [🇫🇷 Manuel français](MANUEL_FR.md)
-
-- [🇬🇧 English manual](MANUAL_EN.md)Chaque réponse inclut un header `X-Request-ID` (corrélation logs). Vous pouvez fournir votre propre identifiant via le même header dans la requête.
-
-- [🚀 Démarrage rapide](LISEZMOI_MACOS.txt)
+Chaque réponse inclut un header `X-Request-ID` (corrélation logs). Vous pouvez fournir votre propre identifiant via le même header dans la requête.
 
 ### 🔐 Authentification forte (JWT)
 
-### Guides développeur
-
 Flux supporté (prototype production-ready minimal) :
-
-- [🤝 Contribution](CONTRIBUTING.md)1. `POST /api/login {"username":"admin","password":"admin"}` → tokens `{access, refresh, expires_in}`
-
-- [📋 Changelog](CHANGELOG.md)2. Appels protégés: ajouter l'en-tête `Authorization: Bearer <access>`
-
-- [🗺️ Roadmap](ROADMAP_IDEES.md)3. Rafraîchissement: `POST /api/token/refresh {"refresh":"<refresh_token>"}` → nouveaux tokens
-
-- [🔐 Sécurité](PROTECT.md)
+1. `POST /api/login {"username":"admin","password":"admin"}` → tokens `{access, refresh, expires_in}`
+2. Appels protégés: ajouter l'en-tête `Authorization: Bearer <access>`
+3. Rafraîchissement: `POST /api/token/refresh {"refresh":"<refresh_token>"}` → nouveaux tokens
 
 Variables d'environnement:
-
-### Guides techniques| Variable | Rôle | Défaut |
-
+| Variable | Rôle | Défaut |
 |----------|------|--------|
+| VRM_AUTH_SECRET | Secret signature JWT HS256 | auto-généré (dev) |
+| VRM_AUTH_EXP | Durée access token (s) | 900 |
+| VRM_AUTH_REFRESH_EXP | Durée refresh token (s) | 86400 |
 
-- [🔬 Audit complet](AUDIT_ET_DMG_RESUME.md)| VRM_AUTH_SECRET | Secret signature JWT HS256 | auto-généré (dev) |
-
-- [🎯 Mission accomplie](MISSION_ACCOMPLIE.md)| VRM_AUTH_EXP | Durée access token (s) | 900 |
-
-- [📦 Création de Release](GUIDE_GITHUB_RELEASE.md)| VRM_AUTH_REFRESH_EXP | Durée refresh token (s) | 86400 |
-
-
-
----Exemple rapide:
-
+Exemple rapide:
 ```bash
-
-## 🛠️ Configurationcurl -s -X POST -H 'Content-Type: application/json' \
-
+curl -s -X POST -H 'Content-Type: application/json' \
 	-d '{"username":"admin","password":"admin"}' http://localhost:5030/api/login | jq .
-
-### PrérequisACCESS=... # insérer access renvoyé
-
+ACCESS=... # insérer access renvoyé
 curl -H "Authorization: Bearer $ACCESS" http://localhost:5030/api/workflows
-
-- **Python** 3.9 ou supérieur```
-
-- **Espace disque** : 2 GB minimum
-
-- **Mémoire** : 4 GB RAM minimumNOTE: En production changer immédiatement le mot de passe admin et définir `VRM_AUTH_SECRET`.
-
-- **GPU** (optionnel) : NVIDIA, AMD ou Apple Silicon
-
-### 🪟 Note Windows (Dashboards)
-
-### Dépendances principalesSi `flask_socketio` ou `torch` ne sont pas installés, les dashboards Web / Qt démarrent en mode dégradé (pas de temps réel SocketIO, certaines fonctions d’offload inactives). Pour l’expérience complète :
-
-```bash
-
-```txtpip install flask-socketio torch
-
-torch==2.2.0```
-
-transformers==4.34.0Les wrappers se trouvent sous `installers/dashboard/` et redirigent vers `dashboard/`.
-
-flask==3.0.2
-
-PyQt5 (optionnel, pour GUI)Mode ultra-léger forcé (pas de torch / transformers) :
-
-``````bat
-
-set VRM_DASHBOARD_MINIMAL=1
-
-Voir [requirements.txt](requirements.txt) pour la liste complète.python installers\dashboard\dashboard_web.py
-
 ```
 
----
+NOTE: En production changer immédiatement le mot de passe admin et définir `VRM_AUTH_SECRET`.
+
+### 🪟 Note Windows (Dashboards)
+Si `flask_socketio` ou `torch` ne sont pas installés, les dashboards Web / Qt démarrent en mode dégradé (pas de temps réel SocketIO, certaines fonctions d’offload inactives). Pour l’expérience complète :
+```bash
+pip install flask-socketio torch
+```
+Les wrappers se trouvent sous `installers/dashboard/` et redirigent vers `dashboard/`.
+
+Mode ultra-léger forcé (pas de torch / transformers) :
+```bat
+set VRM_DASHBOARD_MINIMAL=1
+python installers\dashboard\dashboard_web.py
+```
 
 Fallback tokenizer (environnements Windows sans Rust / build tokenizers) :
-
-## 🎯 Cas d'usage```bash
-
+```bash
 export VRM_FORCE_BASIC_TOKENIZER=1  # force BasicTokenizer Python (très simple)
-
-### 🧠 Pour les développeurs IA# ou pour tenter version lente transformers avant fallback
-
+# ou pour tenter version lente transformers avant fallback
 export USE_SLOW_TOKENIZER=1
+```
+Variables supplémentaires utiles : `VRM_FORCE_BASIC_TOKENIZER`, `USE_SLOW_TOKENIZER`.
 
-- Orchestrer des modèles LLM sur plusieurs GPUs```
+Variables utiles : `VRM_UNIFIED_API_QUOTA`, `VRM_READ_ONLY`, `VRM_LOG_JSON`, `VRM_REQUEST_LOG`, `VRM_DISABLE_SOCKETIO`.
 
-- Optimiser l'utilisation de la VRAMVariables supplémentaires utiles : `VRM_FORCE_BASIC_TOKENIZER`, `USE_SLOW_TOKENIZER`.
-
-- Benchmarker les performances
-
-- Expérimenter avec différents backendsVariables utiles : `VRM_UNIFIED_API_QUOTA`, `VRM_READ_ONLY`, `VRM_LOG_JSON`, `VRM_REQUEST_LOG`, `VRM_DISABLE_SOCKETIO`.
-
-
-
-### 👥 Pour les équipes#### ⚠️ Windows : erreur build `tokenizers` / `link.exe not found`
-
+#### ⚠️ Windows : erreur build `tokenizers` / `link.exe not found`
 Si l'installation échoue sur `tokenizers` (compilation Rust/MSVC) avec Python 3.12 :
-
-- Dashboard de supervision centralisé1. Solution rapide (recommended) : utiliser le fichier `requirements-windows.txt` adapté :
-
-- Clustering multi-machines automatique	```bash
-
-- Monitoring temps réel des ressources	pip install -r requirements-windows.txt
-
-- Collaboration sur projets IA	```
-
+1. Solution rapide (recommended) : utiliser le fichier `requirements-windows.txt` adapté :
+	```bash
+	pip install -r requirements-windows.txt
+	```
 	(Versions plus récentes : `transformers 4.46.2` + `tokenizers 0.20.1` avec wheels précompilés.)
-
-### 🔬 Pour la recherche2. Ou installer toolchain :
-
+2. Ou installer toolchain :
 	- Installer Rust (`https://rustup.rs/`)
-
-- Expérimentation multi-modèles	- Installer *Visual Studio Build Tools* avec composant "Desktop development with C++" (inclut `link.exe`)
-
-- Tests de performance comparatifs	- Relancer: `pip install -r requirements.txt`
-
-- Analyse détaillée des métriques3. Fallback possible : définir `USE_SLOW_TOKENIZER=1` (le code force alors l'utilisation d'un tokenizer Python si dispo / ou stub silencieux).
-
-- Reproductibilité des expériences
+	- Installer *Visual Studio Build Tools* avec composant "Desktop development with C++" (inclut `link.exe`)
+	- Relancer: `pip install -r requirements.txt`
+3. Fallback possible : définir `USE_SLOW_TOKENIZER=1` (le code force alors l'utilisation d'un tokenizer Python si dispo / ou stub silencieux).
 
 Mode minimal (aucun modèle / no HF): n'installe que `requirements-lite.txt` puis lancer l'API et dashboards (fonctionnalités ML avancées inactives).
 
----
-
 ### 🖥️ Qt Dashboard (fiabilisation connexions)
+Le dashboard Qt utilise maintenant des retries configurables + fallback `127.0.0.1` si `localhost` échoue.
 
-## 🏗️ ArchitectureLe dashboard Qt utilise maintenant des retries configurables + fallback `127.0.0.1` si `localhost` échoue.
+Variables d'environnement spécifiques :
+| Variable | Rôle | Défaut |
+|----------|------|--------|
+| `VRM_API_BASE` | Base URL API supervision (nodes, telemetry) | `http://localhost:5010` |
+| `VRM_MEMORY_BASE` | Base URL service mémoire hiérarchique | `http://localhost:5000` |
+| `VRM_API_TIMEOUT` | Timeout (s) par requête HTTP | `2.5` |
+| `VRM_API_RETRIES` | Nombre de tentatives par base | `3` |
 
+Comportement : chaque requête tente `VRM_API_BASE` puis variante `127.0.0.1` avec backoff progressif. L'état (connecté / injoignable) est affiché sans spam.
+Pour réduire l'erreur `Max retries exceeded with url /api/nodes` : augmenter `VRM_API_TIMEOUT` (ex: `export VRM_API_TIMEOUT=5`).
 
-
-```Variables d'environnement spécifiques :
-
-VRAMancer/| Variable | Rôle | Défaut |
-
-├── core/                 # Moteur d'orchestration|----------|------|--------|
-
-│   ├── orchestrator.py   # Orchestrateur principal| `VRM_API_BASE` | Base URL API supervision (nodes, telemetry) | `http://localhost:5010` |
-
-│   ├── memory_balancer.py# Gestion VRAM| `VRM_MEMORY_BASE` | Base URL service mémoire hiérarchique | `http://localhost:5000` |
-
-│   ├── network/          # Clustering| `VRM_API_TIMEOUT` | Timeout (s) par requête HTTP | `2.5` |
-
-│   └── backends/         # Backends IA| `VRM_API_RETRIES` | Nombre de tentatives par base | `3` |
-
-├── dashboard/            # Interfaces utilisateur
-
-│   ├── dashboard_qt.py   # GUI QtComportement : chaque requête tente `VRM_API_BASE` puis variante `127.0.0.1` avec backoff progressif. L'état (connecté / injoignable) est affiché sans spam.
-
-│   ├── dashboard_web.py  # Dashboard webPour réduire l'erreur `Max retries exceeded with url /api/nodes` : augmenter `VRM_API_TIMEOUT` (ex: `export VRM_API_TIMEOUT=5`).
-
-│   └── templates/        # Templates web
-
-├── mobile/               # Dashboard mobileDétection automatique intégrée : si `VRM_API_BASE` n'est pas défini, le dashboard scanne `5030` puis `5010` (`/api/health`).
-
-├── cli/                  # Interface CLIScript CLI équivalent :
-
-├── api_simple.py         # API REST```bash
-
-├── systray_vramancer.py  # System traypython scripts/api_autodetect.py --json
-
-└── vrm_start.sh          # Script de lancement```
-
-```Debug verbeux (requêtes, ports testés) :
-
+Détection automatique intégrée : si `VRM_API_BASE` n'est pas défini, le dashboard scanne `5030` puis `5010` (`/api/health`).
+Script CLI équivalent :
 ```bash
-
----export VRM_API_DEBUG=1
-
+python scripts/api_autodetect.py --json
+```
+Debug verbeux (requêtes, ports testés) :
+```bash
+export VRM_API_DEBUG=1
 python dashboard/dashboard_qt.py
-
-## 🤝 Contribution```
-
+```
 Note Windows: si le message "backend injoignable" persiste, définir manuellement :
-
-Les contributions sont les bienvenues ! Consultez [CONTRIBUTING.md](CONTRIBUTING.md) pour démarrer.```bat
-
+```bat
 set VRM_API_BASE=http://127.0.0.1:5030
-
-### Comment contribuerpython installers\dashboard\dashboard_web.py
-
+python installers\dashboard\dashboard_web.py
 ```
 
-1. Fork le projet
 
-2. Créez une branche (`git checkout -b feature/AmazingFeature`)
+---
 
-3. Commit vos changements (`git commit -m 'Add AmazingFeature'`)---
-
-4. Push vers la branche (`git push origin feature/AmazingFeature`)
-
-5. Ouvrez une Pull Request## 🔥 Fonctionnalités clés / Key features
-
+## 🔥 Fonctionnalités clés / Key features
 - Orchestration IA multi-backend (HF, vLLM, Ollama, DeepSpeed, TensorRT…)
-
----- Découpage adaptatif VRAM, exploitation GPU secondaires, clustering dynamique
-
+- Découpage adaptatif VRAM, exploitation GPU secondaires, clustering dynamique
 - Dashboards Qt, Tk, Web, CLI, mobile/tablette
-
-## 🐛 Rapporter un bug- Plug-and-play (USB4, Ethernet, WiFi), auto-sensing, auto-repair, monitoring
-
+- Plug-and-play (USB4, Ethernet, WiFi), auto-sensing, auto-repair, monitoring
 - Sécurité avancée (Zero Trust, MFA, SSO, compliance RGPD/HIPAA/ISO)
+- Marketplace plugins/extensions, onboarding vidéo, packaging pro, CI, tests
 
-Ouvrez une [issue](https://github.com/thebloodlust/VRAMancer/issues/new) en décrivant :- Marketplace plugins/extensions, onboarding vidéo, packaging pro, CI, tests
+---
 
-
-
-- Le comportement observé---
-
-- Le comportement attendu
-
-- Les étapes pour reproduire## 🚀 Super features disruptives
-
-- Votre environnement (OS, Python, GPU)- Auto-optimisation IA/ressources (auto-tuning, MLOps, green AI)
-
+## 🚀 Super features disruptives
+- Auto-optimisation IA/ressources (auto-tuning, MLOps, green AI)
 - Confidential Computing (SGX/SEV/Nitro, exécution IA chiffrée)
-
----- Zero Trust & SSO universel (OAuth2/SAML, segmentation, audit)
-
+- Zero Trust & SSO universel (OAuth2/SAML, segmentation, audit)
 - Plugins IA générative (LLM, diffusion, audio, vidéo, scoring)
-
-## 💬 Support- Orchestration multi-cloud/edge (placement intelligent, RGPD, coût, SLA)
-
+- Orchestration multi-cloud/edge (placement intelligent, RGPD, coût, SLA)
 - Explainability & Fairness (XAI, dashboard, détection de biais, éthique)
-
-- **Issues** : [GitHub Issues](https://github.com/thebloodlust/VRAMancer/issues)- Auto-réparation avancée (rollback, redéploiement, alertes IA)
-
-- **Documentation** : [Guides](https://github.com/thebloodlust/VRAMancer/tree/main)- Federated Learning natif (agrégation sécurisée, privacy)
-
-- **API** : http://localhost:5030/docs (quand l'API est lancée)- API “No Code” (drag & drop pipelines IA, endpoints)
-
+- Auto-réparation avancée (rollback, redéploiement, alertes IA)
+- Federated Learning natif (agrégation sécurisée, privacy)
+- API “No Code” (drag & drop pipelines IA, endpoints)
 - Digital Twin (simulation temps réel, jumeau numérique)
 
 ---
 
----
-
-## 📊 Statistiques
-
 ## 🧩 Tableau des modules principaux
 
-<div align="center">
-
-  <img src="https://img.shields.io/github/commit-activity/m/thebloodlust/VRAMancer" alt="Commits"/>| Module / Dossier                | Fonction / Description                                 |
-
-  <img src="https://img.shields.io/github/last-commit/thebloodlust/VRAMancer" alt="Last commit"/>|---------------------------------|-------------------------------------------------------|
-
-  <img src="https://img.shields.io/github/issues/thebloodlust/VRAMancer" alt="Issues"/>| core/auto/auto_tuner.py         | Auto-optimisation IA/ressources                       |
-
-  <img src="https://img.shields.io/github/issues-pr/thebloodlust/VRAMancer" alt="Pull requests"/>| core/security/confidential_computing.py | Confidential Computing (SGX/SEV/Nitro)         |
-
-</div>| core/security/zero_trust.py     | (Manquant) Placeholder Zero Trust / SSO à ajouter     |
-
+| Module / Dossier                | Fonction / Description                                 |
+|---------------------------------|-------------------------------------------------------|
+| core/auto/auto_tuner.py         | Auto-optimisation IA/ressources                       |
+| core/security/confidential_computing.py | Confidential Computing (SGX/SEV/Nitro)         |
+| core/security/zero_trust.py     | (Manquant) Placeholder Zero Trust / SSO à ajouter     |
 | core/marketplace/generative_plugin.py | (Prototype) Plugins IA générative (LLM, diffusion…) |
-
----| core/orchestrator/placement_engine.py | (Prototype avancé) Orchestration multi-cloud/edge|
-
+| core/orchestrator/placement_engine.py | (Prototype avancé) Orchestration multi-cloud/edge|
 | core/xai/xai_dashboard.py       | (Stub) Explainability & Fairness (XAI, biais)         |
-
-## 🗺️ Roadmap| core/auto/auto_repair.py        | (Stub) Auto-réparation avancée                        |
-
+| core/auto/auto_repair.py        | (Stub) Auto-réparation avancée                        |
 | core/collective/federated_learning.py | (Prototype) Federated Learning (agrégation naïve) |
-
-### v1.1.0 (Q4 2025)| core/api/no_code_api.py         | (Prototype) API “No Code” echo                        |
-
+| core/api/no_code_api.py         | (Prototype) API “No Code” echo                        |
 | core/simulator/digital_twin.py  | (Prototype) Digital Twin simulate/replay              |
-
-- [ ] Windows Installer (.msi)| core/cloud/hybrid_bridge.py     | (Stub) Bridge cloud hybride                           |
-
-- [ ] Linux AppImage| core/collective/federation.py   | (Manquant) Intelligence collective                    |
-
-- [ ] Dashboard mobile natif (iOS/Android)| mobile/dashboard_mobile.py      | Dashboard mobile/tablette                             |
-
-- [ ] Marketplace de modèles IA| core/security/compliance.py     | Compliance RGPD, HIPAA, ISO                           |
-
-- [ ] Intégration cloud (AWS, GCP, Azure)| core/security/remote_access.py  | Contrôle web sécurisé, MFA, gestion des rôles         |
-
+| core/cloud/hybrid_bridge.py     | (Stub) Bridge cloud hybride                           |
+| core/collective/federation.py   | (Manquant) Intelligence collective                    |
+| mobile/dashboard_mobile.py      | Dashboard mobile/tablette                             |
+| core/security/compliance.py     | Compliance RGPD, HIPAA, ISO                           |
+| core/security/remote_access.py  | Contrôle web sécurisé, MFA, gestion des rôles         |
 | core/security/ldap_auth.py      | Authentification LDAP/Active Directory                |
 
-### v1.2.0 (Q1 2026)
-
 ---
 
-- [ ] Auto-tuning ML des paramètres
-
-- [ ] Analytics et recommandations## 📚 Documentation & guides
-
-- [ ] Support Kubernetes natif- [docs/automation_api.md](docs/automation_api.md) — API d’automatisation avancée (REST/GraphQL)
-
-- [ ] API GraphQL- [docs/hybrid_cloud.md](docs/hybrid_cloud.md) — Bridge cloud hybride
-
-- [ ] WebAssembly runtime- [docs/collective_federation.md](docs/collective_federation.md) — Intelligence collective, fédération
-
+## 📚 Documentation & guides
+- [docs/automation_api.md](docs/automation_api.md) — API d’automatisation avancée (REST/GraphQL)
+- [docs/hybrid_cloud.md](docs/hybrid_cloud.md) — Bridge cloud hybride
+- [docs/collective_federation.md](docs/collective_federation.md) — Intelligence collective, fédération
 - [docs/mobile_dashboard.md](docs/mobile_dashboard.md) — Dashboard mobile/tablette
-
-Voir [ROADMAP_IDEES.md](ROADMAP_IDEES.md) pour la roadmap complète.- [docs/security_enterprise.md](docs/security_enterprise.md) — Sécurité, conformité, LDAP, contrôle web
-
+- [docs/security_enterprise.md](docs/security_enterprise.md) — Sécurité, conformité, LDAP, contrôle web
 - [docs/edge_iot_supervision.md](docs/edge_iot_supervision.md) — Edge/IoT & supervision
-
----- [docs/fastpath.md](docs/fastpath.md) — Transport fastpath (USB4 / RDMA / SFP+) & métriques
-
+- [docs/fastpath.md](docs/fastpath.md) — Transport fastpath (USB4 / RDMA / SFP+) & métriques
 - [docs/orchestrator.md](docs/orchestrator.md) — Architecture orchestrateur mémoire & placement
-
-## 📜 Licence- [docs/unified_api.md](docs/unified_api.md) — API unifiée (workflows, twin, fédération) (prototype évolué: HMAC, quotas, read-only, pondération FL)
-
+- [docs/unified_api.md](docs/unified_api.md) — API unifiée (workflows, twin, fédération) (prototype évolué: HMAC, quotas, read-only, pondération FL)
  - [docs/operations.md](docs/operations.md) — Guide opérations & maintenance
-
-Ce projet est sous licence MIT. Voir [LICENSE](LICENSE) pour plus de détails.- [MANUEL_FR.md](MANUEL_FR.md) — Manuel complet (français)
-
+- [MANUEL_FR.md](MANUEL_FR.md) — Manuel complet (français)
 - [MANUAL_EN.md](MANUAL_EN.md) — Complete manual (English)
-
----- [ONBOARDING.md](ONBOARDING.md) — Onboarding vidéo/interactive
-
+- [ONBOARDING.md](ONBOARDING.md) — Onboarding vidéo/interactive
 - [ROADMAP_IDEES.md](ROADMAP_IDEES.md) — Roadmap & idées avancées
 
-## 🙏 Remerciements
-
 ---
-
-Merci à tous les contributeurs et à la communauté open source !
 
 ## ❓ FAQ & Support
 
-### Technologies utilisées
-
 **Q : Comment installer VRAMancer sur mon OS ?**<br>
+A : Utilisez le script d’installation adapté (Windows, Linux, macOS) dans le dossier `installers/` ou suivez le guide ultra-débutant ci-dessus.
 
-- [PyTorch](https://pytorch.org/) - Framework deep learningA : Utilisez le script d’installation adapté (Windows, Linux, macOS) dans le dossier `installers/` ou suivez le guide ultra-débutant ci-dessus.
+**Q : Comment ajouter un nœud au cluster ?**<br>
+A : Branchez-le (USB4, Ethernet, WiFi), il sera détecté automatiquement.
 
-- [Flask](https://flask.palletsprojects.com/) - Framework web
-
-- [PyQt5](https://www.riverbankcomputing.com/software/pyqt/) - Interface graphique**Q : Comment ajouter un nœud au cluster ?**<br>
-
-- [Transformers](https://huggingface.co/transformers/) - Modèles pré-entraînésA : Branchez-le (USB4, Ethernet, WiFi), il sera détecté automatiquement.
-
-
-
----**Q : Comment activer les dashboards ?**<br>
-
+**Q : Comment activer les dashboards ?**<br>
 A : `python -m vramancer.main --mode qt` (ou tk/web/cli/mobile)
 
-## 🌟 Star History
-
 **Q : Où trouver la doc sur les modules avancés ?**<br>
+A : Voir la section Documentation & guides ci-dessus.
 
-[![Star History Chart](https://api.star-history.com/svg?repos=thebloodlust/VRAMancer&type=Date)](https://star-history.com/#thebloodlust/VRAMancer&Date)A : Voir la section Documentation & guides ci-dessus.
-
-
-
----**Q : Qui contacter pour du support ou contribuer ?**<br>
-
+**Q : Qui contacter pour du support ou contribuer ?**<br>
 A : Ouvrez une issue GitHub ou contactez thebloodlust.
 
-<div align="center">
+---
 
-  <p>---
+## 🛣️ Roadmap
 
-    <b>Fait avec ❤️ par la communauté VRAMancer</b>
+Voir [ROADMAP_IDEES.md](ROADMAP_IDEES.md) pour toutes les idées avancées, modules à venir, et suggestions communautaires.
 
-  </p>## 🛣️ Roadmap
-
-  <p>
-
-    <sub>Version 1.0.0 - Octobre 2025</sub>Voir [ROADMAP_IDEES.md](ROADMAP_IDEES.md) pour toutes les idées avancées, modules à venir, et suggestions communautaires.
-
-  </p>
-
-</div>---
-
+---
 
 MIT — (c) thebloodlust 2023-2025
 
