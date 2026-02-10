@@ -33,6 +33,8 @@ Most people don't have 8× A100s. They have one good GPU, one old GPU, maybe a f
 
 ## Quick Start
 
+> **Guide complet pas à pas** : voir [docs/INSTALL_ULTRA_DEBUTANT.md](docs/INSTALL_ULTRA_DEBUTANT.md) — Windows : [INSTALL_WINDOWS.md](INSTALL_WINDOWS.md)
+
 ### Prerequisites
 
 - Python 3.10+
