@@ -1,8 +1,0 @@
-[Desktop Entry]
-Name=VRAMancer
-Comment=Optimisation VRAM multi-GPU pour IA locale
-Exec=/usr/local/bin/vramancer-launcher.sh
-Icon=/usr/local/share/vramancer/vramancer.png
-Terminal=true
-Type=Application
-Categories=Development;

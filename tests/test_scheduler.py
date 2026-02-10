@@ -1,9 +1,16 @@
 # tests/test_scheduler.py
+import os
+import pytest
 import torch
-from transformers import AutoModelForCausalLM
 from core import SimpleScheduler
 
+_MINIMAL = os.environ.get('VRM_MINIMAL_TEST') in {'1', 'true', 'TRUE'}
+
+@pytest.mark.slow
+@pytest.mark.network
+@pytest.mark.skipif(_MINIMAL, reason="Requires real GPT-2 model download (slow, needs network)")
 def test_scheduler_forward_and_predict():
+    from transformers import AutoModelForCausalLM
     model = AutoModelForCausalLM.from_pretrained("gpt2")
     scheduler = SimpleScheduler([model])
 

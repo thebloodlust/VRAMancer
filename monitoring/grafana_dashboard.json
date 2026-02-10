@@ -1,0 +1,616 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": "-- Grafana --",
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "VRAMancer Multi-GPU Inference Orchestrator — Production Dashboard",
+  "editable": true,
+  "gnetId": null,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 100,
+      "title": "🔥 Inference Overview",
+      "type": "row"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 50 },
+              { "color": "red", "value": 100 }
+            ]
+          },
+          "unit": "reqps"
+        }
+      },
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 1 },
+      "id": 1,
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [
+        {
+          "expr": "rate(vramancer_infer_total[5m])",
+          "legendFormat": "Inference RPS"
+        }
+      ],
+      "title": "Inference Throughput",
+      "type": "stat"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.5 },
+              { "color": "red", "value": 2 }
+            ]
+          },
+          "unit": "s"
+        }
+      },
+      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 1 },
+      "id": 2,
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, rate(vramancer_infer_latency_seconds_bucket[5m]))",
+          "legendFormat": "p95 Latency"
+        }
+      ],
+      "title": "Inference Latency (p95)",
+      "type": "stat"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 0.01 },
+              { "color": "red", "value": 0.05 }
+            ]
+          },
+          "unit": "percentunit"
+        }
+      },
+      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 1 },
+      "id": 3,
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [
+        {
+          "expr": "rate(vramancer_infer_errors_total[5m]) / rate(vramancer_infer_total[5m])",
+          "legendFormat": "Error Rate"
+        }
+      ],
+      "title": "Error Rate",
+      "type": "stat"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 5 },
+              { "color": "red", "value": 16 }
+            ]
+          }
+        }
+      },
+      "gridPos": { "h": 6, "w": 6, "x": 18, "y": 1 },
+      "id": 4,
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [
+        {
+          "expr": "vramancer_tasks_running",
+          "legendFormat": "Running Tasks"
+        }
+      ],
+      "title": "Active Tasks",
+      "type": "stat"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "lineWidth": 2, "fillOpacity": 10 },
+          "unit": "reqps"
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Errors" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }]
+          }
+        ]
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 7 },
+      "id": 5,
+      "targets": [
+        {
+          "expr": "rate(vramancer_infer_total[5m])",
+          "legendFormat": "Requests"
+        },
+        {
+          "expr": "rate(vramancer_infer_errors_total[5m])",
+          "legendFormat": "Errors"
+        }
+      ],
+      "title": "Inference Rate (req/s)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "lineWidth": 2, "fillOpacity": 10 },
+          "unit": "s"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 7 },
+      "id": 6,
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, rate(vramancer_infer_latency_seconds_bucket[5m]))",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "histogram_quantile(0.95, rate(vramancer_infer_latency_seconds_bucket[5m]))",
+          "legendFormat": "p95"
+        },
+        {
+          "expr": "histogram_quantile(0.99, rate(vramancer_infer_latency_seconds_bucket[5m]))",
+          "legendFormat": "p99"
+        }
+      ],
+      "title": "Inference Latency Distribution",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 15 },
+      "id": 101,
+      "title": "🖥️ GPU Memory & Utilization",
+      "type": "row"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "lineWidth": 2, "fillOpacity": 20 },
+          "unit": "bytes"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "id": 7,
+      "targets": [
+        {
+          "expr": "vramancer_gpu_memory_used_bytes",
+          "legendFormat": "GPU {{gpu}}"
+        }
+      ],
+      "title": "GPU Memory Usage (per-GPU)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "lineWidth": 2, "fillOpacity": 15 },
+          "unit": "Bps"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "id": 8,
+      "targets": [
+        {
+          "expr": "rate(vramancer_gpu_transfer_ops_total[5m])",
+          "legendFormat": "{{method}} {{src}}→{{dst}}"
+        }
+      ],
+      "title": "GPU Transfer Operations",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "steps": [
+              { "color": "blue", "value": null },
+              { "color": "green", "value": 1 },
+              { "color": "yellow", "value": 10 },
+              { "color": "red", "value": 50 }
+            ]
+          },
+          "unit": "Gbps"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "id": 9,
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, rate(vramancer_gpu_transfer_bandwidth_gbps_bucket[5m]))",
+          "legendFormat": "p95 {{method}}"
+        }
+      ],
+      "title": "GPU Transfer Bandwidth (p95)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "lineWidth": 2, "fillOpacity": 20 }
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "id": 10,
+      "targets": [
+        {
+          "expr": "vramancer_tasks_resource_running",
+          "legendFormat": "{{resource}}"
+        }
+      ],
+      "title": "Tasks Per GPU/Resource",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 32 },
+      "id": 102,
+      "title": "📊 Memory Tiering (VRAM/DRAM/NVMe)",
+      "type": "row"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "lineWidth": 2, "fillOpacity": 10 }
+        }
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 33 },
+      "id": 11,
+      "targets": [
+        {
+          "expr": "rate(vramancer_memory_promotions_total[5m])",
+          "legendFormat": "{{from}}→{{to}}"
+        }
+      ],
+      "title": "Memory Promotions",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "lineWidth": 2, "fillOpacity": 10 }
+        }
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 33 },
+      "id": 12,
+      "targets": [
+        {
+          "expr": "rate(vramancer_memory_demotions_total[5m])",
+          "legendFormat": "{{from}}→{{to}}"
+        }
+      ],
+      "title": "Memory Demotions",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "lineWidth": 2, "fillOpacity": 10 }
+        }
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 33 },
+      "id": 13,
+      "targets": [
+        {
+          "expr": "rate(vramancer_memory_evictions_total[5m])",
+          "legendFormat": "Evictions {{from}}→{{to}}"
+        }
+      ],
+      "title": "Memory Evictions",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "lineWidth": 1, "fillOpacity": 5 }
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 41 },
+      "id": 14,
+      "targets": [
+        {
+          "expr": "vramancer_block_hotness",
+          "legendFormat": "{{block}} ({{tier}})"
+        }
+      ],
+      "title": "Block Hotness Scores",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "lineWidth": 2, "fillOpacity": 10 }
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 41 },
+      "id": 15,
+      "targets": [
+        {
+          "expr": "rate(vramancer_orch_hierarchy_moves_total[5m])",
+          "legendFormat": "→ {{to_level}}"
+        }
+      ],
+      "title": "Hierarchy Memory Migrations",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 49 },
+      "id": 103,
+      "title": "🌐 Network & FastPath",
+      "type": "row"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "lineWidth": 2, "fillOpacity": 10 },
+          "unit": "bytes"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 50 },
+      "id": 16,
+      "targets": [
+        {
+          "expr": "rate(vramancer_fastpath_bytes_total[5m])",
+          "legendFormat": "{{method}} {{direction}}"
+        }
+      ],
+      "title": "FastPath Transfer Rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "lineWidth": 2, "fillOpacity": 10 },
+          "unit": "s"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 50 },
+      "id": 17,
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, rate(vramancer_fastpath_latency_seconds_bucket[5m]))",
+          "legendFormat": "p95 {{method}} {{op}}"
+        }
+      ],
+      "title": "FastPath Latency (p95)",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 58 },
+      "id": 104,
+      "title": "🛡️ API & Health",
+      "type": "row"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "lineWidth": 2, "fillOpacity": 10 },
+          "unit": "s"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 59 },
+      "id": 18,
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, rate(vramancer_api_latency_seconds_bucket[5m]))",
+          "legendFormat": "p95 {{method}} {{path}}"
+        },
+        {
+          "expr": "histogram_quantile(0.50, rate(vramancer_api_latency_seconds_bucket[5m]))",
+          "legendFormat": "p50 {{method}} {{path}}"
+        }
+      ],
+      "title": "API Endpoint Latency",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "lineWidth": 2, "fillOpacity": 10 }
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 59 },
+      "id": 19,
+      "targets": [
+        {
+          "expr": "rate(vramancer_tasks_submitted_total[5m])",
+          "legendFormat": "Submitted"
+        },
+        {
+          "expr": "rate(vramancer_tasks_completed_total[5m])",
+          "legendFormat": "Completed"
+        },
+        {
+          "expr": "rate(vramancer_tasks_failed_total[5m])",
+          "legendFormat": "Failed"
+        }
+      ],
+      "title": "Task Lifecycle",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 67 },
+      "id": 105,
+      "title": "⚙️ Orchestrator & HA",
+      "type": "row"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "lineWidth": 2, "fillOpacity": 10 }
+        }
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 68 },
+      "id": 20,
+      "targets": [
+        {
+          "expr": "rate(vramancer_orch_placements_total[5m])",
+          "legendFormat": "Level {{level}}"
+        }
+      ],
+      "title": "Orchestrator Placements",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "lineWidth": 2, "fillOpacity": 10 }
+        }
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 68 },
+      "id": 21,
+      "targets": [
+        {
+          "expr": "rate(vramancer_orch_migrations_total[5m])",
+          "legendFormat": "Migrations"
+        },
+        {
+          "expr": "rate(vramancer_orch_rebalance_total[5m])",
+          "legendFormat": "Rebalance Cycles"
+        }
+      ],
+      "title": "Migrations & Rebalancing",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        }
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 68 },
+      "id": 22,
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [
+        {
+          "expr": "vramancer_ha_journal_size_bytes",
+          "legendFormat": "Journal Size"
+        }
+      ],
+      "title": "HA Journal Size",
+      "type": "stat"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 76 },
+      "id": 23,
+      "targets": [
+        {
+          "expr": "vramancer_task_duration_percentile{percentile='p50'}",
+          "legendFormat": "p50 {{priority}} {{status}}"
+        },
+        {
+          "expr": "vramancer_task_duration_percentile{percentile='p95'}",
+          "legendFormat": "p95 {{priority}} {{status}}"
+        },
+        {
+          "expr": "vramancer_task_duration_percentile{percentile='p99'}",
+          "legendFormat": "p99 {{priority}} {{status}}"
+        }
+      ],
+      "title": "Task Duration Percentiles",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "lineWidth": 2, "fillOpacity": 10 },
+          "unit": "s"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 76 },
+      "id": 24,
+      "targets": [
+        {
+          "expr": "vramancer_fastpath_interface_latency_seconds",
+          "legendFormat": "{{interface}} ({{kind}})"
+        }
+      ],
+      "title": "FastPath Interface Benchmark",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 36,
+  "style": "dark",
+  "tags": ["vramancer", "gpu", "inference", "llm"],
+  "templating": {
+    "list": [
+      {
+        "allValue": ".*",
+        "current": { "selected": true, "text": "All", "value": "$__all" },
+        "datasource": "Prometheus",
+        "definition": "label_values(vramancer_gpu_memory_used_bytes, gpu)",
+        "hide": 0,
+        "includeAll": true,
+        "label": "GPU",
+        "multi": true,
+        "name": "gpu",
+        "query": "label_values(vramancer_gpu_memory_used_bytes, gpu)",
+        "refresh": 2,
+        "sort": 1,
+        "type": "query"
+      }
+    ]
+  },
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "VRAMancer — Multi-GPU Inference",
+  "uid": "vramancer-main",
+  "version": 1
+}

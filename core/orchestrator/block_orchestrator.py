@@ -1,11 +1,38 @@
 from __future__ import annotations
 import os, time, logging
-from core.memory_balancer import MemoryBalancer
-from core.stream_manager import StreamManager
-from core.monitor import GPUMonitor
-from core.metrics import ORCH_PLACEMENTS, ORCH_MIGRATIONS, ORCH_REBALANCE, ORCH_HIERARCHY_MOVE
-from core.storage_manager import load_block_from_disk, save_block_to_disk
-from core.network.vramancer_link import send_block, start_client
+
+try:
+    from core.memory_balancer import MemoryBalancer
+except ImportError:
+    MemoryBalancer = None  # type: ignore
+
+try:
+    from core.stream_manager import StreamManager
+except ImportError:
+    StreamManager = None  # type: ignore
+
+try:
+    from core.monitor import GPUMonitor
+except ImportError:
+    GPUMonitor = None  # type: ignore
+
+try:
+    from core.metrics import ORCH_PLACEMENTS, ORCH_MIGRATIONS, ORCH_REBALANCE, ORCH_HIERARCHY_MOVE
+except ImportError:
+    # Stub counters if metrics unavailable
+    class _Counter:
+        def inc(self, *a, **k): pass
+        def labels(self, *a, **k): return self
+    ORCH_PLACEMENTS = ORCH_MIGRATIONS = ORCH_REBALANCE = ORCH_HIERARCHY_MOVE = _Counter()
+
+def load_block_from_disk(path): raise RuntimeError("storage_manager unavailable")
+def save_block_to_disk(block, path): raise RuntimeError("storage_manager unavailable")
+
+try:
+    from core.network.vramancer_link import send_block, start_client
+except ImportError:
+    def send_block(*a, **k): raise RuntimeError("vramancer_link unavailable")
+    def start_client(*a, **k): raise RuntimeError("vramancer_link unavailable")
 
 class MemoryBenchmarker:
     def __init__(self, nvme_dir, remote_nodes=None):

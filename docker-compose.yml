@@ -5,10 +5,16 @@ services:
   inference:
     build: .
     environment:
-      - HOST=0.0.0.0
+      - VRM_API_HOST=0.0.0.0
+      - VRM_API_PORT=5030
+      - VRM_LOG_JSON=1
+      - VRM_API_TOKEN=${VRM_API_TOKEN:?Set VRM_API_TOKEN before starting}
+      - VRM_PRODUCTION=${VRM_PRODUCTION:-0}
     ports:
-      - "5000:5000"   # API (à adapter selon votre script)
-    # If you need GPU passthrough
+      - "5030:5030"
+      - "9108:9108"   # Prometheus metrics
+    volumes:
+      - hf_cache:/home/vramancer/.cache/huggingface
     deploy:
       resources:
         reservations:
@@ -16,9 +22,59 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
-  dashboard:
-    image: dash:2.16.1   # image officielle Dash
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:5030/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  prometheus:
+    image: prom/prometheus:v2.53.0
     volumes:
-      - ./dashboard:/app/dashboard
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/alerting_rules.yml:/etc/prometheus/alerting_rules.yml:ro
+      - prometheus_data:/prometheus
     ports:
-      - "8050:8050"
+      - "9090:9090"
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=30d"
+      - "--web.enable-lifecycle"
+    restart: unless-stopped
+    depends_on:
+      inference:
+        condition: service_healthy
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GF_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GF_ADMIN_PASSWORD:-vramancer}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana_provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana_dashboard.json:/var/lib/grafana/dashboards/vramancer.json:ro
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    volumes:
+      - ./monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    ports:
+      - "9093:9093"
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+      - "--storage.path=/alertmanager"
+    restart: unless-stopped
+
+volumes:
+  hf_cache:
+  prometheus_data:
+  grafana_data:

@@ -2,7 +2,12 @@
 import os
 import time
 from core.memory_balancer import MemoryBalancer
-from dashboard.visualizer import render_bar  # import de la fonction d’affichage
+
+
+def render_bar(value: float, width: int = 30) -> str:
+    """Simple text-based progress bar."""
+    filled = int(value * width)
+    return "[" + "#" * filled + "-" * (width - filled) + f"] {value*100:.0f}%"
 
 def clear_console() -> None:
     """Fonction multiplateforme."""

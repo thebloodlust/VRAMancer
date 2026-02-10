@@ -1,5 +1,9 @@
 import os
+import pytest
 
+_MINIMAL = os.environ.get('VRM_MINIMAL_TEST') in {'1', 'true', 'TRUE'}
+
+@pytest.mark.skipif(_MINIMAL, reason="BasicTokenizer not available in VRM_MINIMAL_TEST mode")
 def test_basic_tokenizer_forced():
     os.environ['VRM_FORCE_BASIC_TOKENIZER'] = '1'
     from core.utils import get_tokenizer

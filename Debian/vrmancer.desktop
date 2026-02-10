@@ -1,7 +1,0 @@
-[Desktop Entry]
-Name=VRAMancer
-Exec=vrm --mode auto
-Icon=vramancer
-Type=Application
-Categories=Development;AI;
-Terminal=false

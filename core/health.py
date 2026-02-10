@@ -6,8 +6,12 @@ Exécution :
 from __future__ import annotations
 import importlib
 import json
-import torch
 import sys
+
+try:
+    import torch  # type: ignore
+except ImportError:
+    torch = None  # type: ignore
 
 OPTIONAL = ["vllm", "ollama", "requests"]
 
@@ -22,7 +26,7 @@ def check_optional():
     return available
 
 def gpu_summary():
-    if not torch.cuda.is_available():
+    if torch is None or not torch.cuda.is_available():
         return {"available": False}
     return {
         "available": True,
@@ -33,8 +37,8 @@ def gpu_summary():
 def main():
     report = {
         "python": sys.version.split()[0],
-        "torch": torch.__version__,
-        "cuda": torch.version.cuda,
+        "torch": torch.__version__ if torch else "not installed",
+        "cuda": getattr(torch, 'version', None) and torch.version.cuda if torch else None,
         "gpu": gpu_summary(),
         "optional": check_optional(),
     }

@@ -13,6 +13,9 @@ torchvision==0.17.0
 # Compression avancée
 lz4==4.3.3
 zstandard==0.22.0
+# Automation API (GraphQL)
+graphene==3.3
+flask-cors==4.0.0
 # Tracing
 opentelemetry-api==1.25.0
 opentelemetry-sdk==1.25.0

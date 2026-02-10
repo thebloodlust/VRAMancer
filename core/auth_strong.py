@@ -94,7 +94,23 @@ def decode_access(token: str) -> Optional[dict]:
 
 def ensure_default_admin():  # auto bootstrap
     if not _USERS:
-        create_user('admin','admin','admin')
+        import logging
+        _logger = logging.getLogger(__name__)
+        if os.environ.get('VRM_PRODUCTION', '0') == '1':
+            _logger.error(
+                "SECURITY: No users configured in production mode. "
+                "Create admin user via create_user() before starting. "
+                "Refusing to create default admin in production."
+            )
+            return
+        # Generate a random password for dev mode
+        dev_password = secrets.token_urlsafe(12)
+        _logger.warning(
+            "SECURITY: Creating default admin user for development. "
+            "Username: admin | Password: %s — DO NOT use in production.",
+            dev_password,
+        )
+        create_user('admin', dev_password, 'admin')
 
 __all__ = [
     'create_user','verify_user','issue_tokens','refresh_token','decode_access','ensure_default_admin'

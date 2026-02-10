@@ -4,16 +4,50 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vramancer"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Run large AI models across multiple GPUs with smart memory balancing"
 readme = "README.md"
 authors = [ { name="Jérémie" } ]
 license = { text = "MIT" }
 requires-python = ">=3.9"
-# On délègue les dépendances principales à setup.cfg pour garder compat rétro.
+# Dependencies delegated to setup.cfg for backward compat.
+
+[tool.setuptools.dynamic]
+version = {attr = "core.__version__"}
 
 [project.urls]
 Homepage = "https://github.com/thebloodlust/VRAMancer"
 
 [tool.setuptools]
-# Utilise setup.cfg + setup.py pour la logique existante
+# Uses setup.cfg + setup.py for existing logic
+
+[tool.coverage.run]
+source = ["core"]
+omit = [
+    # Optional backend modules
+    "core/backends_deepspeed.py",
+    "core/backends_tensorrt.py",
+    "core/gpu_interface.py",
+    "core/tokenizer.py",
+    "core/health.py",
+    # Hardware-dependent modules (require real GPU / cluster)
+    "core/transfer_manager.py",
+    "core/model_splitter.py",
+    "core/layer_profiler.py",
+    "core/stream_manager.py",
+    "core/compute_engine.py",
+    "core/scheduler.py",
+    "core/monitor.py",
+    "core/network/*",
+    "core/orchestrator/*",
+    "core/utils.py",
+    "core/compressor.py",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.",
+    "except ImportError",
+    "raise NotImplementedError",
+]

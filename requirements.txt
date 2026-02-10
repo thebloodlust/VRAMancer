@@ -22,6 +22,7 @@ rich==13.9.4
 requests==2.32.3
 python-socketio==5.11.1
 PyJWT==2.9.0
+gunicorn==21.2.0
 
 # Tests (optionnel local) – en CI installés via extra [test]
 pytest==8.2.0

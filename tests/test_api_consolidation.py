@@ -5,7 +5,7 @@ import pytest
 
 pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
 
-from core.network.supervision_api import app, scheduler, HMM  # type: ignore
+from core.network.supervision_api import app, scheduler, HMM  # type: ignore  # noqa: E402
 from core.security import reset_rate_limiter
 
 def _client():
@@ -41,9 +41,8 @@ def test_security_rate_limiting():
     os.environ['VRM_DISABLE_RATE_LIMIT'] = '1'
     os.environ['VRM_RATE_MAX'] = '200'
     reset_rate_limiter()
-    os.environ.pop('VRM_TEST_MODE', None)
-    os.environ.pop('VRM_TEST_RELAX_SECURITY', None)
-    os.environ.pop('VRM_TEST_ALL_OPEN', None)
+    # Restore test mode for subsequent tests
+    os.environ['VRM_TEST_MODE'] = '1'
 
 
 def test_security_rotation_endpoint():

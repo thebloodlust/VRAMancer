@@ -15,7 +15,7 @@ __pycache__/
 *.egg-info/
 dist/
 build/
-# *.tar.gz - Commenté pour inclure les releases macOS
+*.tar.gz
 *.deb
 *.zip
 *.sqlite3
@@ -31,3 +31,18 @@ secrets.*
 build_macos/
 *.dmg
 .DS_Store
+
+# Cache et état interne VRAMancer
+.hm_state.pkl
+.hm_cache/
+*.pkl
+
+# Release bundles (doivent être régénérés, pas versionnés)
+release_bundle/
+
+# Clés cryptographiques
+keys/
+
+# Archives et packaging
+vramancer_deb/
+*.pdf

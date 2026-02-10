@@ -19,6 +19,8 @@ MEMORY_DEMOTIONS  = Counter("vramancer_memory_demotions_total", "Démotions mém
 MEMORY_EVICTIONS = Counter("vramancer_memory_evictions_total", "Evictions planifiées (hotness)", ["from","to"])
 FASTPATH_BYTES    = Counter("vramancer_fastpath_bytes_total", "Octets transférés fastpath", ["method","direction"])  # direction=send|recv
 FASTPATH_LATENCY  = Histogram("vramancer_fastpath_latency_seconds", "Latence opérations fastpath", ["method","op"])  # op=send|recv
+GPU_TRANSFER_OPS  = Counter("vramancer_gpu_transfer_ops_total", "Transferts GPU-to-GPU", ["method","src","dst"])  # method=p2p|nccl|cpu_staged
+GPU_TRANSFER_BW   = Histogram("vramancer_gpu_transfer_bandwidth_gbps", "Bande passante transferts GPU (Gbps)", ["method"])
 TASKS_SUBMITTED   = Counter("vramancer_tasks_submitted_total", "Tâches soumises")
 TASKS_COMPLETED   = Counter("vramancer_tasks_completed_total", "Tâches complétées")
 TASKS_FAILED      = Counter("vramancer_tasks_failed_total", "Tâches en erreur")
@@ -38,6 +40,30 @@ ORCH_MIGRATIONS = Counter("vramancer_orch_migrations_total", "Migrations inter-G
 ORCH_REBALANCE  = Counter("vramancer_orch_rebalance_total", "Cycles de rééquilibrage")
 ORCH_HIERARCHY_MOVE = Counter("vramancer_orch_hierarchy_moves_total", "Migrations hiérarchie mémoire", ["to_level"])  # dram|nvme|network
 ENV_ENDPOINT_HITS = Counter("vramancer_env_endpoint_hits_total", "Accès à /api/env (diagnostic)")
+
+# VTP (LLM Transport Protocol) metrics
+VTP_TENSORS_SENT = Counter("vramancer_vtp_tensors_sent_total", "Tensors envoyés via VTP", ["tier"])
+VTP_TENSORS_RECV = Counter("vramancer_vtp_tensors_recv_total", "Tensors reçus via VTP", ["tier"])
+VTP_BYTES_SENT = Counter("vramancer_vtp_bytes_sent_total", "Octets envoyés via VTP", ["tier"])
+VTP_KV_CACHE_OPS = Counter("vramancer_vtp_kv_cache_ops_total", "Opérations KV cache VTP", ["direction"])
+VTP_GPUDIRECT_OPS = Counter("vramancer_vtp_gpudirect_ops_total", "Transferts GPUDirect RDMA réels")
+
+# VRAM Lending Pool metrics
+LENDING_BORROWS = Counter("vramancer_lending_borrows_total", "VRAM borrows from lending pool", ["borrower", "lender"])
+LENDING_RECLAIMS = Counter("vramancer_lending_reclaims_total", "VRAM reclaims from lending pool", ["urgency"])
+LENDING_ACTIVE_LEASES = Gauge("vramancer_lending_active_leases", "Active VRAM lending leases")
+LENDING_BYTES_LENT = Gauge("vramancer_lending_bytes_lent_total", "Total bytes currently lent across GPUs")
+LENDING_POOL_CAPACITY_GB = Gauge("vramancer_lending_pool_capacity_gb", "Total lendable VRAM in pool (GB)")
+
+# Continuous Batcher metrics
+BATCHER_BATCH_SIZE = Histogram("vramancer_batcher_batch_size", "Requests per batch")
+BATCHER_QUEUE_DEPTH = Gauge("vramancer_batcher_queue_depth", "Pending requests in batcher queue")
+BATCHER_THROUGHPUT = Gauge("vramancer_batcher_throughput_tok_s", "Batcher throughput (tokens/s)")
+
+# PagedKV Cache metrics
+PAGED_KV_USED_PAGES = Gauge("vramancer_paged_kv_used_pages", "Used KV cache pages", ["device"])
+PAGED_KV_FREE_PAGES = Gauge("vramancer_paged_kv_free_pages", "Free KV cache pages", ["device"])
+PAGED_KV_BORROWED_PAGES = Gauge("vramancer_paged_kv_borrowed_pages", "Borrowed overflow pages from lending pool")
 
 _started = False
 
@@ -61,6 +87,8 @@ __all__ = [
     "MEMORY_EVICTIONS",
     "FASTPATH_BYTES",
     "FASTPATH_LATENCY",
+    "GPU_TRANSFER_OPS",
+    "GPU_TRANSFER_BW",
     "TASKS_SUBMITTED",
     "TASKS_COMPLETED",
     "TASKS_FAILED",
@@ -76,6 +104,22 @@ __all__ = [
     "ORCH_REBALANCE",
     "ORCH_HIERARCHY_MOVE",
     "ENV_ENDPOINT_HITS",
+    "VTP_TENSORS_SENT",
+    "VTP_TENSORS_RECV",
+    "VTP_BYTES_SENT",
+    "VTP_KV_CACHE_OPS",
+    "VTP_GPUDIRECT_OPS",
+    "LENDING_BORROWS",
+    "LENDING_RECLAIMS",
+    "LENDING_ACTIVE_LEASES",
+    "LENDING_BYTES_LENT",
+    "LENDING_POOL_CAPACITY_GB",
+    "BATCHER_BATCH_SIZE",
+    "BATCHER_QUEUE_DEPTH",
+    "BATCHER_THROUGHPUT",
+    "PAGED_KV_USED_PAGES",
+    "PAGED_KV_FREE_PAGES",
+    "PAGED_KV_BORROWED_PAGES",
 ]
 
 def counter_value(counter) -> float:

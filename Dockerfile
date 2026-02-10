@@ -1,83 +1,79 @@
 # -------------------------------------------------------------
-# 1️⃣  Image de base : CUDA 12.1 (ou ROCm 7.7 si besoin)
+# 1. Build stage: CUDA 12.1 (or ROCm if needed)
 # -------------------------------------------------------------
 FROM nvidia/cuda:12.1.0-cudnn8-devel-ubuntu22.04 AS build
 
 # -------------------------------------------------------------
-# 2️⃣  Installation de ROCm (optionnel) – à décommenter si nécessaire
-# -------------------------------------------------------------
-# RUN wget https://repo.radeon.com/rocm/rocm-nightly/rocm-repo-22.04-7.7.0-1.2.1_amd64.deb && \
-#     dpkg -i rocm-repo-22.04-7.7.0-1.2.1_amd64.deb && \
-#     apt-get update && \
-#     apt-get install -y --no-install-recommends \
-#         rocm-dkms rocm-dev \
-#         && rm -rf /var/lib/apt/lists/*
-
-# -------------------------------------------------------------
-# 3️⃣  Installation des dépendances systèmes
+# 2. System dependencies
 # -------------------------------------------------------------
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         python3 python3-pip python3-venv git \
         && rm -rf /var/lib/apt/lists/*
 
-# -------------------------------------------------------------
-# 4️⃣  Point d’entrée du conteneur
-# -------------------------------------------------------------
 WORKDIR /app
-
-# -------------------------------------------------------------
-# 5️⃣  Copie du code source
-# -------------------------------------------------------------
 COPY . .
 
 # -------------------------------------------------------------
-# 6️⃣  Création d’un environnement virtuel Python
+# 3. Python virtual environment + dependencies
 # -------------------------------------------------------------
 RUN python3 -m venv .venv && \
-    .venv/bin/pip install --upgrade pip setuptools wheel
+    .venv/bin/pip install --upgrade pip setuptools wheel && \
+    .venv/bin/pip install -r requirements.txt && \
+    .venv/bin/pip install gunicorn && \
+    .venv/bin/pip install . --no-deps
 
-# -------------------------------------------------------------
-# 7️⃣  Installation des dépendances Python (torch≥2.1+CUDA)
-# -------------------------------------------------------------
-# La ligne ci‑dessous installe la dernière version compatible
-# avec CUDA 12.1 (ou ROCm si vous avez activé la section ROCm)
-# Vous pouvez commenter le suffixe +cu121 si vous utilisez ROCm
-RUN .venv/bin/pip install -r requirements.txt && \
-    pip install . --no-deps
-
-# -------------------------------------------------------------
-# 8️⃣  Nettoyage (facultatif mais recommandé)
-# -------------------------------------------------------------
+# Cleanup
 RUN apt-get purge -y --auto-remove git && \
     rm -rf ~/.cache/pip
 
-# -------- Image runtime mince --------
+# -------------------------------------------------------------
+# 4. Runtime stage (slim)
+# -------------------------------------------------------------
 FROM nvidia/cuda:12.1.0-base-ubuntu22.04 AS runtime
+
+# Install Python runtime
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends python3 curl && \
+    rm -rf /var/lib/apt/lists/*
+
 ENV PYTHONUNBUFFERED=1
-ENV VRM_DISABLE_SOCKETIO=0 \
-    VRM_LOG_JSON=1
+ENV VRM_LOG_JSON=1
+ENV VRM_API_PORT=5030
+
 WORKDIR /app
+
+# Copy venv and application code
 COPY --from=build /app/.venv /app/.venv
 COPY --from=build /app/core /app/core
-COPY --from=build /app/run_demo.py /app/run_demo.py
 COPY --from=build /app/vramancer /app/vramancer
+COPY --from=build /app/dashboard /app/dashboard
+COPY --from=build /app/scripts /app/scripts
 COPY --from=build /app/requirements.txt /app/requirements.txt
+
 ENV PATH="/app/.venv/bin:$PATH"
 
 # -------------------------------------------------------------
-# 9️⃣  Commande par défaut
+# 5. Non-root user for security
 # -------------------------------------------------------------
-# Vous pouvez l’échanger selon le script que vous voulez exécuter
-HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD python - <<'PY' || exit 1
-import os,urllib.request,json
-url=os.environ.get('VRM_HEALTH_URL','http://localhost:5000/api/version')
-try:
-    with urllib.request.urlopen(url,timeout=2) as r:
-        data=json.loads(r.read().decode())
-        assert 'version' in data
-except Exception as e:
-    print('healthcheck failed',e)
-    raise
-PY
-CMD ["python", "-u", "run_demo.py"]
+RUN groupadd -r vramancer && \
+    useradd -r -g vramancer -d /app -s /sbin/nologin vramancer && \
+    chown -R vramancer:vramancer /app
+USER vramancer
+
+# Expose the correct port
+EXPOSE 5030
+
+# -------------------------------------------------------------
+# 6. Health check (correct endpoint and port)
+# -------------------------------------------------------------
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+    CMD curl -sf http://localhost:5030/health || exit 1
+
+# -------------------------------------------------------------
+# 7. Start with production server (gunicorn)
+# -------------------------------------------------------------
+CMD ["gunicorn", "--bind", "0.0.0.0:5030", "--workers", "1", "--threads", "4", \
+     "--timeout", "120", "--graceful-timeout", "30", "--keep-alive", "5", \
+     "--access-logfile", "-", "--error-logfile", "-", \
+     "core.production_api:app"]

@@ -44,6 +44,7 @@ jobs:
         env:
           VRM_DISABLE_RATE_LIMIT: "1"
           VRM_TEST_MODE: "1"
+          VRM_MINIMAL_TEST: "1"
         run: |
           pytest -q
   smoke:
@@ -61,79 +62,81 @@ jobs:
         env:
           VRM_DISABLE_RATE_LIMIT: "1"
           VRM_TEST_MODE: "1"
+          VRM_MINIMAL_TEST: "1"
         run: |
           python -m tests.smoke
 
-      multi-os:
-        name: Tests multi-OS
-        strategy:
-          fail-fast: false
-          matrix:
-            os: [ubuntu-latest, windows-latest, macos-latest]
-            python: ["3.11"]
-        runs-on: ${{ matrix.os }}
-        steps:
-          - uses: actions/checkout@v4
-          - uses: actions/setup-python@v5
-            with:
-              python-version: ${{ matrix.python }}
-          - name: Install minimal
-            run: |
-              python -m pip install --upgrade pip
-              pip install -r requirements.txt
-              pip install .[test]
-          - name: Run fast tests
-            env:
-              VRM_DISABLE_RATE_LIMIT: "1"
-              VRM_TEST_MODE: "1"
-            run: pytest -q -k "not heavy"
+  multi-os:
+    name: Tests multi-OS
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python: ["3.11"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install minimal
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install .[test]
+      - name: Run fast tests
+        env:
+          VRM_DISABLE_RATE_LIMIT: "1"
+          VRM_TEST_MODE: "1"
+          VRM_MINIMAL_TEST: "1"
+        run: pytest -q -k "not heavy and not slow"
 
-      build-wheel:
-        name: Build & Publish Wheel (dry-run)
-        runs-on: ubuntu-latest
-        steps:
-          - uses: actions/checkout@v4
-          - uses: actions/setup-python@v5
-            with:
-              python-version: "3.12"
-          - name: Build wheel
-            run: |
-              python -m pip install --upgrade pip build
-              python -m build
-              ls -1 dist
-          - name: Upload artifact
-            uses: actions/upload-artifact@v4
-            with:
-              name: wheels
-              path: dist/*
+  build-wheel:
+    name: Build & Publish Wheel (dry-run)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build wheel
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build
+          ls -1 dist
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels
+          path: dist/*
 
-      security-audit:
-        name: Sécurité (pip-audit & bandit)
-        runs-on: ubuntu-latest
-        steps:
-          - uses: actions/checkout@v4
-          - uses: actions/setup-python@v5
-            with:
-              python-version: "3.12"
-          - name: Install audit tools
-            run: |
-              python -m pip install --upgrade pip
-              pip install pip-audit bandit
-          - name: pip-audit
-            run: |
-              pip-audit -r requirements.txt || true
-          - name: bandit (baseline)
-            run: |
-              bandit -q -r core || true
+  security-audit:
+    name: Security (pip-audit & bandit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install audit tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install pip-audit bandit
+      - name: pip-audit
+        run: |
+          pip-audit -r requirements.txt || true
+      - name: bandit (baseline)
+        run: |
+          bandit -q -r core || true
 
-      docker-build:
-        name: Docker build (smoke)
-        runs-on: ubuntu-latest
-        steps:
-          - uses: actions/checkout@v4
-          - name: Build image
-            run: |
-              docker build -t vramancer:test .
-          - name: Smoke run
-            run: |
-              docker run --rm vramancer:test python -c "print('container ok')"
+  docker-build:
+    name: Docker build (smoke)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: |
+          docker build -t vramancer:test .
+      - name: Smoke run
+        run: |
+          docker run --rm vramancer:test python -c "print('container ok')"

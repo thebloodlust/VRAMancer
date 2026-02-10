@@ -1,0 +1,193 @@
+# VRAMancer — Prometheus Alerting Rules
+# Import in Prometheus via rule_files: ["alerting_rules.yml"]
+
+groups:
+  # ── GPU & Memory ─────────────────────────────────────────────────
+  - name: vramancer_gpu
+    interval: 30s
+    rules:
+      - alert: GPUMemoryHigh
+        expr: vramancer_gpu_memory_used_bytes > 0.9 * (vramancer_gpu_memory_used_bytes + 1073741824)
+        for: 5m
+        labels:
+          severity: warning
+          component: gpu
+        annotations:
+          summary: "GPU {{ $labels.gpu }} memory usage above 90%"
+          description: "GPU {{ $labels.gpu }} has been using >90% VRAM for 5 minutes. Current: {{ $value | humanize1024 }}B."
+
+      - alert: GPUMemoryCritical
+        expr: vramancer_gpu_memory_used_bytes > 10737418240
+        for: 2m
+        labels:
+          severity: critical
+          component: gpu
+        annotations:
+          summary: "GPU {{ $labels.gpu }} memory exceeds 10 GiB"
+          description: "GPU {{ $labels.gpu }} VRAM usage is {{ $value | humanize1024 }}B. Risk of OOM."
+
+      - alert: NoGPUMetrics
+        expr: absent(vramancer_gpu_memory_used_bytes)
+        for: 5m
+        labels:
+          severity: warning
+          component: gpu
+        annotations:
+          summary: "No GPU memory metrics available"
+          description: "vramancer_gpu_memory_used_bytes has been absent for 5 minutes. GPU monitoring may be down."
+
+  # ── Inference ────────────────────────────────────────────────────
+  - name: vramancer_inference
+    interval: 30s
+    rules:
+      - alert: HighInferenceErrorRate
+        expr: >
+          rate(vramancer_infer_errors_total[5m])
+          / (rate(vramancer_infer_total[5m]) > 0)
+          > 0.05
+        for: 5m
+        labels:
+          severity: critical
+          component: inference
+        annotations:
+          summary: "Inference error rate above 5%"
+          description: "Error rate is {{ $value | humanizePercentage }} over the last 5 minutes."
+
+      - alert: HighInferenceLatency
+        expr: histogram_quantile(0.95, rate(vramancer_infer_latency_seconds_bucket[5m])) > 10
+        for: 5m
+        labels:
+          severity: warning
+          component: inference
+        annotations:
+          summary: "Inference p95 latency above 10s"
+          description: "p95 inference latency is {{ $value | humanizeDuration }}."
+
+      - alert: InferenceLatencyCritical
+        expr: histogram_quantile(0.99, rate(vramancer_infer_latency_seconds_bucket[5m])) > 30
+        for: 3m
+        labels:
+          severity: critical
+          component: inference
+        annotations:
+          summary: "Inference p99 latency above 30s"
+          description: "p99 inference latency reached {{ $value | humanizeDuration }}. Service is degraded."
+
+      - alert: InferenceStopped
+        expr: rate(vramancer_infer_total[10m]) == 0
+        for: 15m
+        labels:
+          severity: warning
+          component: inference
+        annotations:
+          summary: "No inference requests for 15 minutes"
+          description: "No requests have been processed. Pipeline may be stalled."
+
+  # ── Tasks & Queue ────────────────────────────────────────────────
+  - name: vramancer_tasks
+    interval: 30s
+    rules:
+      - alert: TaskQueueBacklog
+        expr: vramancer_tasks_running > 16
+        for: 5m
+        labels:
+          severity: warning
+          component: tasks
+        annotations:
+          summary: "Running tasks exceeds 16"
+          description: "{{ $value }} tasks are running concurrently. Queue may be overloaded."
+
+      - alert: HighTaskFailureRate
+        expr: >
+          rate(vramancer_tasks_failed_total[5m])
+          / (rate(vramancer_tasks_submitted_total[5m]) > 0)
+          > 0.10
+        for: 5m
+        labels:
+          severity: critical
+          component: tasks
+        annotations:
+          summary: "Task failure rate above 10%"
+          description: "{{ $value | humanizePercentage }} of submitted tasks are failing."
+
+  # ── API ──────────────────────────────────────────────────────────
+  - name: vramancer_api
+    interval: 30s
+    rules:
+      - alert: APILatencyHigh
+        expr: histogram_quantile(0.95, rate(vramancer_api_latency_seconds_bucket[5m])) > 5
+        for: 5m
+        labels:
+          severity: warning
+          component: api
+        annotations:
+          summary: "API p95 latency above 5s for {{ $labels.path }}"
+          description: "Endpoint {{ $labels.method }} {{ $labels.path }} p95 latency is {{ $value | humanizeDuration }}."
+
+      - alert: APIDown
+        expr: up{job="vramancer"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: api
+        annotations:
+          summary: "VRAMancer instance is down"
+          description: "Prometheus cannot scrape VRAMancer metrics for 2 minutes."
+
+  # ── Transfers & Network ─────────────────────────────────────────
+  - name: vramancer_transfers
+    interval: 60s
+    rules:
+      - alert: FastPathLatencyHigh
+        expr: histogram_quantile(0.95, rate(vramancer_fastpath_latency_seconds_bucket[5m])) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          component: transfers
+        annotations:
+          summary: "FastPath p95 latency above 100ms"
+          description: "Method {{ $labels.method }} op {{ $labels.op }}: {{ $value | humanizeDuration }}."
+
+      - alert: GPUTransferBandwidthLow
+        expr: histogram_quantile(0.50, rate(vramancer_gpu_transfer_bandwidth_gbps_bucket[5m])) < 1
+        for: 10m
+        labels:
+          severity: warning
+          component: transfers
+        annotations:
+          summary: "GPU transfer bandwidth below 1 Gbps median"
+          description: "Median bandwidth is {{ $value }} Gbps for method {{ $labels.method }}. Check PCIe/NVLink."
+
+  # ── HA & Orchestrator ────────────────────────────────────────────
+  - name: vramancer_ha
+    interval: 60s
+    rules:
+      - alert: HAJournalLarge
+        expr: vramancer_ha_journal_size_bytes > 104857600
+        for: 10m
+        labels:
+          severity: warning
+          component: ha
+        annotations:
+          summary: "HA journal exceeds 100 MiB"
+          description: "Journal is {{ $value | humanize1024 }}B. Consider forcing rotation."
+
+      - alert: FrequentRebalancing
+        expr: rate(vramancer_orch_rebalance_total[5m]) > 1
+        for: 10m
+        labels:
+          severity: warning
+          component: orchestrator
+        annotations:
+          summary: "Orchestrator rebalancing more than once per 5 minutes"
+          description: "Frequent rebalancing may indicate unstable GPU allocation."
+
+      - alert: HighMemoryEvictions
+        expr: rate(vramancer_memory_evictions_total[5m]) > 10
+        for: 5m
+        labels:
+          severity: warning
+          component: memory
+        annotations:
+          summary: "Memory eviction rate above 10/5min"
+          description: "{{ $value }} evictions/5min from {{ $labels.from }}→{{ $labels.to }}. Consider adding VRAM/DRAM."

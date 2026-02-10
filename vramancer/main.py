@@ -1,208 +1,343 @@
 #!/usr/bin/env python3
-"""
-VRAMancer – Point d’entrée principal unifié.
+"""VRAMancer - Point d'entree principal unifie.
 """
 
-import random
-import torch
 import argparse
-from core.backends import select_backend
-from core.metrics import (
-    metrics_server_start,
-    INFER_REQUESTS,
-    INFER_ERRORS,
-    INFER_LATENCY,
-    GPU_MEMORY_USED,
-)
-from core.stream_manager   import StreamManager
-from core.compute_engine   import ComputeEngine
-from core.transfer_manager import TransferManager
-from core.memory_balancer  import MemoryBalancer
-from core.hierarchical_memory import HierarchicalMemoryManager
-from core.network.fibre_fastpath import open_low_latency_channel
-from core.scheduler        import SimpleScheduler as Scheduler
-from core.logger           import LoggerAdapter, get_logger
-from core.config           import get_config
-from dashboard.updater import update_dashboard
-from dashboard.dashboard_qt import launch_dashboard as launch_qt_dashboard
+import os
+import sys
+from pathlib import Path
 
-def main():
+# S'assurer que le repertoire racine est dans le path
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
-    import os
-    import yaml
 
-    parser = argparse.ArgumentParser(description="VRAMancer — LLM Orchestrator")
-    parser.add_argument("--backend", type=str, default=None, help="Backend LLM : auto, huggingface, vllm, ollama")
-    parser.add_argument("--model", type=str, default=None, help="Nom du modèle LLM à charger")
-    parser.add_argument("--gpus", type=int, default=None, help="Nombre de GPUs à utiliser (détection auto si non spécifié)")
-    parser.add_argument("--net-mode", type=str, default=None, help="Mode réseau : auto ou manual")
-    parser.add_argument("--net-iface", type=str, default=None, help="Nom de l’interface réseau à forcer (manual)")
-    args = parser.parse_args()
+def main(argv=None):
+    """Point d'entree CLI principal.
 
-    # Lecture config.yaml si présent
-    config = {}
-    if os.path.exists("config.yaml"):
-        with open("config.yaml", "r") as f:
-            config = yaml.safe_load(f)
+    Parameters
+    ----------
+    argv : list[str] | None
+        Arguments CLI. Si None, utilise sys.argv[1:].
+    """
+    parser = argparse.ArgumentParser(
+        prog="vramancer",
+        description="VRAMancer - Multi-GPU LLM Inference Orchestrator",
+    )
+    sub = parser.add_subparsers(dest="command", help="Commande")
 
-    merged = get_config()
-    backend_name = args.backend or merged.get("backend")
-    model_name = args.model or merged.get("model")
-    num_gpus = args.gpus if args.gpus is not None else merged.get("num_gpus")
-    net_mode = args.net_mode or merged.get("net_mode")
-    net_iface = args.net_iface or merged.get("net_iface")
+    # ---- serve ----
+    p_serve = sub.add_parser("serve", help="Lancer le serveur API REST")
+    p_serve.add_argument("--model", type=str, default=None,
+                         help="Modele LLM a pre-charger (ex: gpt2)")
+    p_serve.add_argument("--backend", type=str, default="auto",
+                         help="Backend : auto, huggingface, vllm, ollama")
+    p_serve.add_argument("--gpus", type=int, default=None,
+                         help="Nombre de GPUs (auto si non specifie)")
+    p_serve.add_argument("--host", type=str, default="0.0.0.0")
+    p_serve.add_argument("--port", type=int, default=5030)
 
-    log = get_logger("main")
+    # ---- generate ----
+    p_gen = sub.add_parser("generate", help="Generer du texte (one-shot)")
+    p_gen.add_argument("--model", type=str, required=True, help="Modele LLM")
+    p_gen.add_argument("--prompt", type=str, required=True, help="Texte d'entree")
+    p_gen.add_argument("--max-tokens", type=int, default=128)
+    p_gen.add_argument("--temperature", type=float, default=1.0)
+    p_gen.add_argument("--backend", type=str, default="auto")
+    p_gen.add_argument("--gpus", type=int, default=None)
 
-    log.info(f"Démarrage VRAMancer (backend={backend_name}, model={model_name})")
+    # ---- status ----
+    sub.add_parser("status", help="Afficher l'etat du systeme")
 
-    # Metrics server
-    metrics_server_start()
-    backend = select_backend(backend_name)
-    log.info(f"Backend sélectionné : {backend.__class__.__name__}")
+    # ---- benchmark ----
+    p_bench = sub.add_parser("benchmark", help="Benchmark GPU")
+    p_bench.add_argument("--size", type=int, default=4096, help="Taille matrice (NxN)")
 
-    # 1️⃣  Instanciation des modules métier
-    scheduler = Scheduler()
-    logger    = LoggerAdapter("runtime")
-    streamer  = StreamManager(scheduler, logger)
-    engine    = ComputeEngine(backend="auto")
-    transfer  = TransferManager(protocol="vramancer", secure=True)
-    balancer  = MemoryBalancer(scheduler, logger)
+    # ---- discover ----
+    p_disc = sub.add_parser("discover", help="Decouverte reseau (noeuds)")
+    p_disc.add_argument("--timeout", type=int, default=5, help="Duree d'ecoute (secondes)")
 
-    gpus = scheduler.get_available_gpus()
-    if num_gpus is None:
-        num_gpus = len(gpus)
-    log.info(f"GPUs détectés : {[gpu['id'] for gpu in gpus]}")
+    # ---- split ----
+    p_split = sub.add_parser("split", help="Profiler et splitter un modele")
+    p_split.add_argument("model", help="Nom du modele HuggingFace")
+    p_split.add_argument("--gpus", type=int, default=2, help="Nombre de GPUs")
+    p_split.add_argument("--profile", action="store_true", default=True,
+                         help="Utiliser le profiler (defaut)")
+    p_split.add_argument("--no-profile", dest="profile", action="store_false",
+                         help="Split VRAM-proportionnel simple")
 
-    # 2️⃣ bis — Exploitation des GPU secondaires pour tâches annexes
-    from core.gpu_interface import get_unused_gpus
-    used_gpu_ids = list(range(num_gpus))
-    secondary_gpus = get_unused_gpus(used_gpu_ids)
-    if secondary_gpus:
-        log.info(f"GPU secondaires disponibles : {[g['id'] for g in secondary_gpus]}")
-        # Exemple concret : monitoring GPU secondaire en thread
-        import threading, time
-        from core.monitor import GPUMonitor
-        def monitor_secondary(gpu_id):
-            mon = GPUMonitor()
-            while True:
-                usage = mon.memory_allocated(gpu_id)
-                print(f"[MONITOR] GPU secondaire {gpu_id} : {usage/1024**2:.1f} MB alloués")
-                time.sleep(5)
-        for g in secondary_gpus:
-            t = threading.Thread(target=monitor_secondary, args=(g['id'],), daemon=True)
-            t.start()
-        # Exemple offload (simulation)
-        print("[OFFLOAD] Vous pouvez utiliser ces GPU pour des tâches de swap, worker réseau, etc.")
+    # ---- health ----
+    sub.add_parser("health", help="Verifier la sante du systeme")
+
+    # ---- version ----
+    sub.add_parser("version", help="Afficher la version")
+
+    args = parser.parse_args(argv)
+
+    if args.command is None:
+        parser.print_help()
+        return
+
+    if args.command == "version":
+        _cmd_version()
+    elif args.command == "status":
+        _cmd_status()
+    elif args.command == "serve":
+        _cmd_serve(args)
+    elif args.command == "generate":
+        _cmd_generate(args)
+    elif args.command == "benchmark":
+        _cmd_benchmark(args)
+    elif args.command == "discover":
+        _cmd_discover(args)
+    elif args.command == "split":
+        _cmd_split(args)
+    elif args.command == "health":
+        _cmd_health()
     else:
-        log.info("Aucun GPU secondaire libre.")
+        parser.print_help()
 
-    # 2️⃣ ter — Sélection réseau auto/manuel
-    from core.network.interface_selector import select_network_interface
-    if net_mode == "manual" or net_iface:
-        iface = net_iface or select_network_interface("manual")
-    else:
-        iface = select_network_interface("auto")
-    log.info(f"Interface réseau utilisée : {iface}")
 
-    # 2️⃣  Chargement et découpage du modèle via backend unifié
+# ====================================================================
+# Commandes
+# ====================================================================
+
+def _cmd_version():
     try:
-        model = backend.load_model(model_name)
-        blocks = backend.split_model(num_gpus)
-        log.info(f"Modèle découpé en {len(blocks)} blocs")
-        hmem = HierarchicalMemoryManager()
-        # Injecter référence dans backend si supporté
+        from core import __version__
+        print(f"VRAMancer v{__version__}")
+    except Exception:
+        print("VRAMancer v0.2.4")
+
+
+def _cmd_status():
+    """Affiche l'etat du systeme (GPUs, memoire, backend)."""
+    print("=" * 50)
+    print("VRAMancer - Etat du systeme")
+    print("=" * 50)
+    try:
+        from core.utils import detect_backend, enumerate_devices
+        backend = detect_backend()
+        devices = enumerate_devices()
+        print(f"Backend: {backend}")
+        print(f"Devices: {len(devices)}")
+        for d in devices:
+            print(f"  [{d.get('index', '?')}] {d.get('name', '?')} "
+                  f"({d.get('backend', '?')}) "
+                  f"{d.get('memory_total_mb', '?')} MB")
+    except Exception as e:
+        print(f"Backend: unavailable ({e})")
+    try:
+        import psutil
+        mem = psutil.virtual_memory()
+        print(f"\nRAM: {mem.used / (1024**3):.1f} / {mem.total / (1024**3):.1f} GB "
+              f"({mem.percent}%)")
+    except ImportError:
+        pass
+    print("=" * 50)
+
+
+def _cmd_serve(args):
+    """Lancer le serveur API avec pipeline complet."""
+    from core.production_api import app
+
+    os.environ.setdefault('VRM_API_HOST', args.host)
+    os.environ.setdefault('VRM_API_PORT', str(args.port))
+
+    print("=" * 60)
+    print("VRAMancer API Server")
+    print("=" * 60)
+    print(f"  Host: {args.host}:{args.port}")
+    if args.model:
+        print(f"  Model: {args.model}")
+    print(f"  Backend: {args.backend}")
+    print(f"  GPUs: {args.gpus or 'auto'}")
+    print()
+    print("  POST /v1/completions  - Text generation (OpenAI-compatible)")
+    print("  POST /api/generate    - Text generation (alias)")
+    print("  POST /api/infer       - Raw tensor inference")
+    print("  POST /api/models/load - Load a model")
+    print("  GET  /health          - Health check")
+    print("  GET  /api/gpu         - GPU info")
+    print("  GET  /api/nodes       - Cluster nodes")
+    print("=" * 60)
+
+    # Pre-load model if specified
+    if args.model:
         try:
-            backend.hmem = hmem
-        except Exception:
-            pass
-        # Enregistrer blocs VRAM primaire (L1)
-        from core.memory_block import MemoryBlock
-        for i, b in enumerate(blocks):
-            mb = MemoryBlock(size_mb=getattr(b, 'size_mb', 128), gpu_id=0, status="allocated")
-            hmem.register_block(mb, "L1")
-            # Benchmark initial tiers (optionnel)
-            hmem.run_initial_benchmark()
-        # Watcher de pression VRAM (simulation simple)
-        import threading, time
-        def vram_watcher():
-            while True:
-                if torch.cuda.is_available():
-                    used = torch.cuda.memory_allocated(0)
-                    total = torch.cuda.get_device_properties(0).total_memory
-                    pct = used / total * 100 if total else 0
-                    # Politique de démotion simple
-                    for blk_id in list(hmem.registry.keys()):
-                        dummy = type("_B", (), {"id": blk_id})()
-                        try:
-                            # Recréation d'un objet MemoryBlock factice juste pour policy
-                            from core.memory_block import MemoryBlock as MB
-                            mb_fake = MB(size_mb=128, gpu_id=0, status="allocated")
-                            mb_fake.id = blk_id
-                            hmem.policy_demote_if_needed(mb_fake, pct)
-                        except Exception:
-                            pass
-                time.sleep(5)
-        threading.Thread(target=vram_watcher, daemon=True).start()
-    except NotImplementedError as e:
-        log.warning(f"Non implémenté: {e}")
-        return
-    except Exception as e:
-        log.error(f"Erreur chargement modèle: {e}")
-        return
+            from core.inference_pipeline import InferencePipeline
+            import core.production_api as api_mod
+            pipeline = InferencePipeline(
+                backend_name=args.backend,
+                verbose=True,
+                enable_metrics=True,
+            )
+            pipeline.load(args.model, num_gpus=args.gpus)
+            api_mod._pipeline = pipeline
+            print(f"\n  Model loaded: {args.model}")
+            print(f"  Blocks: {len(pipeline.blocks)}")
+            print(f"  GPUs: {pipeline.num_gpus}")
+            print()
+        except Exception as e:
+            print(f"\n  WARNING: Model pre-load failed: {e}")
+            print("  Send POST /api/models/load to load later.\n")
 
-    # 3️⃣  Lancement du dashboard (en parallèle)
-    import threading
-    t_dashboard = threading.Thread(target=launch_qt_dashboard, daemon=True)
-    t_dashboard.start()
-
-    # 4️⃣  Simulation d’un batch d’entrée
-    batch = torch.randint(0, 50257, (1, 10))
-
-    # Historique fictif pour la prédiction de rééquilibrage
-    usage_history = {
-        gpu["id"]: [random.randint(60, 95) for _ in range(5)] for gpu in gpus
-    }
-
-    # 5️⃣  Inférence via backend unifié (sur tous les blocs)
     try:
-        INFER_REQUESTS.inc()
-        with INFER_LATENCY.time():
-            out = backend.infer(batch)
-        # Mise à jour gauges GPU
-        if torch.cuda.is_available():
-            for i in range(torch.cuda.device_count()):
-                GPU_MEMORY_USED.labels(gpu=str(i)).set(torch.cuda.memory_allocated(i))
-        log.info(f"Sortie backend: {getattr(out,'shape', type(out))}")
-    except NotImplementedError as e:
-        INFER_ERRORS.inc()
-        log.warning(f"Non implémenté: {e}")
+        app.run(host=args.host, port=args.port, debug=False,
+                use_reloader=False, threaded=True)
+    except KeyboardInterrupt:
+        print("\nShutdown requested.")
+
+
+def _cmd_generate(args):
+    """Executer une generation de texte one-shot via le pipeline."""
+    print(f"Loading model: {args.model}...")
+    try:
+        from core.inference_pipeline import InferencePipeline
+        pipeline = InferencePipeline(
+            backend_name=args.backend,
+            verbose=False,
+            enable_metrics=False,
+        )
+        pipeline.load(args.model, num_gpus=args.gpus)
+        print(f"Model loaded ({pipeline.num_gpus} GPU(s), "
+              f"{len(pipeline.blocks)} blocks)")
+        print()
+        result = pipeline.generate(
+            args.prompt,
+            max_new_tokens=args.max_tokens,
+            temperature=args.temperature,
+        )
+        print(result)
+        pipeline.shutdown()
     except Exception as e:
-        INFER_ERRORS.inc()
-        log.error(f"Erreur inférence: {e}")
+        print(f"ERROR: {e}", file=sys.stderr)
+        sys.exit(1)
 
-    log.info("Exécution terminée ✅")
 
-    # Fast-path fibre/usb4 (stub) ouverture
-    channel = open_low_latency_channel()
-    log.info(f"Fast-path ouvert kind={channel.kind} shm={channel.shm_path}")
-    # Test d'écriture/lecture fastpath (démo)
-    payload = b"hello-fastpath"
-    channel.send(payload)
-    echoed = channel.recv()
-    if echoed == payload:
-        log.info("Fastpath mmap OK (echo)")
+def _cmd_benchmark(args):
+    """Benchmark GPU avec matmul."""
+    print("GPU Benchmark")
+    print("-" * 40)
+    try:
+        from core.layer_profiler import LayerProfiler
+        profiler = LayerProfiler()
+        results = profiler.benchmark_gpu(matrix_size=args.size)
+        for key, val in results.items():
+            if isinstance(val, float):
+                print(f"  {key}: {val:.2f}")
+            else:
+                print(f"  {key}: {val}")
+    except Exception as e:
+        print(f"Benchmark failed: {e}")
+        try:
+            import torch
+            if torch.cuda.is_available():
+                for i in range(torch.cuda.device_count()):
+                    props = torch.cuda.get_device_properties(i)
+                    print(f"  GPU {i}: {props.name} "
+                          f"({props.total_memory / (1024**3):.1f} GB)")
+            else:
+                print("  No CUDA GPU available")
+        except ImportError:
+            print("  PyTorch not installed")
+
+
+def _cmd_discover(args):
+    """Decouverte des noeuds reseau."""
+    print("Network Node Discovery")
+    print("-" * 40)
+    try:
+        from core.network.cluster_discovery import ClusterDiscovery
+        import time
+        disc = ClusterDiscovery(heartbeat_interval=2)
+        disc.start()
+        print(f"Listening for {args.timeout}s...")
+        time.sleep(args.timeout)
+        nodes = disc.get_nodes()
+        disc.stop()
+        if nodes:
+            for hostname, info in nodes.items():
+                print(f"  [{hostname}] {info}")
+        else:
+            print("  No nodes discovered (try a longer timeout or check network)")
+    except Exception as e:
+        print(f"Discovery failed: {e}")
+
+
+def _cmd_split(args):
+    """Profiler et splitter un modele sur plusieurs GPUs."""
+    print(f"VRAMancer Model Splitter")
+    print(f"  Model: {args.model}")
+    print(f"  GPUs: {args.gpus}")
+    print(f"  Strategy: {'profiler' if args.profile else 'vram-proportional'}")
+    print()
+    try:
+        from core.model_splitter import split_model_into_blocks
+        blocks = split_model_into_blocks(
+            model_name=args.model,
+            num_gpus=args.gpus,
+            use_profiler=args.profile,
+        )
+        print(f"Split into {len(blocks)} blocks:")
+        for i, block in enumerate(blocks):
+            n_layers = len(list(block.children())) if hasattr(block, "children") else "?"
+            params = sum(p.numel() for p in block.parameters()) if hasattr(block, "parameters") else 0
+            print(f"  Block {i}: {n_layers} layers, {params / 1e6:.1f}M parameters")
+    except ImportError as e:
+        print(f"Import error: {e}")
+        print("  Install: pip install torch transformers")
+        sys.exit(1)
+    except Exception as e:
+        print(f"Split error: {e}")
+        sys.exit(1)
+
+
+def _cmd_health():
+    """Verifier la sante du systeme."""
+    print("VRAMancer Health Check")
+    print("=" * 50)
+    checks = {}
+    py_ver = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+    checks["python"] = {"status": "ok", "version": py_ver}
+
+    for module_name in ["core.config", "core.monitor", "core.scheduler",
+                        "core.block_router", "core.backends", "core.production_api"]:
+        try:
+            __import__(module_name)
+            checks[module_name] = {"status": "ok"}
+        except Exception as e:
+            checks[module_name] = {"status": "error", "error": str(e)}
+
+    try:
+        import torch
+        checks["torch"] = {"status": "ok", "version": torch.__version__,
+                           "cuda": torch.cuda.is_available()}
+    except ImportError:
+        checks["torch"] = {"status": "missing"}
+
+    all_ok = True
+    for name, result in checks.items():
+        status = result["status"]
+        icon = "OK" if status == "ok" else "FAIL"
+        extra = ""
+        if "version" in result:
+            extra = f" v{result['version']}"
+        if "cuda" in result:
+            extra += f" (CUDA: {result['cuda']})"
+        if "error" in result:
+            extra = f" — {result['error']}"
+        print(f"  [{icon:>4}] {name}{extra}")
+        if status != "ok":
+            all_ok = False
+
+    print()
+    if all_ok:
+        print("All checks passed!")
     else:
-        log.warning("Fastpath echo failed (stub mode?)")
+        print("Some checks failed.")
+        sys.exit(1)
 
-    # Boucle principale (placeholder) simulation d'accès blocs
-    while True:
-        # Simule accès sur quelques blocs pour déclencher promotions
-        for bid, meta in list(hmem.registry.items())[:2]:
-            dummy_block = MemoryBlock(size_mb=meta['size_mb'], gpu_id=0)
-            dummy_block.id = bid
-            hmem.touch(dummy_block)
-            hmem.promote_policy(dummy_block)
-        time.sleep(5)
+
 if __name__ == "__main__":
     main()
+

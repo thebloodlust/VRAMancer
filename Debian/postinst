@@ -1,5 +1,0 @@
-#!/bin/bash
-install -m 755 vrm /usr/local/bin/vrm
-install -m 644 debian/icons/vramancer.png /usr/share/icons/vramancer.png
-install -m 644 debian/vrmancer.desktop /usr/share/applications/vrmancer.desktop
-update-desktop-database

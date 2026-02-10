@@ -1,42 +1,34 @@
 # core/tokenizer.py
 """
-Wrapper léger autour de transformers.AutoTokenizer.
+Wrapper leger autour de transformers.AutoTokenizer.
 
-Il cache le tokenizer dans un cache mémoire afin
-d’éviter de le re‑télécharger à chaque lancement.
+Cache le tokenizer en memoire afin d'eviter de le re-telecharger.
 """
+from __future__ import annotations
+from typing import Optional, Any
 
-import transformers
-from typing import Optional
+try:
+    import transformers  # type: ignore
+    _HAS_TRANSFORMERS = True
+except ImportError:
+    transformers = None  # type: ignore
+    _HAS_TRANSFORMERS = False
 
-# On garde un cache global dans le module
-_tokenizer_cache = {}
+_tokenizer_cache: dict[str, Any] = {}
 
 def get_tokenizer(
     model_name: str,
     cache_dir: Optional[str] = None,
     **kwargs,
-) -> transformers.PreTrainedTokenizer:
+) -> Any:
     """
-    Retourne un tokenizer à partir d’un nom de modèle (ex. 'gpt2').
+    Retourne un tokenizer a partir d'un nom de modele (ex. 'gpt2').
 
-    Le tokenizer est mis en cache dans `_tokenizer_cache`
-    pour éviter de le re‑télécharger sur le disque.
-
-    Parameters
-    ----------
-    model_name : str
-        Nom du modèle HuggingFace (ex. 'gpt2', 'EleutherAI/gpt-neo-125M', etc.).
-    cache_dir : str | None
-        Répertoire où télécharger le tokenizer (par défaut, HuggingFace cache).
-    **kwargs
-        Autres arguments passés à `AutoTokenizer.from_pretrained`.
-
-    Returns
-    -------
-    transformers.PreTrainedTokenizer
-        Le tokenizer chargé.
+    Raises ImportError si transformers n'est pas installe.
     """
+    if not _HAS_TRANSFORMERS:
+        raise ImportError("transformers requis : pip install transformers")
+
     if model_name in _tokenizer_cache:
         return _tokenizer_cache[model_name]
 

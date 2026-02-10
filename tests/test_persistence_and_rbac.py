@@ -1,7 +1,6 @@
 import os, time
 from core.hierarchical_memory import HierarchicalMemoryManager
 from core.memory_block import MemoryBlock
-from core.task_scheduler import OpportunisticScheduler
 from core.network.supervision_api import app
 os.environ['VRM_DISABLE_RATE_LIMIT'] = '1'
 
@@ -15,20 +14,6 @@ def test_memory_persistence_cycle(tmp_path):
     loaded = hmm2.load_state(str(tmp_path/"state.pkl"))
     assert loaded is True
     assert hmm2.get_tier("PX1") == "L1"
-
-def test_scheduler_history_persistence(tmp_path):
-    hist_path = tmp_path/"sched_hist.jsonl"
-    sch = OpportunisticScheduler(history_path=str(hist_path))
-    sch.submit(lambda: time.sleep(0.05), priority="NORMAL")
-    # attendre jusqu'à 1s max pour que thread tourne (poll_interval réduit)
-    for _ in range(20):
-        if len(sch.history) >= 1:
-            break
-        time.sleep(0.05)
-    assert len(sch.history) >= 1
-    # reload
-    sch2 = OpportunisticScheduler(history_path=str(hist_path))
-    assert len(sch2.history) >= 1
 
 def test_rbac_roles():
     c = app.test_client()
