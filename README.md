@@ -46,7 +46,11 @@ Most people don't have 8× A100s. They have one good GPU, one old GPU, maybe a f
 ```bash
 git clone https://github.com/thebloodlust/VRAMancer.git
 cd VRAMancer
-pip install -e .
+
+# Auto-install (détecte OS, GPU, installe PyTorch automatiquement)
+python install.py            # Linux / macOS / WSL
+# ou: install.bat            # Windows
+# ou: bash Install.sh        # Alternative bash
 
 # Start the API server
 python -m vramancer.main --api
