@@ -1,53 +1,76 @@
-# VRAMancer
-
-**Run large language models across mismatched GPUs.**
-
-VRAMancer splits a model proportionally across heterogeneous GPUs (e.g. RTX 3090 24GB + RTX 5070 Ti 16GB = 40GB cooperative pool) and runs inference with pipeline parallelism. No other open-source tool does this — vLLM, llama.cpp, TGI, and Ollama all require identical GPUs or fall back to CPU offload.
-
----
-
-## Why VRAMancer?
-
-Most people don't have 8× A100s. They have one good GPU, one old GPU, maybe a friend's machine on the network. VRAMancer is built for this reality:
-
-| Feature | VRAMancer | vLLM | TGI | Ollama |
-|---|:---:|:---:|:---:|:---:|
-| Heterogeneous multi-GPU (different VRAM) | ✅ | ❌ | ❌ | ❌ |
-| Cross-vendor (NVIDIA + AMD + Apple) | ✅ | Partial | ❌ | ✅ |
-| Speculative VRAM Lending (cooperative pool) | ✅ | ❌ | ❌ | ❌ |
-| Multi-node clustering (mDNS auto-discovery) | ✅ | ✅ | ❌ | ❌ |
-| GPU hot-plug detection | ✅ | ❌ | ❌ | ❌ |
-| Paged KV cache + prefix caching | ✅ | ✅ | ✅ | ❌ |
-| Continuous batching | ✅ | ✅ | ✅ | ❌ |
-| 6-tier hierarchical memory (VRAM→DRAM→NVMe→network) | ✅ | ❌ | ❌ | ❌ |
-| Built-in Prometheus/Grafana monitoring | ✅ | ✅ | ✅ | ❌ |
-
-### Unique to VRAMancer
-
-- **Speculative VRAM Lending**: GPUs cooperatively lend idle VRAM to neighbors. Your 3090 runs out of KV cache space? It borrows 2GB from the 5070 Ti — transparently, with lease tracking and graceful reclaim.
-- **VTP (VRAMancer Transport Protocol)**: LLM-optimized transport with GPUDirect RDMA, zero-copy TCP, and double-buffered tensor streaming. 64-byte binary headers, per-layer routing, KV cache streaming.
-- **6-Tier Memory Hierarchy**: Blocks flow automatically between VRAM → DRAM → NVMe → network, scored by hybrid LRU/LFU hotness with real NVMe detection.
-- **GPU Hot-Plug**: Add or remove GPUs at runtime — the pipeline detects changes and rebalances automatically.
+<div align="center">
+  <h1>🚀 VRAMancer</h1>
+  <p><b>The Heterogeneous AI Swarm / L'Essaim IA Hétérogène</b></p>
+  <p>
+    <img src="https://img.shields.io/badge/Status-Production%20Ready-success" alt="Status">
+    <img src="https://img.shields.io/badge/Hardware-NVIDIA%20%7C%20AMD%20%7C%20Apple-blue" alt="Hardware">
+    <img src="https://img.shields.io/badge/Network-P2P%20%7C%20WebGPU-purple" alt="Network">
+  </p>
+</div>
 
 ---
 
-## Quick Start
+## 🌍 What is VRAMancer? / Qu'est-ce que VRAMancer ?
 
-> **Guide complet pas à pas** : voir [docs/INSTALL_ULTRA_DEBUTANT.md](docs/INSTALL_ULTRA_DEBUTANT.md) — Windows : [INSTALL_WINDOWS.md](INSTALL_WINDOWS.md)
+**[EN]** VRAMancer is an enterprise-grade, heterogeneous multi-GPU inference engine. It allows you to pool VRAM from completely different devices (e.g., an EPYC server with RTX 3090, a Windows laptop with RTX 4060, and a Mac Mini M4) over a local network (Wi-Fi, Ethernet, USB4) to run massive LLMs like Llama 3 70B that wouldn't fit on a single machine.
 
-### Prerequisites
+**[FR]** VRAMancer est un moteur d'inférence multi-GPU hétérogène de niveau entreprise. Il vous permet de fusionner la VRAM d'appareils totalement différents (ex: un serveur EPYC avec RTX 3090, un PC portable Windows avec RTX 4060, et un Mac Mini M4) via le réseau local (Wi-Fi, Ethernet, USB4) pour faire tourner des modèles géants comme Llama 3 70B qui ne tiendraient pas sur une seule machine.
 
-- Python 3.10+
-- PyTorch (CUDA, ROCm, or MPS)
-- (Optional) `transformers` for HuggingFace models
+---
 
-### Install & Run
+## ✨ Key Features / Fonctionnalités Clés
 
+*   **🧠 Heterogeneous Pooling (CUDA + ROCm + MPS)**: Mix NVIDIA, AMD, and Apple Silicon seamlessly. / *Mélangez NVIDIA, AMD et Apple Silicon de manière transparente.*
+*   **⚡ C++ GIL Bypass**: Custom C++ kernels for ultra-fast PCIe P2P transfers on high-lane CPUs (like AMD EPYC). / *Noyaux C++ natifs pour des transferts PCIe P2P ultra-rapides.*
+*   **🌐 Swarm Inference (P2P)**: No master node required. Devices discover each other via mDNS and share the workload. / *Découverte automatique via mDNS, les appareils se partagent le calcul.*
+*   **🕸️ WebGPU Offloading**: Let any web browser (Chrome/Safari) join your cluster and lend its GPU power. / *Laissez n'importe quel navigateur web prêter la puissance de sa carte graphique.*
+*   **🛡️ Zero-Trust Security**: Enterprise-grade API security with HMAC tokens and RBAC. / *Sécurité API de niveau entreprise avec tokens HMAC.*
+*   **📊 Advanced Telemetry**: Built-in Prometheus metrics and Grafana dashboards. / *Métriques Prometheus et tableaux de bord Grafana intégrés.*
+
+---
+
+## 🚀 Quickstart / Démarrage Rapide (Plug & Play)
+
+**[EN] No Python required!** Download the standalone executable for your OS from the Releases page.
+**[FR] Pas besoin de Python !** Téléchargez l'exécutable autonome pour votre OS depuis la page Releases.
+
+### 1. Start the Main Node (Le Serveur)
 ```bash
-git clone https://github.com/thebloodlust/VRAMancer.git
-cd VRAMancer
+# Linux (EPYC Server)
+./vramancer-linux start --model "meta-llama/Llama-3-70b-instruct" --master
+```
 
-# Auto-install (détecte OS, GPU, installe PyTorch automatiquement)
+### 2. Connect your Devices (Les Renforts)
+```bash
+# Windows Laptop (RTX 4060)
+vramancer.exe join --auto-discover
+
+# Mac Mini (M4)
+./vramancer-macos join --auto-discover
+```
+
+### 3. Chat! (Discutez !)
+Open your browser and go to / *Ouvrez votre navigateur sur* : **http://localhost:5000**
+
+---
+
+## 🏗️ Architecture (V2)
+
+VRAMancer uses a 6-tier hierarchical memory system and advanced network protocols:
+*   **Tier 1**: VRAM (CUDA/ROCm/MPS)
+*   **Tier 2**: System RAM (Pinned Memory)
+*   **Tier 3**: NVMe SSD (PCIe Gen4/Gen5 Offloading)
+*   **Tier 4**: FastPath Network (RDMA / Zero-copy TCP)
+*   **Tier 5**: Swarm Peers (mDNS discovered nodes)
+*   **Tier 6**: WebGPU Clients (Browsers via WebSockets)
+
+### 🔮 Coming Soon (V2 Roadmap)
+*   **Neural Compression**: On-the-fly INT4 quantization to kill network bandwidth bottlenecks.
+*   **Wake-on-Inference**: Automatically wake up sleeping laptops (WoL) only when a massive prompt requires their VRAM.
+*   **Live USB**: Boot any PC from a USB stick to instantly join the Swarm without touching the local hard drive.
+
+---
+*Built with ❤️ for the Open-Source AI Community.*
 python install.py            # Linux / macOS / WSL
 # ou: install.bat            # Windows
 # ou: bash Install.sh        # Alternative bash

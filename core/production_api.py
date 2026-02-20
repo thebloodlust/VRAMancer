@@ -88,6 +88,13 @@ def create_app(model_name: Optional[str] = None,
     try:
         from core.security import install_security
         install_security(application)
+        
+        # Enforce zero-trust startup checks
+        try:
+            from core.security.zero_trust import enforce_zero_trust_startup
+            enforce_zero_trust_startup()
+        except ImportError:
+            pass
     except ImportError:
         logger.warning("Security module not available — running without auth")
 

@@ -50,6 +50,16 @@ except ImportError:
     torch = None  # type: ignore
     _TORCH = False
 
+# GPU Fault Tolerance
+try:
+    from core.gpu_fault_tolerance import (
+        GPUFaultManager, get_fault_manager, reset_fault_manager,
+        GPUHealth, FaultType,
+    )
+    _FAULT_TOLERANCE = True
+except ImportError:
+    _FAULT_TOLERANCE = False
+
 try:
     from core.metrics import (
         INFER_REQUESTS, INFER_ERRORS, INFER_LATENCY, GPU_MEMORY_USED,
@@ -105,6 +115,7 @@ class InferencePipeline:
         self.continuous_batcher = None
         self.paged_kv = None
         self.lending_pool = None
+        self.fault_manager: Optional[Any] = None
 
         # Dynamic rebalancing
         self._rebalance_thread: Optional[threading.Thread] = None
@@ -252,6 +263,9 @@ class InferencePipeline:
             if self.num_gpus > 1:
                 self._init_lending_pool()
 
+            # 14. Init GPU Fault Tolerance
+            self._init_fault_tolerance()
+
         return self
 
     # ------------------------------------------------------------------
@@ -325,7 +339,8 @@ class InferencePipeline:
                 if temperature != 1.0:
                     gen_kwargs["do_sample"] = True
 
-                result = self.backend.generate(prompt, **gen_kwargs)
+                # Execute with fault tolerance protection
+                result = self._protected_generate(prompt, gen_kwargs)
 
                 elapsed = time.perf_counter() - start
                 if _METRICS:
@@ -383,7 +398,8 @@ class InferencePipeline:
         start = time.perf_counter()
         with span_ctx as span:
             try:
-                result = self.backend.infer(input_ids)
+                # Execute with fault tolerance protection
+                result = self._protected_infer(input_ids)
                 elapsed = time.perf_counter() - start
                 if _METRICS:
                     INFER_LATENCY.observe(elapsed)
@@ -399,6 +415,203 @@ class InferencePipeline:
                     span.set_attribute("error.message", str(e))
                 _logger.error("Inference failed: %s", e)
                 raise
+
+    # ------------------------------------------------------------------
+    # Fault-tolerant execution wrappers
+    # ------------------------------------------------------------------
+
+    def _protected_generate(self, prompt: str, gen_kwargs: dict) -> str:
+        """Execute generate() with GPU fault protection.
+
+        If the fault manager is active, wraps the call with protected_call()
+        which handles OOM retry, GPU isolation and fallback to alternate GPUs.
+        """
+        if self.fault_manager and _FAULT_TOLERANCE:
+            # Determine primary GPU (device 0 for single-GPU, or first healthy)
+            primary_gpu = self._get_primary_gpu()
+            try:
+                return self.fault_manager.protected_call(
+                    gpu_id=primary_gpu,
+                    fn=self.backend.generate,
+                    args=(prompt,),
+                    kwargs=gen_kwargs,
+                    retry_on_oom=True,
+                    max_retries=2,
+                )
+            except RuntimeError as e:
+                _logger.error("Protected generate failed: %s — trying fallback", e)
+                # Last resort: try on any surviving GPU
+                return self._generate_on_survivor(prompt, gen_kwargs, exclude=primary_gpu)
+        else:
+            return self.backend.generate(prompt, **gen_kwargs)
+
+    def _protected_infer(self, input_ids: Any) -> Any:
+        """Execute infer() with GPU fault protection."""
+        if self.fault_manager and _FAULT_TOLERANCE:
+            primary_gpu = self._get_primary_gpu()
+            try:
+                return self.fault_manager.protected_call(
+                    gpu_id=primary_gpu,
+                    fn=self.backend.infer,
+                    args=(input_ids,),
+                    retry_on_oom=True,
+                    max_retries=2,
+                )
+            except RuntimeError as e:
+                _logger.error("Protected infer failed: %s", e)
+                raise
+        else:
+            return self.backend.infer(input_ids)
+
+    def _get_primary_gpu(self) -> int:
+        """Return the primary GPU for inference (first healthy GPU)."""
+        if self.fault_manager and _FAULT_TOLERANCE:
+            healthy = self.fault_manager.get_healthy_gpus()
+            if healthy:
+                return healthy[0]
+        return 0
+
+    def _generate_on_survivor(self, prompt: str, gen_kwargs: dict, exclude: int) -> str:
+        """Try to generate on any GPU other than the excluded one."""
+        if not self.fault_manager or not _FAULT_TOLERANCE:
+            raise RuntimeError("No fault manager — cannot find survivor GPU")
+
+        healthy = [g for g in self.fault_manager.get_healthy_gpus() if g != exclude]
+        if not healthy:
+            raise RuntimeError("All GPUs failed — no survivor available for inference")
+
+        alt_gpu = healthy[0]
+        _logger.warning("Attempting generation on survivor GPU %d", alt_gpu)
+        return self.fault_manager.protected_call(
+            gpu_id=alt_gpu,
+            fn=self.backend.generate,
+            args=(prompt,),
+            kwargs=gen_kwargs,
+            retry_on_oom=False,
+            max_retries=0,
+        )
+
+    # ------------------------------------------------------------------
+    # Fault tolerance initialization
+    # ------------------------------------------------------------------
+
+    def _init_fault_tolerance(self) -> None:
+        """Initialize GPU fault tolerance with block migration support."""
+        if not _FAULT_TOLERANCE:
+            _logger.debug("GPU fault tolerance not available (import failed)")
+            return
+
+        try:
+            self.fault_manager = get_fault_manager(num_gpus=self.num_gpus)
+
+            # Register block migration callback
+            if self.scheduler and self.transfer_manager:
+                self.fault_manager.set_migrate_callback(self._migrate_blocks)
+
+            # Register failure callback — triggers emergency rebalance
+            self.fault_manager.on_gpu_failed(self._on_gpu_failure)
+
+            # Register recovery callback — re-register GPU in scheduler
+            self.fault_manager.on_gpu_recovered(self._on_gpu_recovery)
+
+            # Register existing blocks with fault manager
+            if self.blocks and self.scheduler:
+                for i in range(self.num_gpus):
+                    block_ids = [
+                        idx for idx, b in enumerate(self.blocks)
+                        if getattr(b, 'gpu_id', None) == i
+                        or (isinstance(b, dict) and b.get('gpu_id') == i)
+                    ]
+                    if block_ids:
+                        self.fault_manager.register_blocks(i, block_ids)
+
+            _logger.info(
+                "GPU fault tolerance active: %d GPUs monitored, "
+                "max_consecutive_failures=%d, recovery_probe_interval=%.0fs",
+                self.fault_manager.num_gpus,
+                self.fault_manager.max_consecutive_failures,
+                self.fault_manager.recovery_probe_interval,
+            )
+        except Exception as e:
+            _logger.warning("Fault tolerance init failed: %s", e)
+            self.fault_manager = None
+
+    def _migrate_blocks(self, source_gpu: int, target_gpu: int) -> int:
+        """Migrate model blocks from a failed GPU to a healthy one.
+
+        Called by GPUFaultManager when a GPU is isolated.
+        Returns the number of blocks successfully migrated.
+        """
+        migrated = 0
+        if not self.transfer_manager:
+            return migrated
+
+        for idx, block in enumerate(self.blocks):
+            block_gpu = getattr(block, 'gpu_id', None)
+            if block_gpu is None and isinstance(block, dict):
+                block_gpu = block.get('gpu_id')
+            if block_gpu != source_gpu:
+                continue
+
+            try:
+                # Use TransferManager for the actual data transfer
+                if _TORCH and hasattr(block, 'data'):
+                    self.transfer_manager.transfer(
+                        tensor=block.data,
+                        src_device=source_gpu,
+                        dst_device=target_gpu,
+                    )
+                # Update block assignment
+                if hasattr(block, 'gpu_id'):
+                    block.gpu_id = target_gpu
+                elif isinstance(block, dict):
+                    block['gpu_id'] = target_gpu
+
+                migrated += 1
+                _logger.info(
+                    "Block %d migrated: GPU %d -> GPU %d",
+                    idx, source_gpu, target_gpu,
+                )
+            except Exception as e:
+                _logger.error(
+                    "Block %d migration failed (GPU %d -> %d): %s",
+                    idx, source_gpu, target_gpu, e,
+                )
+
+        # Update fault manager block registry
+        if self.fault_manager and _FAULT_TOLERANCE:
+            new_blocks = [
+                idx for idx, b in enumerate(self.blocks)
+                if getattr(b, 'gpu_id', None) == target_gpu
+                or (isinstance(b, dict) and b.get('gpu_id') == target_gpu)
+            ]
+            self.fault_manager.register_blocks(target_gpu, new_blocks)
+            self.fault_manager.register_blocks(source_gpu, [])
+
+        return migrated
+
+    def _on_gpu_failure(self, gpu_id: int, fault_type: "FaultType") -> None:
+        """Callback when a GPU fails — trigger emergency rebalance."""
+        _logger.error(
+            "GPU %d FAILED (%s) — triggering emergency rebalance",
+            gpu_id, fault_type.name if hasattr(fault_type, 'name') else fault_type,
+        )
+        # Mark GPU as unavailable in scheduler
+        if self.scheduler and hasattr(self.scheduler, 'mark_gpu_unavailable'):
+            self.scheduler.mark_gpu_unavailable(gpu_id)
+
+        # Emergency rebalance via stream manager
+        if self.stream_manager:
+            try:
+                self.stream_manager.swap_if_needed()
+            except Exception as e:
+                _logger.warning("Emergency rebalance failed: %s", e)
+
+    def _on_gpu_recovery(self, gpu_id: int) -> None:
+        """Callback when a GPU recovers — re-register in scheduler."""
+        _logger.info("GPU %d recovered — re-registering in scheduler", gpu_id)
+        if self.scheduler and hasattr(self.scheduler, 'mark_gpu_available'):
+            self.scheduler.mark_gpu_available(gpu_id)
 
     def _generate_fallback(self, prompt: str, max_new_tokens: int) -> str:
         """Fallback text generation for backends without native generate()."""
@@ -417,7 +630,7 @@ class InferencePipeline:
 
     def status(self) -> Dict[str, Any]:
         """Return pipeline status as a dict."""
-        return {
+        result = {
             "loaded": self._loaded,
             "model": self.model_name,
             "backend": type(self.backend).__name__ if self.backend else None,
@@ -430,6 +643,7 @@ class InferencePipeline:
             "discovery": self.discovery is not None,
             "continuous_batcher": self.continuous_batcher is not None,
             "paged_kv_cache": self.paged_kv is not None,
+            "fault_tolerance": self.fault_manager is not None,
             "gpus": self.scheduler.get_available_gpus() if self.scheduler else [],
             "transfer_stats": (
                 self.transfer_manager.stats()
@@ -440,6 +654,11 @@ class InferencePipeline:
                 if self.continuous_batcher else None
             ),
         }
+        # Fault tolerance details
+        if self.fault_manager and _FAULT_TOLERANCE:
+            result["fault_stats"] = self.fault_manager.stats()
+            result["healthy_gpus"] = self.fault_manager.get_healthy_gpus()
+        return result
 
     def is_loaded(self) -> bool:
         return self._loaded
@@ -726,6 +945,13 @@ class InferencePipeline:
     def shutdown(self):
         """Cleanup all resources."""
         _logger.info("Shutting down inference pipeline...")
+
+        # Stop fault tolerance recovery thread
+        if self.fault_manager and hasattr(self.fault_manager, 'stop'):
+            try:
+                self.fault_manager.stop()
+            except Exception:
+                pass
 
         # Stop continuous batcher
         if self.continuous_batcher:

@@ -158,6 +158,44 @@ def detect_backend() -> str:
     return 'cpu'
 
 
+def detect_device_backend(device_index: int) -> str:
+    """Détecte le backend d'un GPU spécifique (per-device, pas global).
+
+    Contrairement à detect_backend() qui retourne un seul backend global,
+    cette fonction identifie le vendor/backend de chaque GPU individuellement.
+    Essentiel pour les setups mixtes AMD + NVIDIA.
+
+    Returns:
+        'cuda' (NVIDIA), 'rocm' (AMD), 'mps' (Apple), ou 'cpu'
+    """
+    try:
+        if not torch.cuda.is_available():
+            return 'cpu'
+        if device_index >= torch.cuda.device_count():
+            return 'cpu'
+
+        name = torch.cuda.get_device_name(device_index).upper()
+
+        # AMD patterns
+        amd_patterns = ('AMD', 'RADEON', 'INSTINCT', 'MI100', 'MI200',
+                        'MI250', 'MI300', 'NAVI', 'VEGA', 'CDNA')
+        if any(p in name for p in amd_patterns):
+            return 'rocm'
+
+        # NVIDIA patterns (explicit match vs default)
+        nvidia_patterns = ('NVIDIA', 'GEFORCE', 'QUADRO', 'TESLA', 'RTX',
+                           'GTX', 'TITAN', 'A100', 'H100', 'L40')
+        if any(p in name for p in nvidia_patterns):
+            return 'cuda'
+
+        # Fallback to global detection
+        if hasattr(torch.version, 'hip') and torch.version.hip:
+            return 'rocm'
+        return 'cuda'
+    except Exception:
+        return 'cpu'
+
+
 def get_device_type(idx: int) -> torch.device:
     """Retourne un objet torch.device cohérent pour un index.
 
@@ -176,22 +214,27 @@ def enumerate_devices() -> List[Dict[str, Any]]:
     """Fournit une liste unifiée des devices disponibles.
 
     Structure par entrée:
-      {"id": <str>, "backend": <cuda|rocm|mps|cpu>, "index": <int|str>, "name": str, "total_memory": Optional[int]}
+      {"id": <str>, "backend": <cuda|rocm|mps|cpu>, "index": <int|str>,
+       "name": str, "total_memory": Optional[int], "vendor": str}
+
+    Supporte les setups mixtes AMD + NVIDIA en détectant le vendor
+    par GPU individuellement via detect_device_backend().
     """
     devices: List[Dict[str, Any]] = []
-    backend = detect_backend()
     # CUDA / ROCm partagent torch.cuda
     try:
         if torch.cuda.is_available():
             for i in range(torch.cuda.device_count()):
                 props = torch.cuda.get_device_properties(i)
-                dev_backend = 'rocm' if (backend == 'rocm' and 'AMD' in props.name.upper()) else 'cuda'
+                dev_backend = detect_device_backend(i)
                 devices.append({
                     'id': f"{dev_backend}:{i}",
                     'backend': dev_backend,
                     'index': i,
                     'name': props.name,
                     'total_memory': props.total_memory,
+                    'vendor': 'amd' if dev_backend == 'rocm' else (
+                        'nvidia' if dev_backend == 'cuda' else 'unknown'),
                 })
     except Exception:
         pass
@@ -204,6 +247,7 @@ def enumerate_devices() -> List[Dict[str, Any]]:
                 'index': 0,
                 'name': 'Apple MPS',
                 'total_memory': None,
+                'vendor': 'apple',
             })
     except Exception:
         pass
@@ -214,6 +258,7 @@ def enumerate_devices() -> List[Dict[str, Any]]:
             'index': 0,
             'name': 'CPU',
             'total_memory': None,
+            'vendor': 'generic',
         })
     return devices
 
@@ -249,6 +294,7 @@ __all__ = [
     'get_tokenizer',
     'get_device_type',
     'detect_backend',
+    'detect_device_backend',
     'enumerate_devices',
-    'assign_block_to_device'
+    'assign_block_to_device',
 ]

@@ -130,6 +130,7 @@ class GPUBudget:
     device_name: str = ""
     pcie_gen: int = 4             # PCIe generation (affects transfer speed)
     compute_capability: Tuple[int, int] = (0, 0)
+    vendor: str = ""              # GPU vendor ("nvidia", "amd", "intel")
 
     @property
     def free_bytes(self) -> int:
@@ -187,6 +188,12 @@ class LendingPolicy:
 
     # Prefer lending to GPUs with faster interconnect
     prefer_fast_interconnect: bool = True
+
+    # Prefer same-vendor GPUs for lending (P2P possible)
+    prefer_same_vendor: bool = True
+
+    # Cross-vendor lending penalty (0.0 = no penalty, 1.0 = never cross-vendor)
+    cross_vendor_penalty: float = 0.15
 
     # Temperature threshold — stop lending if GPU is too hot (°C)
     thermal_limit_c: float = 82.0
@@ -279,10 +286,13 @@ class VRAMLendingPool:
         device_name: str = "",
         pcie_gen: int = 4,
         compute_capability: Tuple[int, int] = (0, 0),
+        vendor: str = "",
     ) -> GPUBudget:
         """Register a GPU in the lending pool.
 
         Should be called after model loading, when model_bytes is known.
+        The vendor field enables cross-vendor lending awareness (e.g. AMD
+        lending to NVIDIA with a small scoring penalty for PCIe-staged transfer).
         """
         with self._lock:
             reserved = int(total_bytes * self.policy.min_free_ratio)
@@ -294,6 +304,7 @@ class VRAMLendingPool:
                 device_name=device_name,
                 pcie_gen=pcie_gen,
                 compute_capability=compute_capability,
+                vendor=vendor or self._detect_vendor(gpu_id, device_name),
             )
             self._budgets[gpu_id] = budget
 
@@ -303,12 +314,27 @@ class VRAMLendingPool:
 
             log.info(
                 "GPU %d registered: %s, total=%.1f GB, model=%.1f GB, "
-                "lendable=%.1f GB, PCIe %d",
+                "lendable=%.1f GB, PCIe %d, vendor=%s",
                 gpu_id, device_name or f"cuda:{gpu_id}",
                 total_bytes / 1e9, model_bytes / 1e9,
-                budget.lendable_bytes / 1e9, pcie_gen,
+                budget.lendable_bytes / 1e9, pcie_gen, budget.vendor or "unknown",
             )
             return budget
+
+    @staticmethod
+    def _detect_vendor(gpu_id: int, device_name: str) -> str:
+        """Auto-detect GPU vendor from device name."""
+        name = device_name.upper()
+        amd_patterns = ("AMD", "RADEON", "INSTINCT", "MI100", "MI200",
+                        "MI250", "MI300", "NAVI", "VEGA", "CDNA",
+                        "RX 5", "RX 6", "RX 7", "RX 8", "RX 9")
+        if any(p in name for p in amd_patterns):
+            return "amd"
+        nvidia_patterns = ("NVIDIA", "GEFORCE", "QUADRO", "TESLA", "RTX",
+                           "GTX", "TITAN", "A100", "H100", "L40")
+        if any(p in name for p in nvidia_patterns):
+            return "nvidia"
+        return ""
 
     def _preallocate_lending_buffer(self, budget: GPUBudget) -> None:
         """Pre-allocate a lending buffer on the GPU.
@@ -492,6 +518,23 @@ class VRAMLendingPool:
             score = (capacity_score * 0.4
                      + pcie_score * 0.3
                      + idle_score * 0.3)
+
+            # Cross-vendor penalty: lending across vendors (AMD↔NVIDIA)
+            # uses CPU-staged or pipelined transfer, slower than P2P
+            borrower_budget = self._budgets.get(borrower_gpu)
+            if (self.policy.prefer_same_vendor
+                    and borrower_budget and budget.vendor and borrower_budget.vendor
+                    and budget.vendor != borrower_budget.vendor):
+                score *= (1.0 - self.policy.cross_vendor_penalty)
+                # Bonus for ReBAR-capable cross-vendor GPUs (faster transfers)
+                try:
+                    from core.cross_vendor_bridge import detect_rebar
+                    rebar_lender, _ = detect_rebar(gpu_id)
+                    rebar_borrower, _ = detect_rebar(borrower_gpu)
+                    if rebar_lender or rebar_borrower:
+                        score *= 1.10  # +10% bonus for ReBAR availability
+                except ImportError:
+                    pass
 
             if score > best_score:
                 best_score = score

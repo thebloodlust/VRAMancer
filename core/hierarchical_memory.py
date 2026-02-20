@@ -274,6 +274,30 @@ class HierarchicalMemoryManager:
             self.spill_to_nvme(block, tensor if tensor is not None else block)
 
     # --- Eviction planner (lot B) ---
+    def update_all_scores(self, current_time: float):
+        """Update all hotness scores using C++ extension if available."""
+        try:
+            import vramancer_vtp_c
+            # Prepare inputs for C++
+            access_counts = {bid: meta["access"] for bid, meta in self.registry.items()}
+            # C++ function returns updated scores
+            new_scores = vramancer_vtp_c.compute_hotness_scores(
+                access_counts,
+                self._last_touch,
+                current_time,
+                self._decay_half_life
+            )
+            self._hot_scores.update(new_scores)
+        except ImportError:
+            # Fallback to Python loop
+            decay_constant = 0.69314718056 / self._decay_half_life if self._decay_half_life > 0 else 0
+            import math
+            for bid, meta in self.registry.items():
+                count = meta["access"]
+                last_t = self._last_touch.get(bid, current_time)
+                dt = max(0.0, current_time - last_t)
+                self._hot_scores[bid] = count * math.exp(-decay_constant * dt)
+
     def eviction_cycle(self, target_free_pct: float = 10.0, vram_pressure: float | None = None):
         """Applique une politique d'éviction basée sur le hotness.
         Objectif: libérer de la VRAM L1/L2 quand la pression est trop forte.
@@ -283,6 +307,9 @@ class HierarchicalMemoryManager:
         """
         tracer = get_tracer()
         with tracer.start_as_current_span("memory.eviction_cycle"):
+            # Update all scores to current time before sorting
+            self.update_all_scores(time.time())
+            
             l12 = [bid for bid, meta in self.registry.items() if meta['tier'] in {'L1','L2'}]
             if not l12:
                 return []

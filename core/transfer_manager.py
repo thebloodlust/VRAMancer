@@ -39,12 +39,30 @@ except ImportError:
     dist = None  # type: ignore
     _DIST_AVAILABLE = False
 
+# C++ Fastpath (VTP)
+try:
+    import vramancer_vtp_c
+    _VTP_C_AVAILABLE = True
+except ImportError:
+    _VTP_C_AVAILABLE = False
+
 # Metrics (optional)
 try:
     from core.metrics import FASTPATH_BYTES, FASTPATH_LATENCY
     _METRICS = True
 except Exception:
     _METRICS = False
+
+# Cross-vendor bridge (AMD ↔ NVIDIA)
+try:
+    from core.cross_vendor_bridge import (
+        CrossVendorBridge, CrossVendorMethod, CrossVendorResult,
+        detect_gpu_vendor, GPUVendor, is_consumer_gpu as _xv_is_consumer,
+        get_cross_vendor_bridge,
+    )
+    _XVENDOR_AVAILABLE = True
+except ImportError:
+    _XVENDOR_AVAILABLE = False
 
 log = LoggerAdapter("transfer")
 
@@ -58,6 +76,7 @@ class TransportMethod(Enum):
     CUDA_P2P = auto()    # Direct cudaMemcpyPeer
     CPU_STAGED = auto()  # GPU -> CPU -> GPU (no P2P, no NCCL)
     CPU_ONLY = auto()    # Pure CPU (no GPU)
+    CROSS_VENDOR = auto()  # AMD ↔ NVIDIA via CrossVendorBridge
     STUB = auto()        # No-op (test mode)
 
 
@@ -87,16 +106,21 @@ class GPUTopology:
 
 
 def _is_consumer_gpu(name: str) -> bool:
-    """Detect NVIDIA consumer GPUs that may restrict P2P/NCCL features.
+    """Detect consumer GPUs (NVIDIA and AMD) that may restrict P2P features.
 
-    Consumer GPUs (GeForce, RTX without A/H/L prefix) may have P2P blocked
-    by the driver for more than 2 GPUs, or across different architectures.
+    Consumer GPUs (GeForce, RTX without A/H/L prefix, Radeon RX) may have
+    P2P blocked by the driver for more than 2 GPUs, or across architectures.
     NCCL still works via shared memory (SHM) transport as fallback.
     """
     name_lower = name.lower()
-    consumer_prefixes = ("geforce", "rtx 20", "rtx 30", "rtx 40", "rtx 50",
-                         "gtx", "titan")
-    return any(name_lower.startswith(p) or p in name_lower for p in consumer_prefixes)
+    # NVIDIA consumer
+    nvidia_consumer = ("geforce", "rtx 20", "rtx 30", "rtx 40", "rtx 50",
+                       "gtx", "titan")
+    # AMD consumer
+    amd_consumer = ("radeon rx", "radeon pro w", "radeon vii",
+                    "rx 5", "rx 6", "rx 7", "rx 8", "rx 9")
+    all_patterns = nvidia_consumer + amd_consumer
+    return any(name_lower.startswith(p) or p in name_lower for p in all_patterns)
 
 
 # ---------------------------------------------------------------------------
@@ -130,6 +154,9 @@ class TransferManager:
         self._nccl_initialized = False
         self._lock = threading.Lock()
 
+        # Cross-vendor bridge (AMD ↔ NVIDIA)
+        self._xvendor_bridge: Optional[Any] = None
+
         # Stats
         self._transfer_count = 0
         self._total_bytes = 0
@@ -140,6 +167,19 @@ class TransferManager:
 
         if not self._stub_mode and _TORCH_AVAILABLE:
             self._topology = self._detect_topology()
+            # Initialize cross-vendor bridge if mixed GPU vendors detected
+            if _XVENDOR_AVAILABLE:
+                try:
+                    self._xvendor_bridge = get_cross_vendor_bridge()
+                    if self._xvendor_bridge.available:
+                        log.info(
+                            "Cross-vendor GPU bridge active: "
+                            f"{self._xvendor_bridge.stats().get('cross_vendor_pairs', 0)} pair(s), "
+                            f"DMA-BUF={'yes' if self._xvendor_bridge.has_dmabuf else 'no'}, "
+                            f"ReBAR={'yes' if self._xvendor_bridge.has_rebar else 'no'}"
+                        )
+                except Exception as e:
+                    log.debug(f"Cross-vendor bridge init: {e}")
 
     # ------------------------------------------------------------------
     # Topology detection
@@ -358,9 +398,31 @@ class TransferManager:
     ) -> Tuple[TransportMethod, Any]:
         """Execute the actual GPU-to-GPU data movement.
 
-        Tries in order: P2P direct copy -> NCCL -> CPU staging.
+        Tries in order:
+          0. Cross-vendor bridge (AMD ↔ NVIDIA: DMA-BUF / ReBAR / pipelined)
+          1. P2P direct copy (same vendor, NVLink/PCIe)
+          2. NCCL send/recv (distributed mode)
+          3. CPU-staged copy (universal fallback)
+
         Returns (method_used, output_tensor_on_target).
         """
+        # --- Strategy 0: Cross-vendor bridge (AMD ↔ NVIDIA) ---
+        if (self._xvendor_bridge is not None
+                and self._xvendor_bridge.is_cross_vendor_pair(source_gpu, target_gpu)):
+            try:
+                output, xv_result = self._xvendor_bridge.transfer(
+                    source_gpu, target_gpu, tensor)
+                log.info(
+                    f"Cross-vendor GPU {source_gpu} → GPU {target_gpu}: "
+                    f"{xv_result.bytes_transferred / 1e6:.1f} MB via "
+                    f"{xv_result.method.name} "
+                    f"({xv_result.bandwidth_gbps:.1f} Gbps, "
+                    f"{xv_result.chunks_used} chunks)"
+                )
+                return TransportMethod.CROSS_VENDOR, output
+            except Exception as e:
+                log.warning(f"Cross-vendor transfer failed ({e}), falling back")
+
         # --- Strategy 1: Direct CUDA P2P copy ---
         if self._can_p2p(source_gpu, target_gpu):
             try:
@@ -393,6 +455,13 @@ class TransferManager:
         """
         # Ensure source tensor is on the right device
         src_tensor = tensor.cuda(source_gpu) if not tensor.is_cuda else tensor
+
+        if _VTP_C_AVAILABLE:
+            # Use C++ extension to bypass Python GIL during async transfer
+            dst_tensor = vramancer_vtp_c.fast_p2p_transfer(src_tensor, target_gpu)
+            if not self.async_transfers:
+                torch.cuda.synchronize(target_gpu)
+            return TransportMethod.CUDA_P2P, dst_tensor
 
         if stream is not None:
             with torch.cuda.stream(stream):
@@ -593,7 +662,7 @@ class TransferManager:
         avg_bw = 0.0
         if self._total_time_s > 0:
             avg_bw = (self._total_bytes * 8) / (self._total_time_s * 1e9)  # Gbps
-        return {
+        result = {
             "transfers": self._transfer_count,
             "total_bytes": self._total_bytes,
             "total_time_s": round(self._total_time_s, 4),
@@ -606,8 +675,11 @@ class TransferManager:
                 ),
             },
             "nccl_initialized": self._nccl_initialized,
-            "method_preference": ["CUDA_P2P", "NCCL", "CPU_STAGED"],
+            "method_preference": ["CROSS_VENDOR", "CUDA_P2P", "NCCL", "CPU_STAGED"],
         }
+        if self._xvendor_bridge is not None:
+            result["cross_vendor"] = self._xvendor_bridge.stats()
+        return result
 
     def benchmark(
         self,
@@ -669,6 +741,10 @@ class TransferManager:
 
     def _get_method_for(self, src: int, dst: int) -> str:
         """Return which method would be used for a given GPU pair."""
+        if (self._xvendor_bridge is not None
+                and self._xvendor_bridge.is_cross_vendor_pair(src, dst)):
+            method = self._xvendor_bridge.get_method(src, dst)
+            return f"CROSS_VENDOR:{method.name}"
         if self._can_p2p(src, dst):
             return "CUDA_P2P"
         if self._nccl_initialized:
