@@ -33,6 +33,11 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 try:
     from core.logger import LoggerAdapter
+from typing import TYPE_CHECKING
+try:
+    from core.hierarchical_memory import Tier
+except ImportError:
+    Tier = str
     _logger = LoggerAdapter("paged_attn")
 except Exception:
     _logger = logging.getLogger("vramancer.paged_attention")
