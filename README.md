@@ -82,6 +82,7 @@ VRAMancer uses a 6-tier hierarchical memory system and advanced network protocol
 *   **Tier 6**: WebGPU Clients (Browsers via WebSockets)
 
 ### 🔮 Coming Soon (V2 Roadmap)
+*   **Rust Core Rewrite (PyO3)**: Transition of the C++ *Software CXL* and Swarm modules to Rust. Eliminating theoretical Segfaults at the Python/Native boundary via the Rust Borrow Checker while keeping identical multi-threading AVX performance.
 *   **Neural Compression**: On-the-fly INT4 quantization to kill network bandwidth bottlenecks.
 *   **Wake-on-Inference**: Automatically wake up sleeping laptops (WoL) only when a massive prompt requires their VRAM.
 *   **Live USB**: Boot any PC from a USB stick to instantly join the Swarm without touching the local hard drive.
