@@ -31,6 +31,16 @@ import threading
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from core.hierarchical_memory import Tier, HierarchicalMemoryManager
+try:
+    import builtins
+    if not hasattr(builtins, '_hmm'):
+        builtins._hmm = HierarchicalMemoryManager()
+    hm_manager = builtins._hmm
+except Exception:
+    hm_manager = HierarchicalMemoryManager()
+
+
 try:
     from core.logger import LoggerAdapter
 from typing import TYPE_CHECKING
@@ -628,9 +638,10 @@ class PagedKVCacheManager:
 
     def _evict_lru(self) -> Optional[int]:
         """Evict the least-recently-used page (ref_count=1, oldest).
-
-        Prefers to evict borrowed (overflow) pages first to return
-        memory to lending GPUs.
+        
+        VTP INTEGRATION (L1 -> L2/L4/L7 WebGPU):
+        Instead of completely destroying the page, we instruct the VTP C++ backend
+        to offload the KV tensor to the lowest acceptable tier (e.g. Host RAM or WebGPU).
         """
         candidates = [
             p for p in self._pages
@@ -645,6 +656,31 @@ class PagedKVCacheManager:
             victim = min(borrowed, key=lambda p: p.last_access)
         else:
             victim = min(candidates, key=lambda p: p.last_access)
+
+        # 1. VTP OFFLOAD (Seamless zero-copy to L4 RAM or L7 Network)
+        # We hook into HierarchicalMemoryManager to move the tensor.
+        if hasattr(self, '_gpu_pool') and self._gpu_pool is not None:
+            block_id = f"kv_page_{victim.page_id}"
+            
+            # Select target tier (L4 SysRAM by default, L7 WebGPU if heavily congested)
+            target_tier: str = "L4" if victim.is_borrowed else "L7"
+            
+            try:
+                # Extract actual tensor slice representing the page
+                page_tensor = self._gpu_pool[victim.page_id].clone()
+                
+                from core.memory_block import MemoryBlock
+                mb = MemoryBlock(block_id, size_mb=page_tensor.nelement() * page_tensor.element_size() / (1024*1024))
+                
+                # Register block as currently in L1
+                hm_manager.register_block(mb, "L1", page_tensor)
+                
+                # Command actual physical migration via VTP / HMM
+                hm_manager.migrate(mb, target_tier, page_tensor)
+                
+                _logger.info(f"[VTP] Out-of-Memory Eviction: Page {victim.page_id} physically offloaded to {target_tier} via C++ Data Path.")
+            except Exception as e:
+                _logger.error(f"[VTP] Offload error: {e}")
 
         # Remove from any request's page table
         for entry in self._page_tables.values():
@@ -672,7 +708,6 @@ class PagedKVCacheManager:
         victim.ref_count = 0
         self._total_frees += 1
         return victim.page_id
-
     # ------------------------------------------------------------------
     # Stats
     # ------------------------------------------------------------------

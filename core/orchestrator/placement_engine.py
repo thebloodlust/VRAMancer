@@ -119,6 +119,22 @@ class PlacementEngine:
         return decision
 
     # ------------------------------------------------------------------
+    # Connectome Helper (Synaptic Weight)
+    # ------------------------------------------------------------------
+    
+    def _apply_neuroplasticity_score(self, base_score: float, gpu_id: int) -> float:
+        """Applique la pondération synaptique (Heeb) en fonction de l'état du Connectome."""
+        try:
+            from core.network.connectome import global_connectome
+            # Fake/Local mapping for GPU IDs. In real cluster this translates to Node IP.
+            # Local GPUs get 1.0 (perfect synapse)
+            node_id = f"gpu_{gpu_id}"
+            strength = global_connectome.get_synaptic_weight(node_id)
+            return base_score * strength
+        except Exception:
+            return base_score
+
+    # ------------------------------------------------------------------
     # Model-level placement (new API)
     # ------------------------------------------------------------------
 
@@ -203,10 +219,9 @@ class PlacementEngine:
         }
 
     def _strategy_vram(self, block: Dict[str, Any]) -> Dict[str, Any]:
-        """VRAM-proportional strategy (fast fallback)."""
+        """VRAM-proportional strategy with Connectome weights."""
         size_mb = block.get("size_mb", 128)
 
-        # Find GPU with most free VRAM
         gpu_id = 0
         max_free = 0
 
@@ -216,17 +231,24 @@ class PlacementEngine:
                 for dev in devs:
                     if dev["backend"] in ("cuda", "rocm", "mps"):
                         free = self.monitor.get_free_memory(dev["index"])
-                        if free > max_free:
-                            max_free = free
+                        
+                        # -> THE NEUROPLASTICITY HEURISTIC
+                        # We discount the free VRAM based on the strength of the neural connection.
+                        # Meaning a GPU with lots of VRAM but a terrible connection will look "full".
+                        effective_free = self._apply_neuroplasticity_score(free, dev["index"])
+                        
+                        if effective_free > max_free:
+                            max_free = effective_free
                             gpu_id = dev["index"]
             except Exception:
                 pass
 
+        # Since max_free is degraded by plasticity, if the network is terrible, we fall to L3 instead of L1.
         level = "L1" if max_free >= size_mb * 1024 * 1024 else "L3"
         return {
             "level": level,
             "gpu_id": gpu_id,
-            "strategy": "vram",
+            "strategy": "vram_neuroplastic",
         }
 
     def _strategy_balanced(self, block: Dict[str, Any]) -> Dict[str, Any]:

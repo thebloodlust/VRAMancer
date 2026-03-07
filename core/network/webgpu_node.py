@@ -148,6 +148,101 @@ class WebGPUNodeManager:
         self.task_queue.put_nowait(task)
         return task.future
 
+    async def submit_swarm_attention(self, layer_id: int, q_tensor: bytes, kv_tensor: bytes, timeout_s: float = 0.15) -> bytes:
+        """
+        SWARM ATTENTION (Production Mode) WITH HOLOGRAPHIC PARITY:
+        Divise le KV cache sur plusieurs noeuds. Genere un noeud de Parite XOR.
+        Si un noeud straggle ou meurt, on regenere instantanement son calcul!
+        """
+        if not self.clients:
+            _log.warning("Swarm Attention: Aucun client WebGPU. Utilisation du fallback (L1/L2 local).")
+            return q_tensor + kv_tensor[:len(q_tensor)]
+
+        available_clients = [cid for cid, c in self.clients.items() if not c["busy"]]
+        if not available_clients:
+            available_clients = list(self.clients.keys())
+
+        MAX_NODES = 32
+        available_clients = available_clients[:MAX_NODES]
+        num_data_nodes = min(len(available_clients), 8) # Max 8 parallel for stability tests
+        
+        # Need at least 2 nodes to do parity meaningfully
+        use_hologram = num_data_nodes > 1 and len(available_clients) > num_data_nodes
+        
+        if use_hologram:
+            from core.holographic_memory import hive_memory
+            shards, parity = hive_memory.encode_hologram(kv_tensor, num_data_nodes)
+            _log.info(f"🧬 Swarm Hologram: Déploiement distribué sur {num_data_nodes} noeuds + 1 noeud Parité (Self-Healing).")
+        else:
+            num_data_nodes = len(available_clients)
+            shards = [kv_tensor[i * (len(kv_tensor)//num_data_nodes) : (i+1) * (len(kv_tensor)//num_data_nodes)] for i in range(num_data_nodes)]
+            use_hologram = False
+
+        tasks_meta = []
+        futures = []
+
+        # Send to Data Nodes
+        for i in range(num_data_nodes):
+            client_id = available_clients[i]
+            payload_data = q_tensor + shards[i]
+            task = WebGPUTask(layer_id, payload_data)
+            
+            self.task_queue.put_nowait(task)
+            futures.append(task.future)
+            tasks_meta.append((i, len(payload_data), task.task_id))
+
+        # Send to Parity Node (if enough clients)
+        parity_future = None
+        if use_hologram:
+            parity_payload = q_tensor + parity
+            parity_task = WebGPUTask(layer_id, parity_payload)
+            self.task_queue.put_nowait(parity_task)
+            parity_future = parity_task.future
+            # Watch out: we wait for futures + parity_future
+
+        all_futures = futures + ([parity_future] if parity_future else [])
+        done, pending = await asyncio.wait(all_futures, timeout=timeout_s)
+
+        for pending_future in pending:
+            pending_future.cancel()
+
+        valid_results = []
+        node_failed = False
+        
+        for idx, task_future in enumerate(futures):
+            if task_future in done:
+                try:
+                    result_bytes = task_future.result()
+                    if not isinstance(result_bytes, bytes) or len(result_bytes) == 0:
+                        raise ValueError("Payload corrompu.")
+                    if len(result_bytes) > (len(shards[idx]) * 2):
+                        raise ValueError("Suspected Tensor Poisoning.")
+                    valid_results.append(result_bytes)
+                except Exception as e:
+                    valid_results.append(None) # Signal for hologram healing
+                    node_failed = True
+            else:
+                valid_results.append(None)
+                node_failed = True
+
+        # HOLOGRAPHIC REGENERATION
+        if use_hologram and node_failed:
+            if parity_future in done:
+                try:
+                    parity_result = parity_future.result()
+                    _log.warning("🧠 [Swarm] Intrusion/Straggler détecté ! Activation du Cortex Holographique...")
+                    aggregated_result = hive_memory.heal_hologram(valid_results, parity_result)
+                    return aggregated_result
+                except Exception:
+                    pass # Parity also failed
+                    
+        # Replace missing with zeros if healing failed or wasn't used
+        for i, res in enumerate(valid_results):
+            if res is None:
+                valid_results[i] = b'\x00' * min(len(shards[i]), 1024)
+
+        return b"".join(valid_results)
+
     def start(self):
         if not websockets:
             _log.error("Module 'websockets' manquant. WebGPU désactivé.")

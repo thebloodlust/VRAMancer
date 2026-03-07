@@ -38,9 +38,8 @@ torch::Tensor vtp_migrate_tensor(torch::Tensor src, int current_tier, int target
     if (target_tier == L1_VRAM_PRIMARY || target_tier == L2_VRAM_SECONDARY) {
         // Fast P2P PCIe
         if (src.is_cuda()) {
-             // In a real build, we call: return fast_p2p_transfer_cuda(src, dst_device);
-             // Here we just return cloned for stub
-             return src.clone();
+             // Dispatch to actual CUDA stream logic to enable zero-copy GPU transfers
+             return fast_p2p_transfer_cuda(src, dst_device);
         }
     }
     
@@ -59,8 +58,7 @@ torch::Tensor fast_p2p_transfer(torch::Tensor src, int dst_device) {
     if (!src.is_cuda()) {
         throw std::runtime_error("Source tensor must be a CUDA tensor for P2P transfer");
     }
-    // _return fast_p2p_transfer_cuda(src, dst_device);
-    return src;
+    return fast_p2p_transfer_cuda(src, dst_device);
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {

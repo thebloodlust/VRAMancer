@@ -296,15 +296,71 @@ class HierarchicalMemoryManager:
         if acc >= 8:
             meta["access"] = 0
 
-    # --- NVMe spill (L5) ---
+    # --- NVMe spill (L5) --- CXL Software Bridge Enabled
     def spill_to_nvme(self, block: MemoryBlock, payload: Any):
+        import torch
+        if torch.is_tensor(payload):
+            path = self.nvme_dir / f"{block.id}.cxl"
+            # Assure que le tenseur est contigu en memoire CPU
+            cpu_tensor = payload.cpu().contiguous()
+            num_bytes = cpu_tensor.numel() * cpu_tensor.element_size()
+            ptr = cpu_tensor.data_ptr()
+            
+            # Stockage des metadata sans pickle
+            self.registry[block.id].setdefault("meta", {}).update({
+                "storage_type": "cxl_raw",
+                "shape": tuple(cpu_tensor.shape),
+                "dtype_str": str(cpu_tensor.dtype),
+                "device": "cpu"
+            })
+            
+            try:
+                import software_cxl
+                software_cxl.cxl_direct_memory_dump(str(path), ptr, num_bytes)
+                self.migrate(block, "L5")
+                self.log.debug(f"⚡ [CXL] Spill {block.id[:8]} -> NVMe ({num_bytes/1e6:.1f}MB) GIL-bypassed")
+                return
+            except Exception as e:
+                self.log.warning(f"CXL Bridge fallback: {e}")
+                
+        # Fallback classique lent
         path = self.nvme_dir / f"{block.id}.pkl"
         with path.open("wb") as f:
             pickle.dump(payload, f)
         self.migrate(block, "L5")
-        self.log.debug(f"Spill bloc {block.id[:8]} vers NVMe ({path})")
+        self.log.debug(f"Spill bloc {block.id[:8]} vers NVMe (Pickle)")
 
     def load_from_nvme(self, block: MemoryBlock) -> Any | None:
+        meta = self.registry.get(block.id, {}).get("meta", {})
+        if meta.get("storage_type") == "cxl_raw":
+            import torch
+            path = self.nvme_dir / f"{block.id}.cxl"
+            if not path.exists():
+                return None
+                
+            dtype_map = {
+                "torch.float32": torch.float32, "torch.float16": torch.float16,
+                "torch.bfloat16": torch.bfloat16, "torch.int8": torch.int8,
+                "torch.uint8": torch.uint8, "torch.int32": torch.int32,
+                "torch.int64": torch.int64
+            }
+            dtype = dtype_map.get(meta["dtype_str"], torch.float16)
+            
+            # Allocation directe zero-copy
+            tensor = torch.empty(meta["shape"], dtype=dtype, device="cpu")
+            num_bytes = tensor.numel() * tensor.element_size()
+            ptr = tensor.data_ptr()
+            
+            try:
+                import software_cxl
+                software_cxl.cxl_direct_memory_load(str(path), ptr, num_bytes)
+                self.migrate(block, "L3")
+                self.log.debug(f"⚡ [CXL] Reload {block.id[:8]} from NVMe ({num_bytes/1e6:.1f}MB) GIL-bypassed")
+                return tensor
+            except Exception as e:
+                self.log.warning(f"CXL reload fallback: {e}")
+        
+        # Fallback classique lent
         path = self.nvme_dir / f"{block.id}.pkl"
         if not path.exists():
             return None

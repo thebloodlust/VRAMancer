@@ -265,6 +265,13 @@ class InferencePipeline:
 
             # 14. Init GPU Fault Tolerance
             self._init_fault_tolerance()
+            
+            # 15. Awaken the Connectome (Neuroplasticity Engine)
+            try:
+                from core.network.connectome import global_connectome
+                global_connectome.start_heartbeat()
+            except Exception as e:
+                _logger.debug("Could not awake Connectome: %s", e)
 
         return self
 
@@ -279,6 +286,8 @@ class InferencePipeline:
         temperature: float = 1.0,
         top_p: float = 1.0,
         top_k: int = 50,
+        enable_speculative: bool = False,
+        draft_model_callable = None,
         **kwargs,
     ) -> str:
         """Generate text from a prompt.
@@ -295,6 +304,10 @@ class InferencePipeline:
             Nucleus sampling threshold.
         top_k : int
             Top-k sampling.
+        enable_speculative : bool
+            Awaken the Swarm Brain for predictive speculative decoding.
+        draft_model_callable : Callable
+            A small local model hook for generating draft tokens.
 
         Returns
         -------
@@ -339,8 +352,22 @@ class InferencePipeline:
                 if temperature != 1.0:
                     gen_kwargs["do_sample"] = True
 
-                # Execute with fault tolerance protection
-                result = self._protected_generate(prompt, gen_kwargs)
+                # --- The Swarm Speculative Brain ---
+                if enable_speculative and draft_model_callable:
+                    from core.speculative_decoding import SwarmSpeculativeDecoder
+                    decoder = SwarmSpeculativeDecoder(
+                        draft_model_callable=draft_model_callable,
+                        swarm_verify_callable=self.infer,
+                        gamma=5,
+                        temperature=temperature
+                    )
+                    # We tokenize the prompt manually
+                    input_ids = self.backend.tokenizer.encode(prompt, return_tensors="pt")
+                    out_ids = decoder.generate(input_ids, max_new_tokens)
+                    result = self.backend.tokenizer.decode(out_ids[0], skip_special_tokens=True)
+                else:
+                    # Execute with fault tolerance protection
+                    result = self._protected_generate(prompt, gen_kwargs)
 
                 elapsed = time.perf_counter() - start
                 if _METRICS:

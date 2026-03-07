@@ -324,6 +324,10 @@ class SimpleScheduler:
             next_idx = max_idx + i
             if next_idx < total:
                 predicted.append(next_idx)
+                
+        if predicted:
+            _logger.debug(f"🔮 [Swarm Synapse] Anticipating execution flow... Prefetching layers {predicted} ahead of current max layer {max_idx}.")
+            
         return predicted
 
     def find_alternate_gpu(self, exclude: Optional[int] = None) -> int:

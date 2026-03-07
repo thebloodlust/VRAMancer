@@ -120,7 +120,15 @@ __all__ = [
     "PAGED_KV_USED_PAGES",
     "PAGED_KV_FREE_PAGES",
     "PAGED_KV_BORROWED_PAGES",
+    "WEBGPU_CONNECTED_CLIENTS",
+    "WEBGPU_FLOPS_TOTAL",
 ]
+
+try:
+    WEBGPU_CONNECTED_CLIENTS = Gauge("vrm_webgpu_connected_clients", "Nombre de navigateurs Edge connectes au Swarm")
+    WEBGPU_FLOPS_TOTAL = Counter("vrm_webgpu_flops_total", "Nombre total de FLOPS calcules par le Swarm WebGPU")
+except NameError:
+    pass
 
 def counter_value(counter) -> float:
     """Retourne la valeur totale d'un Counter prometheus client.

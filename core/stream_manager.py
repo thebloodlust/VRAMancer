@@ -33,14 +33,17 @@ except Exception:
     _METRICS = False
 
 
+import concurrent.futures
+
 class StreamManager:
     """Layer streaming manager for multi-GPU inference.
 
     Handles:
-      - Layer prefetching (predict next layers and load ahead)
+      - Layer prefetching (predict next layers and load ahead asynchronously)
       - Layer swapping (move layers between GPUs when overloaded)
       - Unused layer eviction (release memory for new layers)
       - Live monitoring with adaptive thresholds
+
 
     Usage:
         scheduler = SimpleScheduler(blocks)
@@ -81,6 +84,9 @@ class StreamManager:
             "prefetches": 0,
             "errors": 0,
         }
+        
+        # Super-brain asynchronous IO executor for prefetching layers without blocking GPU compute
+        self._io_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="PrefetchIO")
 
     # ------------------------------------------------------------------
     # Layer lifecycle
@@ -165,7 +171,7 @@ class StreamManager:
                 return False
 
     def prefetch_layers(self, current_layers: List[int], lookahead: int = 3) -> int:
-        """Predict and preload upcoming layers.
+        """Predict and preload upcoming layers asynchronously (Anticipatory Brain).
 
         Parameters
         ----------
@@ -177,7 +183,7 @@ class StreamManager:
         Returns
         -------
         int
-            Number of layers successfully prefetched.
+            Number of layers successfully scheduled for prefetch.
         """
         if self.scheduler is None:
             return 0
@@ -186,23 +192,27 @@ class StreamManager:
         predicted = self.scheduler.predict_next_layers(current_layers, lookahead)
         prefetched = 0
 
+        def _do_preload(layer_idx, size_mb):
+            name = f"layer_{layer_idx}"
+            self.preload_layer({
+                "name": name,
+                "size_mb": size_mb,
+                "priority": 3,  # lower priority than active layers
+                "module": self._get_block_module(layer_idx),
+            })
+
         for layer_idx in predicted:
             name = f"layer_{layer_idx}"
             if name not in self.loaded_layers:
                 # Estimate size (could be enhanced with model metadata)
                 size_mb = self._estimate_layer_size(layer_idx)
-                success = self.preload_layer({
-                    "name": name,
-                    "size_mb": size_mb,
-                    "priority": 3,  # lower priority than active layers
-                    "module": self._get_block_module(layer_idx),
-                })
-                if success:
-                    prefetched += 1
+                # Dispatch the I/O bound load to the background executor
+                self._io_executor.submit(_do_preload, layer_idx, size_mb)
+                prefetched += 1
 
         self._stats["prefetches"] += prefetched
         if self.verbose and prefetched > 0:
-            self.logger.info("Prefetched %d layers (predicted: %s)", prefetched, predicted)
+            self.logger.info("🧠 Anticipatory Brain scheduled %d layers for prefetching (predicted: %s) without blocking.", prefetched, predicted)
         return prefetched
 
     def unload_unused(self, active_layer_names: List[str]) -> int:
