@@ -1,0 +1,15 @@
+[flake8]
+# Strict on syntax errors and undefined names, lenient on style
+max-line-length = 120
+extend-ignore = E203, W503
+# Fatal errors only — these always break code:
+#   E9: Runtime errors (syntax errors, IO errors)
+#   F63: Invalid * or ** (syntax)
+#   F7: Statement-level syntax errors
+#   F82: Undefined names
+select = E9, F63, F7, F82
+per-file-ignores =
+    # Tests can have unused imports and star imports
+    tests/*: F401, F403, F811
+    # __init__.py commonly has unused imports for re-export
+    */__init__.py: F401

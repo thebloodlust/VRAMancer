@@ -50,8 +50,17 @@ def verify_user(username: str, password: str) -> bool:
 def _get_secret() -> str:
     sec = os.environ.get('VRM_AUTH_SECRET')
     if not sec:
-        # Générer un secret volatile (non-prod) si absent
-        sec = os.environ.setdefault('VRM_AUTH_SECRET', secrets.token_hex(16))
+        if os.environ.get('VRM_PRODUCTION', '0') == '1':
+            raise RuntimeError(
+                "SECURITY: VRM_AUTH_SECRET must be set in production mode. "
+                "Generate one with: python3 -c 'import secrets; print(secrets.token_hex(32))'"
+            )
+        import logging as _log
+        _log.getLogger(__name__).warning(
+            "VRM_AUTH_SECRET not set — using volatile secret (dev only). "
+            "Tokens will be invalidated on restart."
+        )
+        sec = os.environ.setdefault('VRM_AUTH_SECRET', secrets.token_hex(32))
     return sec
 
 def issue_tokens(username: str) -> dict:

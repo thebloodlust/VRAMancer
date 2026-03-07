@@ -80,8 +80,8 @@ def _load_users():
             # Generate random temporary credentials for dev
             admin_pass = admin_pass or secrets.token_urlsafe(16)
             user_pass = user_pass or secrets.token_urlsafe(16)
-            admin_mfa = admin_mfa or secrets.token_hex(3)  # 6 hex chars
-            user_mfa = user_mfa or secrets.token_hex(3)
+            admin_mfa = admin_mfa or secrets.token_urlsafe(16)  # 128-bit entropy
+            user_mfa = user_mfa or secrets.token_urlsafe(16)
             logger.warning(
                 "SECURITY: Using auto-generated dev credentials. "
                 "Admin pass: %s | User pass: %s | Admin MFA: %s | User MFA: %s "

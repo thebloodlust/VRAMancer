@@ -339,3 +339,58 @@ class TestBenchmarkInfra:
         assert "tokens_per_second" in result
         assert result["tokens_per_second"] > 0
         assert "latency_ms" in result
+
+
+# =====================================================================
+# 5. API integration with real backend
+# =====================================================================
+
+@pytest.mark.slow
+@pytest.mark.real_torch
+@pytest.mark.integration
+class TestAPIRealBackend:
+    """Test the Flask API with a real model loaded (no stubs).
+
+    Run manually:
+        VRM_MINIMAL_TEST= pytest tests/test_real_gpu.py::TestAPIRealBackend -v
+    """
+
+    @pytest.fixture(autouse=True)
+    def _setup_app(self):
+        """Create a Flask test client without minimal-test stubs."""
+        os.environ.pop("VRM_MINIMAL_TEST", None)
+        os.environ["VRM_BACKEND_ALLOW_STUB"] = "0"
+        os.environ["VRM_DISABLE_RATE_LIMIT"] = "1"
+        os.environ.setdefault("VRM_API_TOKEN", "testtoken")
+
+        try:
+            from transformers import AutoModelForCausalLM  # noqa: F401
+        except ImportError:
+            pytest.skip("transformers not installed")
+
+        from core.production_api import create_app
+        app = create_app(model_name="gpt2", backend="huggingface")
+        self.client = app.test_client()
+        yield
+        try:
+            from core.inference_pipeline import reset_pipeline
+            reset_pipeline()
+        except Exception:
+            pass
+
+    def test_health_with_real_model(self):
+        """Health endpoint should report loaded model."""
+        resp = self.client.get("/health",
+                               headers={"Authorization": "Bearer testtoken"})
+        assert resp.status_code == 200
+
+    def test_generate_via_api(self):
+        """POST /api/generate should return real generated text."""
+        resp = self.client.post(
+            "/api/generate",
+            json={"prompt": "The meaning of life is", "max_tokens": 15},
+            headers={"Authorization": "Bearer testtoken"},
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert "text" in data or "choices" in data

@@ -14,8 +14,8 @@ VRAMancer est un orchestrateur multi-GPU Python (~18 000 lignes, ~200 fichiers .
 
 **Sous-modules `core/` cles :**
 - `inference_pipeline.py` — chef d'orchestre : connecte Backend, Scheduler, TransferManager, StreamManager, ComputeEngine, ClusterDiscovery, Metrics
-- `backends.py` — factory LLM avec fallback stub (`VRM_BACKEND_ALLOW_STUB=1`), HuggingFaceBackend avec split_model() cable via model_splitter, generate() auto-regressif multi-GPU
-- `production_api.py` — API Flask avec factory `create_app()`, endpoints OpenAI-compatible (`/v1/completions`, `/api/generate`), inference (`/api/infer`), model management (`/api/models/load`), health/ready/live, monitoring
+- `backends.py` — factory LLM avec fallback stub (`VRM_BACKEND_ALLOW_STUB=1`), HuggingFaceBackend avec split_model() cable via model_splitter, generate() auto-regressif multi-GPU. vLLMBackend et OllamaBackend extraits dans `backends_vllm.py` et `backends_ollama.py`.
+- `production_api.py` — API Flask avec factory `create_app()`, endpoints OpenAI-compatible (`/v1/completions`, `/api/generate`), inference (`/api/infer`), model management (`/api/models/load`). Routes ops/health extraites dans `core/api/routes_ops.py`.
 - `scheduler.py` — SimpleScheduler avec allocate_block/release_block/predict_next_layers/find_alternate_gpu/migrate_block + forward/predict
 - `block_router.py` — routage VRAM-aware vers GPU/CPU/NVMe/reseau avec detection NVMe reelle et registre dynamique de noeuds
 - `monitor.py` — GPUMonitor production avec vram_usage(), detect_overload(), polling background, export Prometheus, ROCm-SMI fallback
@@ -97,10 +97,13 @@ Les tests sont dans `tests/`. Le fichier `conftest.py` configure `sys.path`, def
 
 Le fichier `tests/test_pipeline.py` teste l'integration end-to-end : InferencePipeline, production_api (routes d'inference, health, modele), TransferManager (stub), backends, et CLI.
 
-## Modules stubs / non fonctionnels
+## Modules extraits / architecture
 
-Ces modules existent mais ne sont pas operationnels — les traiter comme des placeholders :
-- `premium/` — autotuner minimal (~30 lignes)
-- `marketplace/` — squelette plugin template
-- `core/cloud/hybrid_bridge.py` — stub offload cloud
-- `core/simulator/digital_twin.py` — simulation basique
+- `core/backends.py` — contient BaseLLMBackend, HuggingFaceBackend, KVCacheBlock, select_backend()
+- `core/backends_vllm.py` — vLLMBackend (extrait de backends.py)
+- `core/backends_ollama.py` — OllamaBackend (extrait de backends.py)
+- `core/api/routes_ops.py` — routes health/system/gpu (Blueprint extrait de production_api.py)
+- `core/api/registry.py` — PipelineRegistry (extrait de production_api.py)
+- `core/api/validation.py` — validation des parametres (extrait de production_api.py)
+- `core/security/startup_checks.py` — verifications securite au demarrage (remplace zero_trust.py)
+- `core/security/zero_trust.py` — shim backward-compat, redirige vers startup_checks.py

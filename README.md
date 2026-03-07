@@ -2,7 +2,7 @@
   <h1>🚀 VRAMancer</h1>
   <p><b>The Heterogeneous AI Swarm / L'Essaim IA Hétérogène</b></p>
   <p>
-    <img src="https://img.shields.io/badge/Status-Production%20Ready-success" alt="Status">
+    <img src="https://img.shields.io/badge/Status-Beta-yellow" alt="Status">
     <img src="https://img.shields.io/badge/Hardware-NVIDIA%20%7C%20AMD%20%7C%20Apple-blue" alt="Hardware">
     <img src="https://img.shields.io/badge/Network-P2P%20%7C%20WebGPU-purple" alt="Network">
   </p>
@@ -23,9 +23,26 @@
 *   **🧠 Heterogeneous Pooling (CUDA + ROCm + MPS)**: Mix NVIDIA, AMD, and Apple Silicon seamlessly. / *Mélangez NVIDIA, AMD et Apple Silicon de manière transparente.*
 *   **⚡ C++ GIL Bypass**: Custom C++ kernels for ultra-fast PCIe P2P transfers on high-lane CPUs (like AMD EPYC). / *Noyaux C++ natifs pour des transferts PCIe P2P ultra-rapides.*
 *   **🌐 Swarm Inference (P2P)**: No master node required. Devices discover each other via mDNS and share the workload. / *Découverte automatique via mDNS, les appareils se partagent le calcul.*
-*   **🕸️ WebGPU Offloading**: Let any web browser (Chrome/Safari) join your cluster and lend its GPU power. / *Laissez n'importe quel navigateur web prêter la puissance de sa carte graphique.*
-*   **🛡️ Zero-Trust Security**: Enterprise-grade API security with HMAC tokens and RBAC. / *Sécurité API de niveau entreprise avec tokens HMAC.*
+*   **🕸️ WebGPU Offloading** *(experimental)*: Let any web browser join your cluster and lend its GPU power. / *Laissez n'importe quel navigateur web prêter la puissance de sa carte graphique.* *(expérimental)*
+*   **🛡️ Security**: API security with HMAC tokens, JWT, RBAC, and rate limiting. / *Sécurité API avec tokens HMAC, JWT, RBAC et rate limiting.*
 *   **📊 Advanced Telemetry**: Built-in Prometheus metrics and Grafana dashboards. / *Métriques Prometheus et tableaux de bord Grafana intégrés.*
+
+### Feature Maturity / Maturité des fonctionnalités
+
+| Feature | Status | Notes |
+|---|---|---|
+| Multi-GPU model splitting (single node) | **Stable** | VRAM-proportional and profiler-based placement |
+| Pipeline-parallel inference | **Stable** | GPU-to-GPU via CUDA P2P or CPU-staged fallback |
+| OpenAI-compatible API | **Stable** | `/v1/completions`, `/v1/chat/completions`, SSE streaming |
+| Continuous batching | **Stable** | Iteration-level scheduling with queue management |
+| Paged KV cache | **Stable** | Prefix caching, copy-on-write, overflow to VRAM lending |
+| VRAM lending pool | **Stable** | Cross-GPU cooperative memory pooling with lease tracking |
+| 6-tier hierarchical memory | **Stable** | VRAM → DRAM → NVMe → Network → Swarm → WebGPU |
+| Monitoring (Prometheus/Grafana) | **Stable** | 47 metrics, 24 panels, 16 alerting rules |
+| Multi-node clustering (mDNS) | **Beta** | Auto-discovery works; production hardening ongoing |
+| RDMA / GPUDirect transport | **Beta** | Requires ibverbs/RoCE hardware; fallback to TCP |
+| WebGPU offloading | **Experimental** | Proof-of-concept; not production-validated |
+| USB4 hot-plug | **Experimental** | Linux pyudev + macOS IOKit; Windows stub |
 
 ---
 
@@ -353,7 +370,7 @@ core/                        # Production code (~80 modules)
     circuit_breaker.py       # Circuit-breaker pattern
     validation.py            # Input validation
     registry.py              # Pipeline registry
-tests/                       # 430+ tests (all pass without GPU)
+tests/                       # ~250 tests (stub mode + real-torch CI)
 monitoring/                  # Prometheus, Grafana, alerting (production-ready)
 dashboard/                   # CLI + Web dashboards
 vramancer/                   # CLI entry point
@@ -382,26 +399,36 @@ python -m tests.smoke
 
 ## Status
 
-VRAMancer is in **beta**. The core systems are production-grade with comprehensive test coverage:
+VRAMancer is in **beta**. Core single-node inference is production-grade; multi-node and network features are maturing.
 
+**Stable** (tested in CI with real torch + CPU, validated with GPT-2):
 - ✅ VRAM-proportional model splitting across heterogeneous GPUs
 - ✅ Pipeline-parallel multi-GPU inference
 - ✅ Continuous batching with iteration-level scheduling
 - ✅ Multi-GPU paged KV cache with prefix caching and copy-on-write
 - ✅ Speculative VRAM Lending (cooperative cross-GPU memory pooling)
-- ✅ VTP transport protocol (GPUDirect RDMA, zero-copy TCP)
 - ✅ 6-tier hierarchical memory management
-- ✅ GPU hot-plug detection and dynamic rebalancing
-- ✅ Full monitoring stack (47 Prometheus metrics, 24 Grafana panels, 16 alerting rules)
 - ✅ OpenAI-compatible API with SSE streaming, circuit-breaker, queue management
-- ✅ Multi-node clustering with mDNS auto-discovery
-- ✅ Security: token auth, HMAC, RBAC, rate limiting, CORS
+- ✅ Full monitoring stack (47 Prometheus metrics, 24 Grafana panels, 16 alerting rules)
+- ✅ Security: token auth, HMAC, JWT, RBAC, rate limiting, CORS
+
+**Beta** (code exists, limited production validation):
+- 🔶 VTP transport protocol (GPUDirect RDMA, zero-copy TCP) — requires specific hardware
+- 🔶 Multi-node clustering with mDNS auto-discovery
+- 🔶 GPU hot-plug detection and dynamic rebalancing
+
+**Experimental** (proof-of-concept):
+- 🔬 WebGPU browser offloading
+- 🔬 USB4 hot-plug (Linux/macOS only)
 
 ### Known Limitations
 
 - No tensor parallelism (pipeline parallelism only)
 - PagedAttention operates as a memory manager (custom attention kernel for direct paged reads is planned)
 - NCCL transport is reserved for multi-process distributed mode only
+- JWT secret is volatile by default (lost on restart) — set `VRM_AUTH_SECRET` for persistent tokens
+- Multi-GPU tests require manual execution (CI runs CPU-only real tests)
+- No published performance benchmarks yet (tok/s, latency, split overhead)
 
 ---
 

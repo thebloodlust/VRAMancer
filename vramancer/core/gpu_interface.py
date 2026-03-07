@@ -1,11 +1,3 @@
-# DEPRECATED: Ce fichier est un doublon obsolète.
-# Le vrai code vit dans core/gpu_interface.py — ce fichier sera supprimé.
-# Re-export pour compatibilité.
-try:
-    from core.gpu_interface import get_available_gpus, print_gpu_summary  # noqa: F401
-except ImportError:
-    def get_available_gpus(): return []  # pragma: no cover
-    def print_gpu_summary(): pass  # pragma: no cover
-
-_DEPRECATED = True
-
+# REMOVED — this duplicate stub is no longer needed. Delete this file.
+# The real code lives in core/gpu_interface.py.
+raise ImportError("vramancer.core.gpu_interface has been removed. Use core.gpu_interface instead.")

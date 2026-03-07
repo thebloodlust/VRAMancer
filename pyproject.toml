@@ -94,19 +94,10 @@ omit = [
     "core/backends_deepspeed.py",
     "core/backends_tensorrt.py",
     "core/gpu_interface.py",
-    "core/tokenizer.py",
-    "core/health.py",
-    "core/transfer_manager.py",
     "core/model_splitter.py",
     "core/layer_profiler.py",
-    "core/stream_manager.py",
     "core/compute_engine.py",
-    "core/scheduler.py",
-    "core/monitor.py",
-    "core/network/*",
-    "core/orchestrator/*",
-    "core/utils.py",
-    "core/compressor.py",
+    "core/network/fibre_fastpath.py",
 ]
 
 [tool.coverage.report]
