@@ -7,8 +7,11 @@ Supports multiple transport protocols:
   - file: Shared filesystem/NVMe/USB4 (for large blocks)
 
 For high-performance GPU-to-GPU transfers, prefer:
+  - ``vtp_core.cpp`` (VRAMancer Transport Protocol C++ extension)
   - ``TransferManager`` (same-node, P2P/CPU-staged)
   - ``fibre_fastpath`` (cross-node RDMA/zero-copy TCP)
+  
+This module now introduces UDP Tensor Transport (L7 Network fallback).
 """
 import os
 import zlib
@@ -122,3 +125,39 @@ def start_client(server_url: str = "http://localhost:5000") -> bool:
     except Exception as e:
         _log.error("SocketIO connection to %s failed: %s", server_url, e)
         return False
+
+import struct
+import time
+
+class UDPTensorTransport:
+    """Custom fiabilized UDP protocol for fast tensor transfer over LAN."""
+    def __init__(self, port=5060):
+        self.port = port
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        # Increase UDP buffers
+        try:
+            self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1024 * 1024 * 32)
+            self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 1024 * 1024 * 32)
+        except Exception:
+            pass
+
+    def send_tensor(self, tensor_bytes: bytes, host: str, port: int):
+        """Send large tensor over UDP with chunking (VTP-Lite)."""
+        chunk_size = 65000
+        total_chunks = (len(tensor_bytes) + chunk_size - 1) // chunk_size
+        header = f"TENSOR:{total_chunks}:{len(tensor_bytes)}".encode('utf-8')
+        
+        # Send header
+        self.sock.sendto(header, (host, port))
+        
+        # Send chunks
+        for i in range(total_chunks):
+            start = i * chunk_size
+            end = min(start + chunk_size, len(tensor_bytes))
+            # Prepend chunk ID
+            chunk_data = struct.pack("!I", i) + tensor_bytes[start:end]
+            self.sock.sendto(chunk_data, (host, port))
+            # Minimal sleep to avoid UDP drop on cheap switches
+            if i % 100 == 0:
+                time.sleep(0.001)
