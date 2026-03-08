@@ -3,8 +3,8 @@
 # Installation: pip install -r requirements-windows.txt
 
 # Core dependencies
-torch==2.2.0          # Wheel available for win_amd64 cp312
-numpy==1.26.0
+torch>=2.2.0          # Wheel available for win_amd64 cp312
+numpy>=1.26.0
 pyyaml==6.0.1
 psutil==5.9.8
 # Explicit newer tokenizers before transformers to lock compatible wheel
