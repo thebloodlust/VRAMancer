@@ -152,8 +152,17 @@ class KVCacheBlock(_nn.Module if _HAS_TORCH else object):
                         attention_mask=attention_mask,
                     )
                 except TypeError:
-                    # Fallback: no KV cache support
-                    output = layer(hidden_states)
+                    # Fallback: Qwen and newer architectures sometimes require kwargs via **kwargs
+                    try:
+                        output = layer(
+                            hidden_states, 
+                            attention_mask=attention_mask,
+                            position_ids=position_ids,
+                            use_cache=use_cache
+                        )
+                    except TypeError:
+                        # Final fallback
+                        output = layer(hidden_states)
 
             # Parse output: tuple (hidden_states, present_kv, ...) or just tensor
             if isinstance(output, tuple):
