@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <title>VRAMancer - WebGPU Distributed Node</title>
+    <style>
+        body { font-family: -apple-system, system-ui, sans-serif; background: #0f172a; color: #f8fafc; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+        .card { background: #1e293b; padding: 2rem; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); text-align: center; border: 1px solid #334155; }
+        .status { margin-top: 1rem; padding: 0.5rem 1rem; border-radius: 999px; font-weight: bold; }
+        .offline { background: #fee2e2; color: #ef4444; }
+        .online { background: #dcfce7; color: #22c55e; }
+        .stats { margin-top: 2rem; font-family: monospace; color: #94a3b8; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>VRAMancer</h1>
+        <h3>🌍 WebGPU Planetary Node</h3>
+        <p>En laissant cet onglet ouvert, votre carte graphique participe <br>au calcul distribué du cluster VRAMancer.</p>
+        
+        <div id="status" class="status offline">🔴 Attente d'initialisation WebGPU...</div>
+        
+        <div class="stats" id="stats">
+            > Tenseurs calculés: 0<br>
+            > Bande passante: 0 MB/s
+        </div>
+    </div>
+    <script src="/static/js/webgpu_compute.js"></script>
+</body>
+</html>

@@ -200,6 +200,9 @@ def select_backend(backend_name: str = "auto") -> "BaseLLMBackend":
             if allow_stub:
                 return OllamaBackend(real=False)
             raise RuntimeError("Ollama non installé (export VRM_BACKEND_ALLOW_STUB=1 pour stub)")
+    if backend_name == "webgpu":
+        from core.backends_webgpu import WebGPUBackend
+        return WebGPUBackend()
     # auto
     try:
         import vllm  # noqa: F401
@@ -485,10 +488,25 @@ class HuggingFaceBackend(BaseLLMBackend):
             block_past = past_key_values[idx] if past_key_values else None
 
             if isinstance(block, KVCacheBlock):
+                # Provide standard kwargs so new architectures (Qwen, Llama3) don't crash
+                # Since position_ids inside the model blocks expect specific format, 
+                # we pass them carefully to the block forward
+                # We calculate global position_ids for sequence
+                position_ids = None
+                if use_cache:
+                    import torch as pt
+                    seq_length = hidden_states.shape[1]
+                    past_length = 0
+                    if block_past is not None and len(block_past) > 0 and block_past[0] is not None:
+                        # Inspect the past_key_value tuple to extract length (seq_len is at index -2)
+                        past_length = block_past[0][0].shape[-2]
+                    position_ids = pt.arange(past_length, past_length + seq_length, dtype=pt.long, device=hidden_states.device).unsqueeze(0)
+
                 hidden_states, presents = block(
                     hidden_states,
                     past_key_values=block_past,
                     use_cache=use_cache,
+                    position_ids=position_ids
                 )
                 if use_cache:
                     all_presents.append(presents)
