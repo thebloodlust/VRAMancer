@@ -185,9 +185,10 @@ def _cmd_serve(args):
                 if gpus_to_use > 1:
                     load_kwargs["tensor_parallel_size"] = gpus_to_use
                 load_kwargs["max_model_len"] = 8192
+                load_kwargs["gpu_memory_utilization"] = 0.65  # Lower utilization to avoid OOM on smaller heterogeneous GPUs
                 
             pipeline.load(args.model, num_gpus=gpus_to_use, **load_kwargs)
-            api_mod._pipeline = pipeline
+            api_mod._registry._pipeline = pipeline
             print(f"\n  Model loaded: {args.model}")
             print(f"  Blocks: {len(pipeline.blocks)}")
             print(f"  GPUs: {pipeline.num_gpus}")
@@ -230,6 +231,7 @@ def _cmd_generate(args):
                 load_kwargs["tensor_parallel_size"] = gpus_to_use
             # Prevent OOM by reducing max_model_len if it's very large
             load_kwargs["max_model_len"] = 8192
+            load_kwargs["gpu_memory_utilization"] = 0.65
         
         pipeline.load(args.model, num_gpus=gpus_to_use, **load_kwargs)
         print(f"Model loaded ({pipeline.num_gpus} GPU(s), "
