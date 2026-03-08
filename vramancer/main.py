@@ -171,7 +171,22 @@ def _cmd_serve(args):
                 verbose=True,
                 enable_metrics=True,
             )
-            pipeline.load(args.model, num_gpus=args.gpus)
+            
+            gpus_to_use = args.gpus
+            if gpus_to_use is None:
+                try:
+                    import torch
+                    gpus_to_use = torch.cuda.device_count()
+                except ImportError:
+                    gpus_to_use = 1
+                    
+            load_kwargs = {}
+            if args.backend == "vllm":
+                if gpus_to_use > 1:
+                    load_kwargs["tensor_parallel_size"] = gpus_to_use
+                load_kwargs["max_model_len"] = 8192
+                
+            pipeline.load(args.model, num_gpus=gpus_to_use, **load_kwargs)
             api_mod._pipeline = pipeline
             print(f"\n  Model loaded: {args.model}")
             print(f"  Blocks: {len(pipeline.blocks)}")
@@ -198,7 +213,25 @@ def _cmd_generate(args):
             verbose=False,
             enable_metrics=False,
         )
-        pipeline.load(args.model, num_gpus=args.gpus)
+        
+        # Auto-detect GPUs if not specified
+        gpus_to_use = args.gpus
+        if gpus_to_use is None:
+            try:
+                import torch
+                gpus_to_use = torch.cuda.device_count()
+            except ImportError:
+                gpus_to_use = 1
+
+        # Passer parameters specifiques au backend
+        load_kwargs = {}
+        if args.backend == "vllm":
+            if gpus_to_use > 1:
+                load_kwargs["tensor_parallel_size"] = gpus_to_use
+            # Prevent OOM by reducing max_model_len if it's very large
+            load_kwargs["max_model_len"] = 8192
+        
+        pipeline.load(args.model, num_gpus=gpus_to_use, **load_kwargs)
         print(f"Model loaded ({pipeline.num_gpus} GPU(s), "
               f"{len(pipeline.blocks)} blocks)")
         print()
