@@ -225,7 +225,8 @@ def install_pytorch(pip_cmd: str, gpu_info: dict):
     elif backend == "rocm":
         index_url = PYTORCH_INDEX["rocm"]
         info("AMD ROCm détecté → PyTorch ROCm")
-        subprocess.check_call([pip_cmd, "install", "--upgrade",
+        # Added --default-timeout to prevent response.py ReadTimeout errors on massive PyTorch ROCm wheels
+        subprocess.check_call([pip_cmd, "install", "--upgrade", "--default-timeout=1000",
                                "torch", "torchvision", "torchaudio",
                                "--index-url", index_url])
     else:
