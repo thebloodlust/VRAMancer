@@ -277,8 +277,10 @@ class HuggingFaceBackend(BaseLLMBackend):
             kwargs["low_cpu_mem_usage"] = True
         else:
             # Force 8-bit quantization for large models to fit in 16GB VRAM
-            kwargs["load_in_8bit"] = True
+            # Desactivated by default to avoid issues with new models (Qwen2, Llama3)
+            # kwargs["load_in_8bit"] = True
             kwargs["device_map"] = "auto"
+            # kwargs["torch_dtype"] = "float16" # Enable this if VRAM is an issue without load_in_8bit
 
         self.model = AutoModelForCausalLM.from_pretrained(model_name, **kwargs)
         try:
