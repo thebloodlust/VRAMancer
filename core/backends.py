@@ -264,6 +264,13 @@ class HuggingFaceBackend(BaseLLMBackend):
         from transformers import AutoModelForCausalLM, AutoTokenizer
         self.model_name = model_name
         self.log.info(f"Chargement modèle HuggingFace: {model_name}")
+        if model_name.endswith("-AWQ"):
+            kwargs["low_cpu_mem_usage"] = True
+        else:
+            # Force 8-bit quantization for large models to fit in 16GB VRAM
+            kwargs["load_in_8bit"] = True
+            kwargs["device_map"] = "auto"
+
         self.model = AutoModelForCausalLM.from_pretrained(model_name, **kwargs)
         try:
             self.tokenizer = AutoTokenizer.from_pretrained(model_name)

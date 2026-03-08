@@ -22,6 +22,9 @@ build/
 node_modules/
 .idea/
 .vscode/
+# coverage et artefacts VRAMancer
+.coverage
+.hm_state.pkl
 # Fichiers secrets
 secrets.*
 # Dossiers temporaires
