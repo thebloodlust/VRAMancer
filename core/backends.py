@@ -182,6 +182,11 @@ class KVCacheBlock(_nn.Module if _HAS_TORCH else object):
 def select_backend(backend_name: str = "auto") -> "BaseLLMBackend":
     backend_name = (backend_name or "auto").lower()
     allow_stub = os.environ.get("VRM_BACKEND_ALLOW_STUB")
+    
+    if backend_name == "webgpu":
+        from core.backends_webgpu import WebGPUBackend
+        return WebGPUBackend()
+        
     if backend_name == "huggingface":
         return HuggingFaceBackend()
     if backend_name == "vllm":
