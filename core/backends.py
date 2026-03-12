@@ -550,22 +550,24 @@ class HuggingFaceBackend(BaseLLMBackend):
             raise RuntimeError("Tokenizer non disponible")
 
         inputs = self.tokenizer(prompt, return_tensors="pt")
-        input_ids = inputs["input_ids"]
+        input_ids = inputs.input_ids
+        attention_mask = inputs.get("attention_mask", None)
 
-        # Move to first device if GPU available
-        if _HAS_TORCH and _torch.cuda.is_available() and self.block_devices:
-            try:
-                device = f"cuda:{self.block_devices[0]}"
-                input_ids = input_ids.to(device)
-                if self.model is not None and not self.blocks:
-                    self.model = self.model.to(device)
-            except Exception:
-                pass
+        if self.tokenizer.pad_token_id is None:
+            self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
 
         # Path 1: No split — use native generate() (already uses KV cache)
         if self.blocks is None or len(self.blocks) <= 1:
+            if self.model is not None:
+                # Move correctly to model's execution device
+                device = getattr(self.model, "device", _torch.device("cpu"))
+                input_ids = input_ids.to(device)
+                if attention_mask is not None:
+                    attention_mask = attention_mask.to(device)
+
             out_ids = self.model.generate(
-                input_ids,
+                input_ids=input_ids,
+                attention_mask=attention_mask,
                 max_new_tokens=max_new_tokens,
                 pad_token_id=self.tokenizer.pad_token_id,
                 **kwargs,
