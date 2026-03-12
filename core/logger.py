@@ -22,12 +22,12 @@ def get_logger(name: str = "vramancer", level: str = None) -> logging.Logger:
     base = logging.getLogger("vramancer")
     lvl = (level or os.environ.get("VRAMANCER_LOG", "INFO")).upper()
     base.setLevel(getattr(logging, lvl, logging.INFO))
-    handler = logging.StreamHandler()
+    handler = None
     if os.environ.get("VRM_LOG_JSON", "0") in {"1", "true", "TRUE"}:
-        class JsonFormatter(logging.Formatter):  # pragma: no cover - formatting logic
+        class JsonFormatter(logging.Formatter):  # pragma: no cover
             def format(self, record: logging.LogRecord) -> str:
                 payload: Dict[str, Any] = {
-                    "ts": datetime.utcfromtimestamp(record.created).isoformat()+"Z",
+                    "ts": datetime.utcnow().isoformat() + "Z",
                     "lvl": record.levelname,
                     "logger": record.name,
                     "msg": record.getMessage(),
@@ -35,11 +35,18 @@ def get_logger(name: str = "vramancer", level: str = None) -> logging.Logger:
                 if record.exc_info:
                     payload["exc"] = self.formatException(record.exc_info)
                 return json.dumps(payload, ensure_ascii=False)
+        handler = logging.StreamHandler()
         handler.setFormatter(JsonFormatter())
     else:
-        fmt = "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
-        handler.setFormatter(logging.Formatter(fmt))
-    if not base.handlers:
+        try:
+            from rich.logging import RichHandler
+            handler = RichHandler(rich_tracebacks=True, markup=True, show_path=False)
+        except ImportError:
+            handler = logging.StreamHandler()
+            fmt = "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+            handler.setFormatter(logging.Formatter(fmt))
+            
+    if handler and not base.handlers:
         base.addHandler(handler)
     base.propagate = False
     _LOGGER = base

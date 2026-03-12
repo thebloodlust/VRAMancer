@@ -12,11 +12,17 @@ from core.backends import BaseLLMBackend
 from core.logger import LoggerAdapter
 
 
-class OllamaBackend(BaseLLMBackend):
-    """Ollama backend with real HTTP integration.
+try:
+    import aiohttp
+    _HAS_AIOHTTP = True
+except ImportError:
+    _HAS_AIOHTTP = False
 
-    Communicates with a local Ollama server via its REST API.
-    Supports streaming via chunked JSON responses.
+class OllamaBackend(BaseLLMBackend):
+    """Ollama backend with fully asynchronous high-throughput integration.
+
+    Communicates with a local Ollama server natively using asyncio
+    to prevent worker threads from blocking during token generation.
     """
     def __init__(self, real: bool = True):
         self.model = None
@@ -24,6 +30,7 @@ class OllamaBackend(BaseLLMBackend):
         self.log = LoggerAdapter("backend.ollama" + (".stub" if not real else ""))
         self.real = real
         self._base_url = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+        self._session = None
 
     def load_model(self, model_name: str, **kwargs):
         self.model_name = model_name
@@ -32,7 +39,6 @@ class OllamaBackend(BaseLLMBackend):
             return self.model
         try:
             import requests
-            # Verify the model exists by checking the Ollama API
             resp = requests.post(
                 f"{self._base_url}/api/show",
                 json={"name": model_name},
@@ -40,10 +46,9 @@ class OllamaBackend(BaseLLMBackend):
             )
             if resp.status_code == 200:
                 self.model = model_name
-                self.log.info(f"Ollama model verified: {model_name}")
+                self.log.info(f"Ollama native async bridge ready for: {model_name}")
             else:
-                self.log.warning(f"Ollama model '{model_name}' not found locally, "
-                                 f"will be pulled on first generate()")
+                self.log.warning(f"Ollama model '{model_name}' not found locally, will be pulled on first generate()")
                 self.model = model_name
             return self.model
         except Exception as e:
@@ -57,7 +62,7 @@ class OllamaBackend(BaseLLMBackend):
     def split_model(self, num_gpus: int, vram_per_gpu: List[int] = None):
         if self.model is None:
             raise RuntimeError("Modèle Ollama non chargé.")
-        # Ollama handles GPU management internally
+        # Ollama manages physical GPUs natively via its Go scheduler
         return [self.model]
 
     def infer(self, inputs: Any):
@@ -68,8 +73,40 @@ class OllamaBackend(BaseLLMBackend):
         prompt = inputs if isinstance(inputs, str) else str(inputs)
         return {"text": self.generate(prompt), "model": self.model}
 
+    async def generate_async(self, prompt: str, max_new_tokens: int = 128, **kwargs) -> str:
+        """Fully async generate via aiohttp."""
+        if not _HAS_AIOHTTP:
+            import asyncio
+            # Fallback wrapper if aiohttp isn't installed
+            loop = asyncio.get_event_loop()
+            return await loop.run_in_executor(None, lambda: self.generate(prompt, max_new_tokens, **kwargs))
+            
+        if self._session is None:
+            self._session = aiohttp.ClientSession()
+
+        payload = {
+            "model": self.model,
+            "prompt": prompt,
+            "stream": False,
+            "options": {
+                "num_predict": max_new_tokens,
+                "temperature": kwargs.get('temperature', 1.0),
+                "top_p": kwargs.get('top_p', 1.0),
+                "top_k": kwargs.get('top_k', 50),
+                "num_gpu": kwargs.get('num_gpu', -1),
+            },
+        }
+
+        async with self._session.post(f"{self._base_url}/api/generate", json=payload) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                return data.get('response', '')
+            text = await resp.text()
+            self.log.error(f"Ollama API error: {resp.status} {text[:200]}")
+            raise RuntimeError(f"Ollama API returned {resp.status}")
+
     def generate(self, prompt: str, max_new_tokens: int = 128, **kwargs) -> str:
-        """Generate text via Ollama REST API."""
+        """Generate text via Ollama REST API (Sync fallback)."""
         if self.model is None:
             raise RuntimeError("Modèle Ollama non chargé.")
         if not self.real:

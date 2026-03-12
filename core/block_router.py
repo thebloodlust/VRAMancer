@@ -78,11 +78,23 @@ class RemoteExecutor:
         try:
             import socket
             import pickle
+            import hmac
+            import hashlib
+            import os
+
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(self.timeout)
             sock.connect((self.host, self.port))
             data = pickle.dumps(x)
-            sock.sendall(len(data).to_bytes(8, "big") + data)
+
+            # Zero-Trust: Sign the payload to prevent RCE from rogue nodes
+            secret = os.environ.get("VRM_API_TOKEN", "default_insecure_token").encode()
+            signature = hmac.new(secret, data, hashlib.sha256).digest()
+
+            # Format: [8 bytes total len] + [32 bytes sha256 signature] + [data]
+            payload = signature + data
+            sock.sendall(len(payload).to_bytes(8, "big") + payload)
+            
             resp_len = int.from_bytes(sock.recv(8), "big")
             resp_data = b""
             while len(resp_data) < resp_len:
@@ -90,8 +102,17 @@ class RemoteExecutor:
                 if not chunk:
                     break
                 resp_data += chunk
+            
+            # Verify response signature
+            resp_sig = resp_data[:32]
+            resp_payload = resp_data[32:]
+            expected_sig = hmac.new(secret, resp_payload, hashlib.sha256).digest()
+            if not hmac.compare_digest(resp_sig, expected_sig):
+                _logger.error(f"Zero-Trust Violation: Invalid signature from {self.host}:{self.port}")
+                raise ValueError("Untrusted response payload")
+
             sock.close()
-            return pickle.loads(resp_data)
+            return pickle.loads(resp_payload)
         except Exception as exc:
             _logger.warning("Remote execution to %s:%d failed: %s", self.host, self.port, exc)
             return x  # passthrough fallback

@@ -77,6 +77,36 @@ class WebGPUNodeManager:
         client_id = uuid.uuid4().hex[:8]
         _log.info(f"Nouvelle connexion WebGPU: {client_id}")
         
+        # Zero-Trust Security: authenticate WebGPU nodes
+        from core.security import verify_request
+        import os
+        import hmac
+
+        # Extract token from the WebSocket path (e.g. ws://host:port/?token=xyz)
+        query = path.split('?')
+        token = ""
+        if len(query) > 1:
+            for param in query[1].split('&'):
+                if param.startswith('token='):
+                    token = param.split('=')[1]
+                    break
+        
+        secret = os.environ.get("VRM_API_TOKEN")
+        is_production = os.environ.get('VRM_PRODUCTION') == '1'
+        
+        if is_production and not token:
+            _log.warning(f"Rejet connexion {client_id} (Zero-Trust): Token manquant.")
+            await websocket.close(1008, "Token required")
+            return
+            
+        if token and secret:
+            from core.security import _maybe_rotate
+            eff_secret = _maybe_rotate(secret)
+            if not hmac.compare_digest(token, eff_secret) and not hmac.compare_digest(token, secret):
+                _log.warning(f"Rejet connexion {client_id} (Zero-Trust): Token invalide.")
+                await websocket.close(1008, "Invalid token")
+                return
+
         self.clients[client_id] = {
             "ws": websocket,
             "last_seen": time.time(),

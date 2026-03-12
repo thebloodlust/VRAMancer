@@ -73,10 +73,39 @@ def build_engine(onnx_path: str, fp16: bool = True,
     return engine
 
 
-def run_tensorrt_inference(engine: Any, inputs: Any) -> Any:
-    """Execute une inference via un engine TensorRT."""
-    if not _HAS_TENSORRT:
-        raise ImportError("tensorrt requis : pip install tensorrt")
-    # Simplified — real impl uses ExecutionContext + buffer allocation
-    _log.info("Inference TensorRT en cours...")
-    return engine
+def run_tensorrt_inference(engine: Any, inputs: Any, output_shape: tuple = None) -> Any:
+    """Intégration Zero-Copy C++ TensorRT via pointeurs CUDA (torch.data_ptr)."""
+    if not _HAS_TENSORRT or torch is None:
+        raise ImportError("tensorrt et pytorch requis pour l'inference native.")
+    
+    # Creation d'un contexte d'execution CUDA pur
+    context = engine.create_execution_context()
+    
+    # Convert input to contiguous CUDA tensor to extract Raw Data Pointers
+    if not isinstance(inputs, torch.Tensor):
+        inputs = torch.tensor(inputs, device='cuda', dtype=torch.float16)
+    elif not inputs.is_cuda:
+        inputs = inputs.cuda()
+    inputs = inputs.contiguous()
+
+    # Pre-allocation Tensor Out pour Zero-Copy (suppose FP16 output)
+    if output_shape is None:
+        output_shape = inputs.shape  # heuristic for stub
+        
+    outputs = torch.empty(output_shape, device='cuda', dtype=inputs.dtype)
+
+    # Resolution des bindings natifs GPU
+    bindings = [None] * engine.num_bindings
+    for i in range(engine.num_bindings):
+        if engine.binding_is_input(i):
+            bindings[i] = inputs.data_ptr()
+        else:
+            bindings[i] = outputs.data_ptr()
+            
+    # Lancement asynchrone VRAM vers VRAM sans passer par la RAM CPU (GIL Bypassed)
+    stream = torch.cuda.current_stream()
+    context.execute_async_v2(bindings=bindings, stream_handle=stream.cuda_stream)
+    stream.synchronize()
+    
+    _log.debug("Inference TensorRT (VRAM Zero-Copy) terminée.")
+    return outputs

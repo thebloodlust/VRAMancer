@@ -65,6 +65,11 @@ def main(argv=None):
     p_split.add_argument("--no-profile", dest="profile", action="store_false",
                          help="Split VRAM-proportionnel simple")
 
+    # ---- hub ----
+    p_hub = sub.add_parser("hub", help="Explorer le catalogue de modeles HuggingFace")
+    p_hub.add_argument("model", help="Identifiant du modele sur HF (ex: HuggingFaceH4/zephyr-7b-beta)")
+
+
     # ---- health ----
     sub.add_parser("health", help="Verifier la sante du systeme")
 
@@ -89,6 +94,8 @@ def main(argv=None):
         _cmd_benchmark(args)
     elif args.command == "discover":
         _cmd_discover(args)
+    elif args.command == "hub":
+        _cmd_hub(args)
     elif args.command == "split":
         _cmd_split(args)
     elif args.command == "health":
@@ -138,28 +145,57 @@ def _cmd_status():
 
 def _cmd_serve(args):
     """Lancer le serveur API avec pipeline complet."""
+    try:
+        from rich.console import Console
+        from rich.panel import Panel
+        from rich.table import Table
+        console = Console()
+    except ImportError:
+        console = None
+
     from core.production_api import app
 
     os.environ.setdefault('VRM_API_HOST', args.host)
     os.environ.setdefault('VRM_API_PORT', str(args.port))
 
-    print("=" * 60)
-    print("VRAMancer API Server")
-    print("=" * 60)
-    print(f"  Host: {args.host}:{args.port}")
-    if args.model:
-        print(f"  Model: {args.model}")
-    print(f"  Backend: {args.backend}")
-    print(f"  GPUs: {args.gpus or 'auto'}")
-    print()
-    print("  POST /v1/completions  - Text generation (OpenAI-compatible)")
-    print("  POST /api/generate    - Text generation (alias)")
-    print("  POST /api/infer       - Raw tensor inference")
-    print("  POST /api/models/load - Load a model")
-    print("  GET  /health          - Health check")
-    print("  GET  /api/gpu         - GPU info")
-    print("  GET  /api/nodes       - Cluster nodes")
-    print("=" * 60)
+    if console:
+        table = Table(show_header=False, box=None)
+        table.add_column("Param", style="cyan")
+        table.add_column("Value", style="yellow")
+        table.add_row("Hôte/Port", f"{args.host}:{args.port}")
+        if args.model:
+            table.add_row("Modèle", args.model)
+        table.add_row("Backend", args.backend)
+        table.add_row("GPUs", str(args.gpus or 'auto'))
+
+        endpoints = (
+            "[bold]Endpoints:[/bold]\n"
+            "  POST [green]/v1/completions[/green]  - Text generation (OpenAI-compatible)\n"
+            "  POST [green]/api/models/load[/green] - Load a model dynamic\n"
+            "  GET  [cyan]/health[/cyan]          - Health check\n"
+            "  GET  [cyan]/api/nodes[/cyan]       - Cluster nodes\n"
+        )
+        
+        console.print(Panel.fit(table, title="[bold blue]VRAMancer API Server[/bold blue]", subtitle="🚀 En cours de démarrage..."))
+        console.print(endpoints)
+    else:
+        print("=" * 60)
+        print("VRAMancer API Server")
+        print("=" * 60)
+        print(f"  Host: {args.host}:{args.port}")
+        if args.model:
+            print(f"  Model: {args.model}")
+        print(f"  Backend: {args.backend}")
+        print(f"  GPUs: {args.gpus or 'auto'}")
+        print()
+        print("  POST /v1/completions  - Text generation (OpenAI-compatible)")
+        print("  POST /api/generate    - Text generation (alias)")
+        print("  POST /api/infer       - Raw tensor inference")
+        print("  POST /api/models/load - Load a model")
+        print("  GET  /health          - Health check")
+        print("  GET  /api/gpu         - GPU info")
+        print("  GET  /api/nodes       - Cluster nodes")
+        print("=" * 60)
 
     # Pre-load model if specified
     if args.model:
@@ -297,6 +333,55 @@ def _cmd_discover(args):
             print("  No nodes discovered (try a longer timeout or check network)")
     except Exception as e:
         print(f"Discovery failed: {e}")
+
+
+def _cmd_hub(args):
+    """Explorer et afficher les quantizations HuggingFace d'un modele."""
+    try:
+        from rich.console import Console
+        from rich.panel import Panel
+        from rich.table import Table
+        console = Console()
+    except ImportError:
+        console = None
+
+    if console:
+        console.print(f"[bold blue]VRAMancer Hub[/bold blue] - Recherche de [yellow]{args.model}[/yellow]...")
+    else:
+        print(f"VRAMancer Hub - Recherche de {args.model}...")
+
+    from core.model_hub import search_huggingface_model
+    info = search_huggingface_model(args.model)
+
+    if console:
+        if "error" in info:
+            console.print(f"[bold red]Erreur:[/bold red] {info['error']}")
+            return
+            
+        table = Table(title=f"Informations - {info['id']}", show_header=False)
+        table.add_column("Propriété", style="cyan")
+        table.add_column("Valeur", style="green")
+        
+        table.add_row("ID du modèle", info.get("id"))
+        table.add_row("Task (Pipeline)", info.get("pipeline_tag", "N/A"))
+        table.add_row("Téléchargements", str(info.get("downloads", 0)))
+        
+        console.print(table)
+        
+        formats_str = "\n".join(f"• {fmt}" for fmt in info.get("formats", []))
+        console.print(Panel(formats_str, title="Précisions et Formats détectés (ex: NVFP4, AWQ, FP16)", expand=False))
+        
+    else:
+        if "error" in info:
+            print(f"Erreur: {info['error']}")
+            return
+            
+        print(f"\nModele : {info.get('id')}")
+        print(f"Task   : {info.get('pipeline_tag')}")
+        print(f"DLs    : {info.get('downloads')}")
+        print("\nFormats disponibles :")
+        for fmt in info.get("formats", []):
+            print(f" - {fmt}")
 
 
 def _cmd_split(args):
