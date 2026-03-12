@@ -50,12 +50,12 @@ class vLLMBackend(BaseLLMBackend):
         raise NotImplementedError("L'inférence par tenseur brut n'est pas supportée par vLLM directement.")
 
     def generate(self, prompt: str, max_new_tokens: int = 128, **kwargs) -> Any:
-        # Prise en charge de l'argument OpenAI max_tokens
-        max_tokens_val = kwargs.pop('max_tokens', max_new_tokens)
+        # Extractions sécurisées (sans détruire l'objet d'origine via pop)
+        max_tokens_val = int(kwargs.get('max_tokens', max_new_tokens))
         
         if kwargs.get('stream', False):
-            # IMPORTANT: Retourner directement le générateur (et non un texte joint)
-            return self.generate_stream(prompt, max_tokens_val, **kwargs)
+            # Passage direct
+            return self.generate_stream(prompt, max_new_tokens, **kwargs)
 
         if not self.is_loaded or self.engine is None:
             raise RuntimeError("Le moteur vLLM n'est pas initialisé.")
@@ -64,9 +64,11 @@ class vLLMBackend(BaseLLMBackend):
         import uuid
         
         request_id = str(uuid.uuid4())
-        temperature = kwargs.get('temperature', 0.7)
         
-        valid_kwargs = {k: v for k, v in kwargs.items() if k in ['top_p', 'top_k', 'presence_penalty', 'frequency_penalty']}
+        t = kwargs.get('temperature')
+        temperature = float(t) if t is not None else 0.7
+        
+        valid_kwargs = {k: v for k, v in kwargs.items() if k in ['top_p', 'top_k', 'presence_penalty', 'frequency_penalty'] and v is not None}
         sampling_params = SamplingParams(
             temperature=temperature,
             max_tokens=max_tokens_val,
@@ -86,18 +88,20 @@ class vLLMBackend(BaseLLMBackend):
         return final_output
 
     def generate_stream(self, prompt: str, max_new_tokens: int = 128, **kwargs):
-        max_tokens_val = kwargs.pop('max_tokens', max_new_tokens)
-        
         if not self.is_loaded or self.engine is None:
             raise RuntimeError("Le moteur vLLM n'est pas initialisé.")
             
         from vllm import SamplingParams
         import uuid
         
-        request_id = str(uuid.uuid4())
-        temperature = kwargs.get('temperature', 0.7)
+        # Extractions sécurisées (.get) pour protéger la route VRAMancer
+        max_tokens_val = int(kwargs.get('max_tokens', max_new_tokens))
+        t = kwargs.get('temperature')
+        temperature = float(t) if t is not None else 0.7
         
-        valid_kwargs = {k: v for k, v in kwargs.items() if k in ['top_p', 'top_k', 'presence_penalty', 'frequency_penalty']}
+        request_id = str(uuid.uuid4())
+        valid_kwargs = {k: v for k, v in kwargs.items() if k in ['top_p', 'top_k', 'presence_penalty', 'frequency_penalty'] and v is not None}
+        
         sampling_params = SamplingParams(
             temperature=temperature,
             max_tokens=max_tokens_val,
@@ -113,8 +117,8 @@ class vLLMBackend(BaseLLMBackend):
             for output in step_outputs:
                 if output.request_id == request_id:
                     current_text = output.outputs[0].text
-                    # Récupérer uniquement les nouveaux mots par rapport à la boucle précédente
-                    new_text = current_text[len(last_text):]
-                    if new_text:
-                        yield new_text
-                        last_text = current_text
+                    if current_text:
+                        new_text = current_text[len(last_text):]
+                        if new_text:
+                            yield new_text
+                            last_text = current_text
