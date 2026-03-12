@@ -249,18 +249,19 @@ class WebGPUNodeManager:
             return
             
         self.is_running = True
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+        self._loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self._loop)
         
         server = websockets.serve(self._handler, "0.0.0.0", self.port)
-        loop.run_until_complete(server)
-        loop.create_task(self._task_dispatcher())
+        self._loop.run_until_complete(server)
+        self._loop.create_task(self._task_dispatcher())
         
         _log.info(f"Serveur WebGPU démarré sur le port {self.port}")
         
         # Exécuter la boucle dans un thread séparé pour ne pas bloquer Flask/PyTorch
         import threading
-        threading.Thread(target=loop.run_forever, daemon=True).start()
+        self._thread = threading.Thread(target=self._loop.run_forever, daemon=True)
+        self._thread.start()
 
 if __name__ == "__main__":
     manager = WebGPUNodeManager()
