@@ -77,3 +77,35 @@ class vLLMBackend(BaseLLMBackend):
                     final_output = output.outputs[0].text
                     
         return final_output
+
+    def generate_stream(self, prompt: str, max_new_tokens: int = 128, **kwargs):
+        if not self.is_loaded or self.engine is None:
+            raise RuntimeError("Le moteur vLLM n'est pas initialisé.")
+            
+        from vllm import SamplingParams
+        import uuid
+        
+        request_id = str(uuid.uuid4())
+        temperature = kwargs.get('temperature', 0.7)
+        
+        valid_kwargs = {k: v for k, v in kwargs.items() if k in ['top_p', 'top_k', 'presence_penalty', 'frequency_penalty']}
+        sampling_params = SamplingParams(
+            temperature=temperature,
+            max_tokens=max_new_tokens,
+            **valid_kwargs
+        )
+        
+        logger.debug(f"[vLLM Stream] Ajout de la requête {request_id}")
+        self.engine.add_request(request_id, prompt, sampling_params)
+        
+        last_text = ""
+        while self.engine.has_unfinished_requests():
+            step_outputs = self.engine.step()
+            for output in step_outputs:
+                if output.request_id == request_id:
+                    current_text = output.outputs[0].text
+                    # On calcule la différence entre le nouveau texte et l'ancien
+                    new_text = current_text[len(last_text):]
+                    if new_text:
+                        yield new_text
+                        last_text = current_text
