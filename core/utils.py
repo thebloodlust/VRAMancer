@@ -133,8 +133,9 @@ def detect_backend() -> str:
       2. CUDA      – sinon si CUDA disponible
       3. XPU       – Intel GPUs (IPEX)
       4. NPU       – Huawei Ascend NPUs
-      5. MPS       – Apple Silicon
-      6. CPU       – fallback
+      5. TPU       – Google TPUs (XLA)
+      6. MPS       – Apple Silicon
+      7. CPU       – fallback
     """
     try:
         # Vérification ROCm en premier (AMD GPUs avec support HIP)
@@ -159,6 +160,14 @@ def detect_backend() -> str:
         # Huawei NPU
         if hasattr(torch, 'npu') and torch.npu.is_available():
             return 'npu'
+            
+        # Google TPU (Torch XLA)
+        try:
+            import torch_xla.core.xla_model as xm
+            if xm.xla_device():
+                return 'tpu'
+        except ImportError:
+            pass
         
         # Apple Silicon MPS
         if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
@@ -219,6 +228,12 @@ def get_device_type(idx: int) -> torch.device:
         return torch.device(f"xpu:{idx}")
     if backend == 'npu' and hasattr(torch, 'npu') and torch.npu.device_count() > idx:
         return torch.device(f"npu:{idx}")
+    if backend == 'tpu':
+        try:
+            import torch_xla.core.xla_model as xm
+            return xm.xla_device()
+        except ImportError:
+            pass
     if backend == 'mps':
         return torch.device('mps')
     return torch.device(f"cpu:{idx}")
@@ -281,6 +296,21 @@ def enumerate_devices() -> List[Dict[str, Any]]:
                     'vendor': 'huawei',
                 })
     except Exception:
+        pass
+    # Google TPU
+    try:
+        import torch_xla.core.xla_model as xm
+        if xm.xla_device():
+            # TPUs generally work as a single logical cluster device in standard PyTorch mappings
+            devices.append({
+                'id': 'tpu:0',
+                'backend': 'tpu',
+                'index': 0,
+                'name': 'Google TPU',
+                'total_memory': None,
+                'vendor': 'google',
+            })
+    except ImportError:
         pass
     # MPS
     try:
