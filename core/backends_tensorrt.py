@@ -104,8 +104,16 @@ def run_tensorrt_inference(engine: Any, inputs: Any, output_shape: tuple = None)
             
     # Lancement asynchrone VRAM vers VRAM sans passer par la RAM CPU (GIL Bypassed)
     stream = torch.cuda.current_stream()
-    context.execute_async_v2(bindings=bindings, stream_handle=stream.cuda_stream)
-    stream.synchronize()
+    try:
+        context.execute_async_v2(bindings=bindings, stream_handle=stream.cuda_stream)
+    except Exception as e:
+        _log.error(f"Erreur fatale TensorRT asynchrone: {e}")
+        raise RuntimeError(f"Echec execute_async_v2: {e}")
+    finally:
+        # Hardening: Toujours synchroniser le stream pour éviter un Deadlock/Segfault
+        # si un nœud plante avant la lecture de la VRAM
+        stream.synchronize()
+        del context  # Nettoyage immédiat du pointeur C++
     
     _log.debug("Inference TensorRT (VRAM Zero-Copy) terminée.")
     return outputs

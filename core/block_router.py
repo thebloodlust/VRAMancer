@@ -82,12 +82,39 @@ class RemoteExecutor:
             import hashlib
             import os
 
-            data = pickle.dumps(x)
+            # ---------------------------------------------------------
+            # ZERO-COPY PATH (Niveau 2) : Bypass Pickle si c'est un Tenseur PyTorch
+            # ---------------------------------------------------------
+            is_safetensor = False
+            try:
+                import torch
+                from safetensors.torch import save
+                
+                # Si x est un Tenseur ou un Dict de Tenseurs, on utilise Safetensors (Zero-Copy)
+                if isinstance(x, torch.Tensor):
+                    data = save({"tensor": x})
+                    is_safetensor = True
+                elif isinstance(x, dict) and all(isinstance(v, torch.Tensor) for v in x.values()):
+                    data = save(x)
+                    is_safetensor = True
+                else:
+                    data = pickle.dumps(x) # Type Python complexe -> Fallback Pickle
+            except ImportError:
+                data = pickle.dumps(x) # torch/safetensors non installés -> Fallback Pickle
+
+            # Prefix de métadonnées rapide (1 octet) pour dire au récepteur comment décoder
+            # 0x01 = Pickle (Legacy), 0x02 = Safetensors (Zero-Copy)
+            header_type = b'\x02' if is_safetensor else b'\x01'
+            data = header_type + data
+
             secret = os.environ.get("VRM_API_TOKEN", "default_insecure_token").encode()
 
             # 1. Option Tokio (Rust) -> GIL relâché, asynchrone natif
             try:
                 import vramancer_rust
+                tier = vramancer_rust.detect_best_transport()
+                if tier == vramancer_rust.TransportTier.ZeroCopyTcp:
+                    _logger.debug("Utilisation du pont réseau ZeroCopy Tokio/Rust")
                 # Le réseau P2P natif super rapide
                 resp_data = vramancer_rust.send_tensor_p2p(self.host, self.port, secret, data)
             except (ImportError, Exception) as e:
@@ -137,7 +164,21 @@ class RemoteExecutor:
                 _logger.error(f"Zero-Trust Violation: Invalid signature from {self.host}:{self.port}")
                 raise ValueError("Untrusted response payload")
 
-            return pickle.loads(resp_payload)
+            # Dessérialisation dynamique (Zero-Copy ou Pickle Legacy)
+            resp_type = resp_payload[:1]
+            pure_data = resp_payload[1:]
+            
+            if resp_type == b'\x02':
+                try:
+                    from safetensors.torch import load
+                    parsed_dict = load(pure_data)
+                    # Si c'était un Tenseur unique, on le ressort du dict
+                    return parsed_dict["tensor"] if "tensor" in parsed_dict else parsed_dict
+                except Exception as e:
+                    _logger.error(f"Erreur Safetensors au décodage réseau: {e}")
+                    raise
+            else:
+                return pickle.loads(pure_data)
                 
         except socket.timeout:
             _logger.error(f"Timeout réseau ({self.timeout}s) vers {self.host}:{self.port}")

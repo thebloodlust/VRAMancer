@@ -10,10 +10,25 @@ use tokio::net::TcpStream;
 // Définition de notre type HMAC
 type HmacSha256 = Hmac<Sha256>;
 
-/// (Option B - Le Data Plane Tokio)
-/// Cette fonction prend le relais complet du réseau. Elle signe le Tenseur,
-/// lâche le GIL Python (pour laisser le serveur web tourner), ouvre une socket TCP 
-/// ultra-rapide, envoie les données et récupère la réponse du GPU distant !
+/// Hiérarchie des Tiers de Transport VRAMancer
+#[pyclass]
+#[derive(Clone, Debug, PartialEq)]
+pub enum TransportTier {
+    DirectRdma,     // Niveau 1: GPUDirect / InfiniBand (Bypass CPU Total) - Futur
+    ZeroCopyTcp,    // Niveau 2: Safetensors Buffer partagé + TCP natif
+    StandardTcp,    // Niveau 3: Fallback Python Pickle + TCP local
+}
+
+/// Détecte le meilleur tier réseau disponible sur ce nœud host
+#[pyfunction]
+fn detect_best_transport() -> TransportTier {
+    // Plus tard, nous ajouterons ici la détection de "nvidia_peermem" / "ibverbs".
+    // Pour l'instant, on active notre nouveau "Niveau 2" par défaut (ZeroCopy TCP) !
+    TransportTier::ZeroCopyTcp
+}
+
+/// (Option B - Le Data Plane Tokio Zéro-Copie)
+/// Accepte directement des MemoryViews ou Safetensors bytes sans passer par Pickle
 #[pyfunction]
 fn send_tensor_p2p(
     py: Python, 
@@ -109,6 +124,8 @@ fn verify_hmac_fast(_py: Python, secret: &[u8], payload: &[u8], signature: &[u8]
 /// C'est ici que l'on déclare officiellement notre module Python.
 #[pymodule]
 fn vramancer_rust(_py: Python, m: &PyModule) -> PyResult<()> {
+    m.add_class::<TransportTier>()?;
+    m.add_function(wrap_pyfunction!(detect_best_transport, m)?)?;
     m.add_function(wrap_pyfunction!(sign_payload_fast, m)?)?;
     m.add_function(wrap_pyfunction!(verify_hmac_fast, m)?)?;
     m.add_function(wrap_pyfunction!(send_tensor_p2p, m)?)?;

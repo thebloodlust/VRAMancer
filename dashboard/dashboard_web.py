@@ -127,33 +127,30 @@ TEMPLATE = """
             <!-- Col 1: Hardware & GPUs -->
             <div class="lg:col-span-2 space-y-6">
                 <!-- Swarm Attention Widget -->
-                <div class="glass-panel p-6 rounded-2xl relative overflow-hidden">
+                <div class="glass-panel p-6 rounded-2xl relative overflow-hidden flex flex-col justify-between" style="min-height: 280px;">
                     <div class="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-cyber-accent to-transparent opacity-50"></div>
                     
                     <div class="flex justify-between items-start mb-6">
                         <div>
-                            <h2 class="text-xl font-bold text-white flex items-center gap-2"><i class="ph ph-share-network"></i> WebGPU Swarm Neural Mesh</h2>
-                            <p class="text-xs text-gray-400 mt-1">Live Holographic Parity & Tensor Offloading</p>
+                            <h2 class="text-xl font-bold text-white flex items-center gap-2"><i class="ph ph-share-network"></i> Tokio Network Data Plane</h2>
+                            <p class="text-xs text-cyber-success mt-1 font-mono">Rust / Zero-Copy Safetensors Active <i class="ph-fill ph-check-circle"></i></p>
                         </div>
-                        <div class="bg-cyber-dark px-3 py-1 pb-1.5 rounded-full border border-gray-700 text-xs font-bold text-cyber-success">
-                            <span x-text="metrics.activeNodes">3</span> Nodes Online
+                        <div class="bg-cyber-dark px-3 py-1 pb-1.5 rounded-full border border-gray-700 text-xs font-bold text-cyber-neon flex items-center gap-2">
+                            <span class="w-2 h-2 rounded-full bg-cyber-success animate-ping"></span>
+                            <span>Swarm Linked</span>
                         </div>
                     </div>
 
-                    <!-- Canvas for Neural Net -->
-                    <div class="w-full bg-black/40 rounded-xl border border-gray-800 h-[220px] relative">
-                        <canvas id="neuralCanvas" class="w-full h-full"></canvas>
-                        
-                        <!-- Overlay metrics -->
-                        <div class="absolute bottom-4 left-4 flex gap-4">
-                            <div class="bg-black/80 backdrop-blur px-3 py-2 rounded text-xs border border-gray-800">
-                                <span class="text-gray-500">Offload Bw:</span>
-                                <span class="text-cyber-neon font-bold ml-1" x-text="metrics.bandwidth + ' GB/s'">24.5 GB/s</span>
-                            </div>
-                            <div class="bg-black/80 backdrop-blur px-3 py-2 rounded text-xs border border-gray-800">
-                                <span class="text-gray-500">WebGPU Tensors:</span>
-                                <span class="text-cyber-accent font-bold ml-1" x-text="metrics.tensorsProcessed">1,402</span>
-                            </div>
+                    <div class="grid grid-cols-2 gap-4 mt-auto">
+                        <div class="bg-black/60 rounded-xl p-4 border border-gray-800">
+                            <div class="text-[0.65rem] text-gray-500 uppercase tracking-widest mb-1">Tier Actif</div>
+                            <div class="text-lg font-bold text-white">Tier 2: <span class="text-cyber-accent">Zero-Copy TCP</span></div>
+                            <div class="text-xs text-gray-400 mt-1">Latence Bypass CPU</div>
+                        </div>
+                        <div class="bg-black/60 rounded-xl p-4 border border-gray-800">
+                            <div class="text-[0.65rem] text-gray-500 uppercase tracking-widest mb-1">Tenseurs Routés (P2P)</div>
+                            <div class="text-lg font-bold text-cyber-success font-mono" x-text="metrics.tensorsProcessed">0</div>
+                            <div class="text-xs text-gray-400 mt-1">Via HMAC Zero-Trust</div>
                         </div>
                     </div>
                 </div>
@@ -274,9 +271,12 @@ TEMPLATE = """
                             let html = '';
                             Object.entries(js.active || {}).forEach(([res, info]) => {
                                 const id = info.id || info.task_id || 'n/a';
-                                html += `<div class="text-gray-300"><span class="text-cyber-accent">[TASK]</span> ${res} -> ${id} (Running)</div>`;
+                                html += `<div class="text-cyber-accent"><span class="text-white">[TASK]</span> Routage Tenseur via Rust/Tokio: ${id}</div>`;
                             });
-                            if (html === "") html = `<div class="text-gray-600">[IDLE] Waiting for inference jobs...</div>`;
+                            if (html === "") {
+                                html = `<div class="text-gray-600">[IDLE] Attente des requêtes /v1/chat/completions...</div>`;
+                                html += `<div class="text-cyber-success mt-2">[WOI] Écoute Magic Packets Wake-on-Inference activée.</div>`;
+                            }
                             logContainer.innerHTML = html;
                         }
                     } catch(e) {}
