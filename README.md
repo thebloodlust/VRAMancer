@@ -464,3 +464,11 @@ VRAMancer is in **beta**. Core single-node inference is production-grade; multi-
 ## License
 
 MIT
+
+---
+
+## ⚡ Nouvelles Fonctionnalités Expérimentales (Rust P2P & Open WebUI)
+
+- **Contournement NVLink via PCIe (Rust) :** VRAMancer possède désormais une extension bas niveau en Rust permettant d'effectuer des transferts P2P (Peer-to-Peer) entre GPUs grand public (GeForce) sans pont NVLink en forçant le Resizable BAR (ReBAR) et l'accès DMA-BUFs direct.
+- **Support OpenAI-Compatible Absolu :** API complète sur le port `5030` reprenant les endpoints officiels `/v1/models` et `/v1/chat/completions` protégés par la couche HMAC Zero-Trust.
+- **Intégration Open WebUI :** Déploiement et association full support avec les dockers standards de l'industrie (ex: `open-webui/open-webui`) pour offrir une expérience "ChatGPT" inter-liée au Swarm multi-GPU. 
