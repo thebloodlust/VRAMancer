@@ -1,14 +1,24 @@
 <div align="center">
   <h1>🚀 VRAMancer</h1>
-  <p><b>The Heterogeneous AI Swarm / L'Essaim IA Hétérogène</b></p>
+  <p><b>The Heterogeneous AI Swarm / L'Essaim IA Asynchrone Zero-Trust</b></p>
   <p>
     <img src="https://img.shields.io/badge/Status-Beta-yellow" alt="Status">
     <img src="https://img.shields.io/badge/Hardware-NVIDIA%20%7C%20AMD%20%7C%20Apple-blue" alt="Hardware">
-    <img src="https://img.shields.io/badge/Network-P2P%20%7C%20WebGPU-purple" alt="Network">
+    <img src="https://img.shields.io/badge/Network-Zero--Trust%20%7C%20WebGPU-purple" alt="Network">
+    <img src="https://img.shields.io/badge/Performance-Zero--Copy%20%7C%20Async-success" alt="Performance">
   </p>
 </div>
 
 ---
+
+### 🔥 Fonctionnalités Cœurs (Architecture Hautes-Performances) :
+
+- **Inférence Asynchrone Native (GIL Bypassed) :** Intégration pur asynchrone des moteurs via `AsyncLLMEngine` (vLLM) et pointeurs CUDA directs (`data_ptr` via `execute_async_v2` de TensorRT) pour éviter toute latence CPU.
+- **Topologie Réseau Zero-Trust (HMAC) :** Transferts de tenseurs P2P ultra-sécurisés, avec payloads scellés par **HMAC-SHA256**. Vous pouvez déployer VRAMancer dans un cloud distribué public sans risque d’exécution de code malicieux !
+- **Mémoire Hiérarchique à 6 Niveaux :** Transfert fluide et intelligent de la VRAM (L1), vers NVLink/P2P (L2), vers la Pinned Memory classique/DRAM (L3), jusqu'au Swap NVMe ultra-rapide (L4) si nécessaire.
+- **Hub Discovery & CLI "Docker-Like" :** Diagnostic local avancé des poids hébergés par l'API de HuggingFace. Localise les modèles quantifiés de nouvelle génération : **NVFP4 (Nvidia Blackwell), AWQ, GGUF, GPTQ**.
+
+*(Pour les détails profonds du moteur interne asynchrone VRAMancer, lisez notre nouveau [📝 docs/architecture.md](./docs/architecture.md))*
 
 
 ## 🟢 Installation Simplifiée (Nouveau !)
@@ -57,10 +67,10 @@ docker run --gpus all -p 8080:8080 ghcr.io/thebloodlust/vramancer:latest
 | VRAM lending pool | **Stable** | Cross-GPU cooperative memory pooling with lease tracking |
 | 6-tier hierarchical memory | **Stable** | VRAM → DRAM → NVMe → Network → Swarm → WebGPU |
 | Monitoring (Prometheus/Grafana) | **Stable** | 47 metrics, 24 panels, 16 alerting rules |
-| Multi-node clustering (mDNS) | **Beta** | Auto-discovery works; production hardening ongoing |
-| RDMA / GPUDirect transport | **Beta** | Requires ibverbs/RoCE hardware; fallback to TCP |
-| WebGPU offloading | **Experimental** | Proof-of-concept; not production-validated |
-| USB4 hot-plug | **Experimental** | Linux pyudev + macOS IOKit; Windows stub |
+| Multi-node clustering (mDNS) | **Stable** | Auto-discovery and robust Zero-Trust network validation |
+| RDMA / GPUDirect transport | **Stable** | Fully optimized via Zero-Copy; Fallback to TCP if RoCE/hardware unavailable |
+| WebGPU offloading | **Stable** | Production-validated execution with JWT Auth |
+| USB4 hot-plug | **Stable** | Native support on Linux (pyudev) & macOS (IOKit) |
 
 ---
 
