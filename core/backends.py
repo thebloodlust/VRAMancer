@@ -179,49 +179,29 @@ class KVCacheBlock(_nn.Module if _HAS_TORCH else object):
         return hidden_states, presents
 
 
-def select_backend(backend_name: str = "auto") -> "BaseLLMBackend":
-    backend_name = (backend_name or "auto").lower()
-    allow_stub = os.environ.get("VRM_BACKEND_ALLOW_STUB")
+def select_backend(model_name: str, cache_dir: str = None, backend: str = "auto", num_gpus: int = 1):
+    logger.info(f"Sélection du backend pour {model_name} (demandé: {backend}, gpus: {num_gpus})")
     
-    if backend_name == "webgpu":
-        from core.backends_webgpu import WebGPUBackend
-        return WebGPUBackend()
+    # Forcer vLLM si demandé explicitement ou si mode auto avec plusieurs GPUs
+    if backend == "vllm" or (backend == "auto" and num_gpus > 1):
+        try:
+            import vllm
+            logger.info("Utilisation du backend vLLM pour le support natif multi-GPU (Tensor Parallelism).")
+            from core.backends_vllm import vLLMBackend
+            return vLLMBackend(model_name, cache_dir=cache_dir, tensor_parallel_size=num_gpus)
+        except ImportError:
+            logger.warning("vLLM demandé ou recommandé (multi-GPU), mais le module n'est pas installé. Fallback sur HuggingFace.")
+            backend = "huggingface"
+
+    if backend == "ollama":
+        from core.backends_ollama import OllamaBackend
+        return OllamaBackend(model_name)
         
-    if backend_name == "huggingface":
-        return HuggingFaceBackend()
-    if backend_name == "vllm":
-        try:
-            import vllm  # noqa: F401
-            return vLLMBackend(real=True)
-        except ImportError:
-            if allow_stub:
-                return vLLMBackend(real=False)
-            raise RuntimeError("vLLM non installé (export VRM_BACKEND_ALLOW_STUB=1 pour stub)")
-    if backend_name == "ollama":
-        try:
-            import ollama  # noqa: F401
-            return OllamaBackend(real=True)
-        except ImportError:
-            if allow_stub:
-                return OllamaBackend(real=False)
-            raise RuntimeError("Ollama non installé (export VRM_BACKEND_ALLOW_STUB=1 pour stub)")
-    if backend_name == "webgpu":
-        from core.backends_webgpu import WebGPUBackend
-        return WebGPUBackend()
-    # auto
-    try:
-        import vllm  # noqa: F401
-        return vLLMBackend(real=True)
-    except ImportError:
-        if allow_stub:
-            return vLLMBackend(real=False)
-    try:
-        import ollama  # noqa: F401
-        return OllamaBackend(real=True)
-    except ImportError:
-        if allow_stub:
-            return OllamaBackend(real=False)
-    return HuggingFaceBackend()
+    if backend == "huggingface" or backend == "auto":
+        from core.backends import HuggingFaceBackend
+        return HuggingFaceBackend(model_name, cache_dir=cache_dir)
+        
+    raise ValueError(f"Backend inconnu ou non supporté : {backend}")
 
 
 class BaseLLMBackend(ABC):
