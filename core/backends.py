@@ -247,9 +247,10 @@ class BaseLLMBackend(ABC):
 
 # ------------------- HuggingFace Backend -------------------
 class HuggingFaceBackend(BaseLLMBackend):
-    def __init__(self):
+    def __init__(self, model_name: str = None, cache_dir: str = None):
         self.model = None
-        self.model_name: Optional[str] = None
+        self.model_name: Optional[str] = model_name
+        self.cache_dir = cache_dir
         self.tokenizer = None
         self.blocks: Optional[List[Any]] = None
         self.block_devices: Optional[List[int]] = None  # GPU id per block
