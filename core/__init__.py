@@ -1,6 +1,6 @@
 # core/__init__.py
 import os as _os
-__version__ = "1.1.0"
+__version__ = "1.5.0"
 _STRICT = _os.environ.get('VRM_STRICT_IMPORT','0') in {'1','true','TRUE'}
 
 

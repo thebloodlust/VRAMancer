@@ -54,6 +54,18 @@ except ImportError:  # pragma: no cover
 # Node info
 # =========================================================================
 
+def _get_mac_address() -> str:
+    """Get the primary MAC address formatted nicely."""
+    try:
+        import uuid
+        mac = uuid.getnode()
+        # Convert to hex and format with colon
+        mac_hex = ':'.join(['{:02x}'.format((mac >> elements) & 0xff) 
+                           for elements in range(0, 8*6, 8)][::-1])
+        return mac_hex
+    except Exception:
+        return "00:00:00:00:00:00"
+
 def get_local_info() -> Dict[str, Any]:
     """Gather comprehensive local node information."""
     gpu_list = []
@@ -74,6 +86,7 @@ def get_local_info() -> Dict[str, Any]:
     return {
         "hostname": socket.gethostname(),
         "ip": _get_local_ip(),
+        "mac": _get_mac_address(),
         "cpu": platform.processor() or platform.machine(),
         "arch": platform.machine(),
         "os": platform.system(),

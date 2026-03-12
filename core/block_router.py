@@ -84,35 +84,54 @@ class RemoteExecutor:
 
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(self.timeout)
-            sock.connect((self.host, self.port))
-            data = pickle.dumps(x)
+            try:
+                sock.connect((self.host, self.port))
+                data = pickle.dumps(x)
 
-            # Zero-Trust: Sign the payload to prevent RCE from rogue nodes
-            secret = os.environ.get("VRM_API_TOKEN", "default_insecure_token").encode()
-            signature = hmac.new(secret, data, hashlib.sha256).digest()
+                # Zero-Trust: Sign the payload to prevent RCE from rogue nodes
+                secret = os.environ.get("VRM_API_TOKEN", "default_insecure_token").encode()
+                signature = hmac.new(secret, data, hashlib.sha256).digest()
 
-            # Format: [8 bytes total len] + [32 bytes sha256 signature] + [data]
-            payload = signature + data
-            sock.sendall(len(payload).to_bytes(8, "big") + payload)
-            
-            resp_len = int.from_bytes(sock.recv(8), "big")
-            resp_data = b""
-            while len(resp_data) < resp_len:
-                chunk = sock.recv(min(65536, resp_len - len(resp_data)))
-                if not chunk:
-                    break
-                resp_data += chunk
-            
-            # Verify response signature
-            resp_sig = resp_data[:32]
-            resp_payload = resp_data[32:]
-            expected_sig = hmac.new(secret, resp_payload, hashlib.sha256).digest()
-            if not hmac.compare_digest(resp_sig, expected_sig):
-                _logger.error(f"Zero-Trust Violation: Invalid signature from {self.host}:{self.port}")
-                raise ValueError("Untrusted response payload")
+                # Format: [8 bytes total len] + [32 bytes sha256 signature] + [data]
+                payload = signature + data
+                sock.sendall(len(payload).to_bytes(8, "big") + payload)
+                
+                resp_len_bytes = sock.recv(8)
+                if not resp_len_bytes:
+                    raise ConnectionError("Remote node disconnected prematurely (Empty response header)")
+                resp_len = int.from_bytes(resp_len_bytes, "big")
+                
+                resp_data = b""
+                while len(resp_data) < resp_len:
+                    chunk = sock.recv(min(65536, resp_len - len(resp_data)))
+                    if not chunk:
+                        raise ConnectionError("Remote node dropped connection during payload transfer")
+                    resp_data += chunk
+                
+                # Verify response signature
+                resp_sig = resp_data[:32]
+                resp_payload = resp_data[32:]
+                expected_sig = hmac.new(secret, resp_payload, hashlib.sha256).digest()
+                if not hmac.compare_digest(resp_sig, expected_sig):
+                    _logger.error(f"Zero-Trust Violation: Invalid signature from {self.host}:{self.port}")
+                    raise ValueError("Untrusted response payload")
 
-            sock.close()
-            return pickle.loads(resp_payload)
+                return pickle.loads(resp_payload)
+            finally:
+                sock.close()
+                
+        except socket.timeout:
+            _logger.error(f"Timeout réseau ({self.timeout}s) vers {self.host}:{self.port}")
+            # Tentative de Wake-on-Inference si une MAC address est configurée ou découverte
+            mac_target = os.environ.get(f"VRM_WOI_MAC_{self.host.replace('.', '_')}")
+            if mac_target:
+                from core.network.wake_on_lan import send_magic_packet
+                _logger.info(f"Déclenchement du Wake-on-Inference (WoI) pour le nœud endormi: {self.host}")
+                send_magic_packet(mac_target)
+                _logger.info("Passage au CPU Fallback en attendant le réveil du nœud...")
+            else:
+                _logger.info("Mode dégradé activé (Passthrough local)")
+            return x  # passthrough fallback
         except Exception as exc:
             _logger.warning("Remote execution to %s:%d failed: %s", self.host, self.port, exc)
             return x  # passthrough fallback
