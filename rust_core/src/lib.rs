@@ -6,6 +6,8 @@ use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+use std::fs::OpenOptions;
+use std::io::{Read, Write};
 
 // Définition de notre type HMAC
 type HmacSha256 = Hmac<Sha256>;
@@ -130,6 +132,59 @@ fn send_tensor_p2p(
     }
 }
 
+/// Écoute silencieuse (Serveur P2P IP Distant)
+/// Attend un tenseur réseau, vérifie la signature HMAC Zero-Trust, et retourne les bytes bruts en Python.
+#[pyfunction]
+fn receive_tensor_p2p(py: Python, port: u16, secret: &[u8]) -> PyResult<Py<PyBytes>> {
+    let secret_vec = secret.to_vec();
+    
+    // On relâche le GIL pour ne pas bloquer le serveur web Python
+    let result: Result<Vec<u8>, String> = py.allow_threads(|| {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let addr = format!("0.0.0.0:{}", port);
+            let listener = tokio::net::TcpListener::bind(&addr).await
+                .map_err(|e| format!("Echec écoute TCP sur le port {}: {}", port, e))?;
+            
+            // Attente du premier nœud distant qui se connecte
+            let (mut socket, _) = listener.accept().await
+                .map_err(|e| format!("Echec acceptation de la connexion TCP: {}", e))?;
+                
+            let total_len = socket.read_u64().await
+                .map_err(|e| format!("Echec lecture de l'en-tête distant: {}", e))?;
+                
+            // Lecture des 32 octets de signature
+            let mut signature = vec![0u8; 32];
+            socket.read_exact(&mut signature).await
+                .map_err(|e| format!("Echec lecture signature HMAC: {}", e))?;
+                
+            // Lecture intégrale du Gigabytes de VRAM/Tenseur
+            let payload_len = total_len - 32;
+            let mut payload = vec![0u8; payload_len as usize];
+            socket.read_exact(&mut payload).await
+                .map_err(|e| format!("Echec lecture du payload de données Tensor: {}", e))?;
+                
+            // Vérification de sécurité (Si un hacker tente d'envoyer du code corrompu, ça dégage ici)
+            let mut mac = HmacSha256::new_from_slice(&secret_vec).unwrap();
+            mac.update(&payload);
+            if mac.verify_slice(&signature).is_err() {
+                return Err("ALERTE INTRUSION : Signature HMAC-SHA256 Invalide ! Tentative de transfert P2P rejetée.".to_string());
+            }
+            
+            // Envoi de l'accusé de réception (ACK) pour libérer le socket distant
+            socket.write_u64(2).await.unwrap_or(());
+            socket.write_all(b"OK").await.unwrap_or(());
+            
+            Ok(payload)
+        })
+    });
+    
+    match result {
+        Ok(data) => Ok(PyBytes::new(py, &data).into()),
+        Err(e) => Err(PyConnectionError::new_err(e)),
+    }
+}
+
 /// Une fonction très rapide pour signer un payload en Rust et esquiver le GIL de Python.
 /// Utilisée pour la validation locale.
 #[pyfunction]
@@ -159,6 +214,78 @@ fn verify_hmac_fast(_py: Python, secret: &[u8], payload: &[u8], signature: &[u8]
     }
 }
 
+/// ⚡ Software CXL Offload (Rust equivalent of pure C++ dump)
+#[pyfunction]
+fn cxl_direct_memory_dump(py: Python, path: String, ptr: usize, num_bytes: usize) -> PyResult<()> {
+    py.allow_threads(|| {
+        // SAFETY: We assume the caller provides a valid pointer and length. Risk of segfault if incorrect,
+        // but Rust handles the file writing safely and bypassing the GIL.
+        let slice = unsafe { std::slice::from_raw_parts(ptr as *const u8, num_bytes) };
+        let mut file = OpenOptions::new().write(true).create(true).truncate(true).open(&path)
+            .map_err(|e| PyValueError::new_err(format!("Software CXL Error: Unable to map memory bus to NVMe path at {}: {}", path, e)))?;
+        file.write_all(slice)
+            .map_err(|e| PyValueError::new_err(format!("Software CXL Write Error: {}", e)))?;
+        Ok(())
+    })
+}
+
+/// ⚡ Software CXL Onload (Rust equivalent of pure C++ load)
+#[pyfunction]
+fn cxl_direct_memory_load(py: Python, path: String, ptr: usize, num_bytes: usize) -> PyResult<()> {
+    py.allow_threads(|| {
+        // SAFETY: Same as above.
+        let slice = unsafe { std::slice::from_raw_parts_mut(ptr as *mut u8, num_bytes) };
+        let mut file = OpenOptions::new().read(true).open(&path)
+            .map_err(|e| PyValueError::new_err(format!("Software CXL Error: Failed memory page fault. Data inaccessible on NVMe at {}: {}", path, e)))?;
+        file.read_exact(slice)
+            .map_err(|e| PyValueError::new_err(format!("Software CXL Read Error: {}", e)))?;
+        Ok(())
+    })
+}
+
+/// Fast XOR for Holographic Parity (bypassing GIL)
+#[pyfunction]
+fn generate_holographic_parity(py: Python, shards: Vec<&[u8]>) -> PyResult<Py<PyBytes>> {
+    // We can confidently release the GIL because we only have immutable slices.
+    let (parity, max_len) = py.allow_threads(|| {
+        let max_len = shards.iter().map(|s| s.len()).max().unwrap_or(0);
+        if max_len == 0 || shards.is_empty() {
+            return (vec![], 0);
+        }
+        
+        let mut parity_buf = vec![0u8; max_len];
+        for shard in shards {
+            // Processing XOR (Rust will heavily optimize this via LLVM vectorizer like AVX-512)
+            for (p, &s) in parity_buf.iter_mut().zip(shard.iter()) {
+                *p ^= s;
+            }
+        }
+        (parity_buf, max_len)
+    });
+
+    if max_len == 0 {
+        return Ok(PyBytes::new(py, &[]).into());
+    }
+    
+    Ok(PyBytes::new(py, &parity).into())
+}
+
+/// Reconstructs a missing tensor chunk from Parity
+#[pyfunction]
+fn heal_holograph(py: Python, valid_shards: Vec<&[u8]>, parity: &[u8]) -> PyResult<Py<PyBytes>> {
+    let reconstructed = py.allow_threads(|| {
+        let mut rec_buf = parity.to_vec();
+        for shard in valid_shards {
+            for (r, &s) in rec_buf.iter_mut().zip(shard.iter()) {
+                *r ^= s;
+            }
+        }
+        rec_buf
+    });
+    
+    Ok(PyBytes::new(py, &reconstructed).into())
+}
+
 /// C'est ici que l'on déclare officiellement notre module Python.
 #[pymodule]
 fn vramancer_rust(_py: Python, m: &PyModule) -> PyResult<()> {
@@ -168,5 +295,10 @@ fn vramancer_rust(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(sign_payload_fast, m)?)?;
     m.add_function(wrap_pyfunction!(verify_hmac_fast, m)?)?;
     m.add_function(wrap_pyfunction!(send_tensor_p2p, m)?)?;
+    m.add_function(wrap_pyfunction!(receive_tensor_p2p, m)?)?;
+    m.add_function(wrap_pyfunction!(cxl_direct_memory_dump, m)?)?;
+    m.add_function(wrap_pyfunction!(cxl_direct_memory_load, m)?)?;
+    m.add_function(wrap_pyfunction!(generate_holographic_parity, m)?)?;
+    m.add_function(wrap_pyfunction!(heal_holograph, m)?)?;
     Ok(())
 }

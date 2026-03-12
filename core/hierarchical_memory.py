@@ -315,8 +315,11 @@ class HierarchicalMemoryManager:
             })
             
             try:
-                import software_cxl
-                software_cxl.cxl_direct_memory_dump(str(path), ptr, num_bytes)
+                try:
+                    import vramancer_rust as cxl_ext
+                except ImportError:
+                    import software_cxl as cxl_ext
+                cxl_ext.cxl_direct_memory_dump(str(path), ptr, num_bytes)
                 self.migrate(block, "L5")
                 self.log.debug(f"⚡ [CXL] Spill {block.id[:8]} -> NVMe ({num_bytes/1e6:.1f}MB) GIL-bypassed")
                 return
@@ -352,8 +355,11 @@ class HierarchicalMemoryManager:
             ptr = tensor.data_ptr()
             
             try:
-                import software_cxl
-                software_cxl.cxl_direct_memory_load(str(path), ptr, num_bytes)
+                try:
+                    import vramancer_rust as cxl_ext
+                except ImportError:
+                    import software_cxl as cxl_ext
+                cxl_ext.cxl_direct_memory_load(str(path), ptr, num_bytes)
                 self.migrate(block, "L3")
                 self.log.debug(f"⚡ [CXL] Reload {block.id[:8]} from NVMe ({num_bytes/1e6:.1f}MB) GIL-bypassed")
                 return tensor
