@@ -10,6 +10,9 @@ Provides:
 from abc import ABC, abstractmethod
 from typing import Any, List, Optional
 import os
+import logging
+logger = logging.getLogger(__name__)
+
 from core.logger import LoggerAdapter
 
 _MINIMAL = os.environ.get("VRM_MINIMAL_TEST", "")
@@ -182,7 +185,6 @@ class KVCacheBlock(_nn.Module if _HAS_TORCH else object):
 def select_backend(model_name: str, cache_dir: str = None, backend: str = "auto", num_gpus: int = 1):
     logger.info(f"Sélection du backend pour {model_name} (demandé: {backend}, gpus: {num_gpus})")
     
-    # Forcer vLLM si demandé explicitement ou si mode auto avec plusieurs GPUs
     if backend == "vllm" or (backend == "auto" and num_gpus > 1):
         try:
             import vllm
