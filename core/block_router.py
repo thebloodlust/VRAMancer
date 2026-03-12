@@ -90,7 +90,13 @@ class RemoteExecutor:
 
                 # Zero-Trust: Sign the payload to prevent RCE from rogue nodes
                 secret = os.environ.get("VRM_API_TOKEN", "default_insecure_token").encode()
-                signature = hmac.new(secret, data, hashlib.sha256).digest()
+                
+                # Prudence: Utilisation du module natif Rust si dispo, sinon fallback CPU classique
+                try:
+                    import vramancer_rust
+                    signature = vramancer_rust.sign_payload_fast(secret, data)
+                except ImportError:
+                    signature = hmac.new(secret, data, hashlib.sha256).digest()
 
                 # Format: [8 bytes total len] + [32 bytes sha256 signature] + [data]
                 payload = signature + data
@@ -111,8 +117,16 @@ class RemoteExecutor:
                 # Verify response signature
                 resp_sig = resp_data[:32]
                 resp_payload = resp_data[32:]
-                expected_sig = hmac.new(secret, resp_payload, hashlib.sha256).digest()
-                if not hmac.compare_digest(resp_sig, expected_sig):
+                
+                # Prudence: Verification Rust native ou fallback CPU
+                try:
+                    import vramancer_rust
+                    is_valid = vramancer_rust.verify_hmac_fast(secret, resp_payload, resp_sig)
+                except ImportError:
+                    expected_sig = hmac.new(secret, resp_payload, hashlib.sha256).digest()
+                    is_valid = hmac.compare_digest(resp_sig, expected_sig)
+                    
+                if not is_valid:
                     _logger.error(f"Zero-Trust Violation: Invalid signature from {self.host}:{self.port}")
                     raise ValueError("Untrusted response payload")
 
