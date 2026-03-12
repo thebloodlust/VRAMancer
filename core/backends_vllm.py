@@ -49,10 +49,13 @@ class vLLMBackend(BaseLLMBackend):
     def infer(self, inputs: Any) -> Any:
         raise NotImplementedError("L'inférence par tenseur brut n'est pas supportée par vLLM directement.")
 
-    def generate(self, prompt: str, max_new_tokens: int = 128, **kwargs) -> str:
+    def generate(self, prompt: str, max_new_tokens: int = 128, **kwargs) -> Any:
+        # Prise en charge de l'argument OpenAI max_tokens
+        max_tokens_val = kwargs.pop('max_tokens', max_new_tokens)
+        
         if kwargs.get('stream', False):
-            # Fallback automatique vers le streaming si demandé via cette fonction
-            return "".join([chunk for chunk in self.generate_stream(prompt, max_new_tokens, **kwargs)])
+            # IMPORTANT: Retourner directement le générateur (et non un texte joint)
+            return self.generate_stream(prompt, max_tokens_val, **kwargs)
 
         if not self.is_loaded or self.engine is None:
             raise RuntimeError("Le moteur vLLM n'est pas initialisé.")
@@ -66,7 +69,7 @@ class vLLMBackend(BaseLLMBackend):
         valid_kwargs = {k: v for k, v in kwargs.items() if k in ['top_p', 'top_k', 'presence_penalty', 'frequency_penalty']}
         sampling_params = SamplingParams(
             temperature=temperature,
-            max_tokens=max_new_tokens,
+            max_tokens=max_tokens_val,
             **valid_kwargs
         )
         
@@ -83,6 +86,8 @@ class vLLMBackend(BaseLLMBackend):
         return final_output
 
     def generate_stream(self, prompt: str, max_new_tokens: int = 128, **kwargs):
+        max_tokens_val = kwargs.pop('max_tokens', max_new_tokens)
+        
         if not self.is_loaded or self.engine is None:
             raise RuntimeError("Le moteur vLLM n'est pas initialisé.")
             
@@ -95,7 +100,7 @@ class vLLMBackend(BaseLLMBackend):
         valid_kwargs = {k: v for k, v in kwargs.items() if k in ['top_p', 'top_k', 'presence_penalty', 'frequency_penalty']}
         sampling_params = SamplingParams(
             temperature=temperature,
-            max_tokens=max_new_tokens,
+            max_tokens=max_tokens_val,
             **valid_kwargs
         )
         
@@ -108,6 +113,7 @@ class vLLMBackend(BaseLLMBackend):
             for output in step_outputs:
                 if output.request_id == request_id:
                     current_text = output.outputs[0].text
+                    # Récupérer uniquement les nouveaux mots par rapport à la boucle précédente
                     new_text = current_text[len(last_text):]
                     if new_text:
                         yield new_text
