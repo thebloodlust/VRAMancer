@@ -186,14 +186,11 @@ def select_backend(model_name: str, cache_dir: str = None, backend: str = "auto"
     logger.info(f"Sélection du backend pour {model_name} (demandé: {backend}, gpus: {num_gpus})")
     
     if backend == "vllm" or (backend == "auto" and num_gpus > 1):
-        try:
-            import vllm
-            logger.info("Utilisation du backend vLLM pour le support natif multi-GPU (Tensor Parallelism).")
-            from core.backends_vllm import vLLMBackend
-            return vLLMBackend(model_name, cache_dir=cache_dir, tensor_parallel_size=num_gpus)
-        except ImportError:
-            logger.warning("vLLM demandé ou recommandé (multi-GPU), mais le module n'est pas installé. Fallback sur HuggingFace.")
-            backend = "huggingface"
+        # On retire temporairement le try/except ImportError pour forcer l'affichage de l'erreur d'import vLLM
+        import vllm
+        logger.info("Utilisation du backend vLLM pour le support natif multi-GPU (Tensor Parallelism).")
+        from core.backends_vllm import vLLMBackend
+        return vLLMBackend(model_name, cache_dir=cache_dir, tensor_parallel_size=num_gpus)
 
     if backend == "ollama":
         from core.backends_ollama import OllamaBackend
@@ -243,7 +240,6 @@ class BaseLLMBackend(ABC):
         Backends with true padding-based batching should override this.
         """
         return [self.generate(p, max_new_tokens=max_new_tokens, **kwargs) for p in prompts]
-
 
 # ------------------- HuggingFace Backend -------------------
 class HuggingFaceBackend(BaseLLMBackend):
