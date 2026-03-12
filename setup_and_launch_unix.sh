@@ -25,14 +25,18 @@ fi
 # 3. Environnement Virtuel Python
 if [ ! -d "venv" ]; then
     echo "🐍 Création de l'environnement virtuel Python..."
-    python3 -m venv venv
+    # On force l'utilisation de python3, et s'il manque python3-venv sur Ubuntu on previent l'utilisateur
+    sudo apt-get update -y && sudo apt-get install -y python3-venv python-is-python3 || true
+    python3 -m venv venv || { echo "❌ Echec creation venv. Essayez sudo chmod -R 777 ."; exit 1; }
 fi
 source venv/bin/activate
 
 # 4. Installation des dépendances et du Module Rust (Maturin)
 echo "📦 Installation des dépendances (PyTorch, vLLM, Maturin)..."
-pip install -r requirements.txt --quiet
-pip install maturin --quiet
+# Utilisation explicite du pip du venv
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt --quiet
+python -m pip install maturin --quiet
 
 echo "⚙️  Compilation du Cœur Haute-Performance (Rust ReBAR Bypass)..."
 cd rust_core && maturin develop --release && cd ..
