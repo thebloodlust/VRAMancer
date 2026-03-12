@@ -469,6 +469,29 @@ def _register_routes(application: Flask, _run_with_timeout, queue_depth, queue_l
             top_p: float — nucleus sampling (0.0-1.0)
             stream: bool — SSE streaming
         """
+        # =================================================================
+        # SWARM ECONOMY: Ledger Authentication & Credit Check
+        # =================================================================
+        auth_header = request.headers.get("Authorization", "")
+        api_key = auth_header.replace("Bearer ", "").strip()
+        user_id = None
+        
+        if api_key.startswith("sk-VRAM-"):
+            try:
+                from core.swarm_ledger import ledger
+                user_info = ledger.verify_and_get_user(api_key)
+                if not user_info:
+                    return jsonify({'error': 'Unauthorized: Access denied by Swarm Ledger (Invalid Key).', 'credit_balance': 0}), 401
+                if user_info['vram_credits'] <= 0:
+                    return jsonify({'error': 'Payment Required: Insufficient VRAM credits. Contribute to the swarm to earn more.', 'credit_balance': user_info['vram_credits']}), 402
+                
+                user_id = user_info['id']
+                logger.info(f"Swarm user '{user_info['alias']}' authenticated. Balance: {user_info['vram_credits']:.2f}")
+            except Exception as e:
+                logger.error(f"Ledger auth error: {e}")
+
+        # =================================================================
+
         data = request.get_json(silent=True) or {}
         messages = data.get('messages', [])
         model_name = data.get('model')
@@ -480,6 +503,16 @@ def _register_routes(application: Flask, _run_with_timeout, queue_depth, queue_l
         params, val_err = _validate_generation_params(data)
         if val_err:
             return jsonify({'error': val_err[0]}), val_err[1]
+
+        # Initialisation grossière de la consommation (MVP Ledger)
+        if user_id:
+            try:
+                from core.swarm_ledger import ledger
+                # On bloque/consomme arbitrairement la demande max_tokens ou 250 par défaut
+                reserved_tokens = params.get('max_tokens', 250)
+                ledger.consume_credits(user_id, reserved_tokens)
+            except Exception:
+                pass
 
         # Convert messages to prompt
         prompt_parts = []
