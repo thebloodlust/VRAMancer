@@ -82,57 +82,62 @@ class RemoteExecutor:
             import hashlib
             import os
 
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(self.timeout)
+            data = pickle.dumps(x)
+            secret = os.environ.get("VRM_API_TOKEN", "default_insecure_token").encode()
+
+            # 1. Option Tokio (Rust) -> GIL relâché, asynchrone natif
             try:
-                sock.connect((self.host, self.port))
-                data = pickle.dumps(x)
+                import vramancer_rust
+                # Le réseau P2P natif super rapide
+                resp_data = vramancer_rust.send_tensor_p2p(self.host, self.port, secret, data)
+            except (ImportError, Exception) as e:
+                if isinstance(e, ImportError):
+                    _logger.debug("vramancer_rust unavailable, using CPU fallback for TCP P2P")
+                else:
+                    _logger.warning(f"Rust native P2P failed ({e}), falling back to Python sockets")
 
-                # Zero-Trust: Sign the payload to prevent RCE from rogue nodes
-                secret = os.environ.get("VRM_API_TOKEN", "default_insecure_token").encode()
-                
-                # Prudence: Utilisation du module natif Rust si dispo, sinon fallback CPU classique
+                # 2. Option Python classique -> Sockets synchrones (+GIL block)
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(self.timeout)
                 try:
-                    import vramancer_rust
-                    signature = vramancer_rust.sign_payload_fast(secret, data)
-                except ImportError:
-                    signature = hmac.new(secret, data, hashlib.sha256).digest()
-
-                # Format: [8 bytes total len] + [32 bytes sha256 signature] + [data]
-                payload = signature + data
-                sock.sendall(len(payload).to_bytes(8, "big") + payload)
-                
-                resp_len_bytes = sock.recv(8)
-                if not resp_len_bytes:
-                    raise ConnectionError("Remote node disconnected prematurely (Empty response header)")
-                resp_len = int.from_bytes(resp_len_bytes, "big")
-                
-                resp_data = b""
-                while len(resp_data) < resp_len:
-                    chunk = sock.recv(min(65536, resp_len - len(resp_data)))
-                    if not chunk:
-                        raise ConnectionError("Remote node dropped connection during payload transfer")
-                    resp_data += chunk
-                
-                # Verify response signature
-                resp_sig = resp_data[:32]
-                resp_payload = resp_data[32:]
-                
-                # Prudence: Verification Rust native ou fallback CPU
-                try:
-                    import vramancer_rust
-                    is_valid = vramancer_rust.verify_hmac_fast(secret, resp_payload, resp_sig)
-                except ImportError:
-                    expected_sig = hmac.new(secret, resp_payload, hashlib.sha256).digest()
-                    is_valid = hmac.compare_digest(resp_sig, expected_sig)
+                    sock.connect((self.host, self.port))
                     
-                if not is_valid:
-                    _logger.error(f"Zero-Trust Violation: Invalid signature from {self.host}:{self.port}")
-                    raise ValueError("Untrusted response payload")
+                    # Signature CPU
+                    signature = hmac.new(secret, data, hashlib.sha256).digest()
+                    payload = signature + data
+                    sock.sendall(len(payload).to_bytes(8, "big") + payload)
+                    
+                    resp_len_bytes = sock.recv(8)
+                    if not resp_len_bytes:
+                        raise ConnectionError("Remote node disconnected prematurely (Empty response header)")
+                    resp_len = int.from_bytes(resp_len_bytes, "big")
+                    
+                    resp_data = b""
+                    while len(resp_data) < resp_len:
+                        chunk = sock.recv(min(65536, resp_len - len(resp_data)))
+                        if not chunk:
+                            raise ConnectionError("Remote node dropped connection during payload transfer")
+                        resp_data += chunk
+                finally:
+                    sock.close()
+            
+            # Verify response signature (Commun pour Rust & Python)
+            resp_sig = resp_data[:32]
+            resp_payload = resp_data[32:]
+            
+            # Prudence: Verification Rust native ou fallback CPU
+            try:
+                import vramancer_rust
+                is_valid = vramancer_rust.verify_hmac_fast(secret, resp_payload, resp_sig)
+            except ImportError:
+                expected_sig = hmac.new(secret, resp_payload, hashlib.sha256).digest()
+                is_valid = hmac.compare_digest(resp_sig, expected_sig)
+                
+            if not is_valid:
+                _logger.error(f"Zero-Trust Violation: Invalid signature from {self.host}:{self.port}")
+                raise ValueError("Untrusted response payload")
 
-                return pickle.loads(resp_payload)
-            finally:
-                sock.close()
+            return pickle.loads(resp_payload)
                 
         except socket.timeout:
             _logger.error(f"Timeout réseau ({self.timeout}s) vers {self.host}:{self.port}")

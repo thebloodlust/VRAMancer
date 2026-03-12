@@ -1,28 +1,84 @@
 use pyo3::prelude::*;
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyValueError, PyConnectionError};
 use pyo3::types::PyBytes;
 
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
 
 // Définition de notre type HMAC
 type HmacSha256 = Hmac<Sha256>;
 
-/// (Option B - Préparation)
-/// Fonction qui démontre l'intégration de Tokio pour des tâches I/O asynchrones intenses. 
-/// Actuellement, elle s'occupera juste de temporiser sans bloquer le thread OS.
+/// (Option B - Le Data Plane Tokio)
+/// Cette fonction prend le relais complet du réseau. Elle signe le Tenseur,
+/// lâche le GIL Python (pour laisser le serveur web tourner), ouvre une socket TCP 
+/// ultra-rapide, envoie les données et récupère la réponse du GPU distant !
 #[pyfunction]
-fn rust_sleep_demo(py: Python, ms: u64) -> PyResult<()> {
-    // Cette fonction libère le GIL Python (Python peut faire autre chose)
-    // pendant que le code C/Rust travaille (ici, il dort, plus tard il fera de la Data-Transfer TCP).
-    py.allow_threads(|| {
-        std::thread::sleep(std::time::Duration::from_millis(ms));
+fn send_tensor_p2p(
+    py: Python, 
+    host: String, 
+    port: u16, 
+    secret: &[u8], 
+    payload: &[u8]
+) -> PyResult<Py<PyBytes>> {
+    
+    // 1. Signature ultra-rapide (C-speed)
+    let mut mac = HmacSha256::new_from_slice(secret)
+        .map_err(|_| PyValueError::new_err("Erreur Secret HMAC"))?;
+    mac.update(payload);
+    let signature = mac.finalize().into_bytes();
+
+    let payload_len = payload.len() as u64;
+    // La longueur totale comprendra les 32 octets de la signature HMAC
+    let total_len = payload_len + 32;
+
+    // 2. Relâche du GIL Python et passage en I/O asynchrone natif
+    let result: Result<Vec<u8>, String> = py.allow_threads(|| {
+        // Lancement d'un runtime Tokio temporaire dédié au transfert massif
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        
+        rt.block_on(async {
+            let addr = format!("{}:{}", host, port);
+            
+            // Connexion asynchrone
+            let mut stream = TcpStream::connect(&addr).await
+                .map_err(|e| format!("Echec connexion TCP vers {}: {}", addr, e))?;
+
+            // Envoi optimisé du Header (Total Len)
+            stream.write_u64(total_len).await
+                .map_err(|e| format!("Echec envoi Header: {}", e))?;
+            
+            // Envoi de la Signature Zero-Trust
+            stream.write_all(&signature).await
+                .map_err(|e| format!("Echec envoi Signature: {}", e))?;
+                
+            // Envoi du Tenseur de plusieurs Go
+            stream.write_all(payload).await
+                .map_err(|e| format!("Echec envoi Payload: {}", e))?;
+
+            // Attente (sans bloquer Python) de la longueur de la réponse
+            let resp_len = stream.read_u64().await
+                .map_err(|e| format!("Echec lecture réponse Header: {}", e))?;
+
+            // Allocation et lecture de la réponse
+            let mut resp_data = vec![0u8; resp_len as usize];
+            stream.read_exact(&mut resp_data).await
+                .map_err(|e| format!("Echec lecture réponse Body: {}", e))?;
+
+            Ok(resp_data)
+        })
     });
-    Ok(())
+
+    // 3. Retour en Python : Transformation des bytes C en PyBytes
+    match result {
+        Ok(data) => Ok(PyBytes::new(py, &data).into()),
+        Err(e) => Err(PyConnectionError::new_err(e)),
+    }
 }
 
 /// Une fonction très rapide pour signer un payload en Rust et esquiver le GIL de Python.
-/// Utilisée pour le réseau P2P Zero-Trust de VRAMancer.
+/// Utilisée pour la validation locale.
 #[pyfunction]
 fn sign_payload_fast(py: Python, secret: &[u8], payload: &[u8]) -> PyResult<Py<PyBytes>> {
     let mut mac = HmacSha256::new_from_slice(secret)
@@ -55,6 +111,6 @@ fn verify_hmac_fast(_py: Python, secret: &[u8], payload: &[u8], signature: &[u8]
 fn vramancer_rust(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(sign_payload_fast, m)?)?;
     m.add_function(wrap_pyfunction!(verify_hmac_fast, m)?)?;
-    m.add_function(wrap_pyfunction!(rust_sleep_demo, m)?)?;
+    m.add_function(wrap_pyfunction!(send_tensor_p2p, m)?)?;
     Ok(())
 }
