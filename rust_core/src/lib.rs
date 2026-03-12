@@ -27,6 +27,44 @@ fn detect_best_transport() -> TransportTier {
     TransportTier::ZeroCopyTcp
 }
 
+#[cfg(feature = "cuda")]
+use cudarc::driver::{CudaDevice, DriverError};
+
+/// P.O.C: Écriture directe des octets depuis le réseau vers la VRAM du GPU.
+/// Retourne le pointeur brut (raw device pointer) pour que PyTorch le lise sans allocation supplémentaire !
+#[cfg(feature = "cuda")]
+#[pyfunction]
+fn direct_vram_load(py: Python, payload: &[u8]) -> PyResult<u64> {
+    py.allow_threads(|| {
+        // 1. On attrape la première carte graphique NVIDIA (Device 0)
+        let dev = CudaDevice::new(0)
+            .map_err(|e| PyValueError::new_err(format!("CUDA Error: {:?}", e)))?;
+        
+        // 2. On alloue de la mémoire directement sur la VRAM de façon synchrone
+        // hto_d = Host To Device memcpy
+        let d_buf = dev.htod_sync_copy(payload)
+            .map_err(|e| PyValueError::new_err(format!("CUDA Memcpy Error: {:?}", e)))?;
+        
+        // 3. On récupère le pointeur brut (u64)
+        // Note: Dans une vraie implémentation, on garderait ce buffer en vie 
+        // ou on le passerait formellement au DLPack C-API. 
+        // Ici on fuit intentionnellement (leak) le pointeur pour le passer à Python
+        let ptr = *d_buf.device_ptr() as u64;
+        
+        // Empecher Rust de nettoyer la VRAM à la fin de la fonction (PyTorch s'en chargera)
+        std::mem::forget(d_buf);
+        
+        Ok(ptr)
+    })
+}
+
+/// Stub si la feature CUDA n'est pas activée (par ex. sur Mac ou machines sans drivers Nvidia)
+#[cfg(not(feature = "cuda"))]
+#[pyfunction]
+fn direct_vram_load(_py: Python, _payload: &[u8]) -> PyResult<u64> {
+    Err(PyValueError::new_err("Ce module Rust a été compilé sans la feature CUDA intégrée."))
+}
+
 /// (Option B - Le Data Plane Tokio Zéro-Copie)
 /// Accepte directement des MemoryViews ou Safetensors bytes sans passer par Pickle
 #[pyfunction]
@@ -126,6 +164,7 @@ fn verify_hmac_fast(_py: Python, secret: &[u8], payload: &[u8], signature: &[u8]
 fn vramancer_rust(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<TransportTier>()?;
     m.add_function(wrap_pyfunction!(detect_best_transport, m)?)?;
+    m.add_function(wrap_pyfunction!(direct_vram_load, m)?)?;
     m.add_function(wrap_pyfunction!(sign_payload_fast, m)?)?;
     m.add_function(wrap_pyfunction!(verify_hmac_fast, m)?)?;
     m.add_function(wrap_pyfunction!(send_tensor_p2p, m)?)?;
