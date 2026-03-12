@@ -10,6 +10,24 @@
 
 ---
 
+
+## 🟢 Installation Simplifiée (Nouveau !)
+
+VRAMancer supporte nativement un très grand nombre de matériels (NVIDIA, AMD ROCm, Apple MPS, **Intel XPU**, **Huawei NPU**, et WebGPU).
+
+Pour vous simplifier la vie, deux méthodes recommandées :
+
+### 1️⃣ Version Portable (Windows & Desktop)
+Pas de Python ni de lignes de commandes nécessaires :
+- **[Télécharger le fichier .ZIP dans l'onglet "Releases" de GitHub]**
+- Décompressez et lancez `vramancer.exe` ! (Généré automatiquement)
+
+### 2️⃣ Version Serveur (Linux & Datacenter via Docker)
+Déploiement en 1 ligne sur RunPod, AWS, ou un serveur privé, avec drivers GPU inclus :
+```bash
+docker run --gpus all -p 8080:8080 ghcr.io/thebloodlust/vramancer:latest
+```
+
 ## 🌍 What is VRAMancer? / Qu'est-ce que VRAMancer ?
 
 **[EN]** VRAMancer is an enterprise-grade, heterogeneous multi-GPU inference engine. It allows you to pool VRAM from completely different devices (e.g., an EPYC server with RTX 3090, a Windows laptop with RTX 4060, and a Mac Mini M4) over a local network (Wi-Fi, Ethernet, USB4) to run massive LLMs like Llama 3 70B that wouldn't fit on a single machine.
@@ -21,9 +39,9 @@
 ## ✨ Key Features / Fonctionnalités Clés
 
 *   **🧠 Heterogeneous Pooling (CUDA + ROCm + MPS)**: Mix NVIDIA, AMD, and Apple Silicon seamlessly. / *Mélangez NVIDIA, AMD et Apple Silicon de manière transparente.*
-*   **⚡ C++ GIL Bypass**: Custom C++ kernels for ultra-fast PCIe P2P transfers on high-lane CPUs (like AMD EPYC). / *Noyaux C++ natifs pour des transferts PCIe P2P ultra-rapides.*
+*   **⚡ CPU-Staged PCIe Fallback (ReBar)**: Advanced automated fallback bridging asymmetric consumer GPUs (e.g., RTX 3090 + RTX 5070 Ti) when internal NVIDIA P2P/NVLink is locked. / *Pont automatique de secours par le CPU via le bus PCIe quand le transfert de VRAM à VRAM est physiquement bloqué par les drivers.*
 *   **🌐 Swarm Inference (P2P)**: No master node required. Devices discover each other via mDNS and share the workload. / *Découverte automatique via mDNS, les appareils se partagent le calcul.*
-*   **🕸️ WebGPU Offloading** *(experimental)*: Let any web browser join your cluster and lend its GPU power. / *Laissez n'importe quel navigateur web prêter la puissance de sa carte graphique.* *(expérimental)*
+*   **🕸️ Planetary WebGPU Offloading** *(Experimental 2026)*: Let any user's web browser join your cluster over the internet to lend its native GPU power via WebRTC & Speculative Network Decoding. / *Laissez n'importe quel navigateur web prêter sa carte graphique à travers le monde.*
 *   **🛡️ Security**: API security with HMAC tokens, JWT, RBAC, and rate limiting. / *Sécurité API avec tokens HMAC, JWT, RBAC et rate limiting.*
 *   **📊 Advanced Telemetry**: Built-in Prometheus metrics and Grafana dashboards. / *Métriques Prometheus et tableaux de bord Grafana intégrés.*
 

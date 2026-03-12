@@ -131,8 +131,10 @@ def detect_backend() -> str:
     Ordre logique:
       1. ROCm (hip) – si build ROCm (torch.version.hip non nul)
       2. CUDA      – sinon si CUDA disponible
-      3. MPS       – Apple Silicon
-      4. CPU       – fallback
+      3. XPU       – Intel GPUs (IPEX)
+      4. NPU       – Huawei Ascend NPUs
+      5. MPS       – Apple Silicon
+      6. CPU       – fallback
     """
     try:
         # Vérification ROCm en premier (AMD GPUs avec support HIP)
@@ -149,6 +151,14 @@ def detect_backend() -> str:
             except Exception:
                 pass
             return 'cuda'
+
+        # Intel XPU (IPEX)
+        if hasattr(torch, 'xpu') and torch.xpu.is_available():
+            return 'xpu'
+
+        # Huawei NPU
+        if hasattr(torch, 'npu') and torch.npu.is_available():
+            return 'npu'
         
         # Apple Silicon MPS
         if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
@@ -205,6 +215,10 @@ def get_device_type(idx: int) -> torch.device:
     backend = detect_backend()
     if backend in ('cuda', 'rocm') and torch.cuda.device_count() > idx:
         return torch.device(f"cuda:{idx}")
+    if backend == 'xpu' and hasattr(torch, 'xpu') and torch.xpu.device_count() > idx:
+        return torch.device(f"xpu:{idx}")
+    if backend == 'npu' and hasattr(torch, 'npu') and torch.npu.device_count() > idx:
+        return torch.device(f"npu:{idx}")
     if backend == 'mps':
         return torch.device('mps')
     return torch.device(f"cpu:{idx}")
@@ -235,6 +249,36 @@ def enumerate_devices() -> List[Dict[str, Any]]:
                     'total_memory': props.total_memory,
                     'vendor': 'amd' if dev_backend == 'rocm' else (
                         'nvidia' if dev_backend == 'cuda' else 'unknown'),
+                })
+    except Exception:
+        pass
+    # Intel XPU
+    try:
+        if hasattr(torch, 'xpu') and torch.xpu.is_available():
+            for i in range(torch.xpu.device_count()):
+                props = torch.xpu.get_device_properties(i) if hasattr(torch.xpu, 'get_device_properties') else None
+                devices.append({
+                    'id': f"xpu:{i}",
+                    'backend': 'xpu',
+                    'index': i,
+                    'name': getattr(props, 'name', f"Intel XPU {i}") if props else f"Intel XPU {i}",
+                    'total_memory': getattr(props, 'total_memory', None) if props else None,
+                    'vendor': 'intel',
+                })
+    except Exception:
+        pass
+    # Huawei NPU
+    try:
+        if hasattr(torch, 'npu') and torch.npu.is_available():
+            for i in range(torch.npu.device_count()):
+                props = torch.npu.get_device_properties(i) if hasattr(torch.npu, 'get_device_properties') else None
+                devices.append({
+                    'id': f"npu:{i}",
+                    'backend': 'npu',
+                    'index': i,
+                    'name': getattr(props, 'name', f"Huawei NPU {i}") if props else f"Huawei NPU {i}",
+                    'total_memory': getattr(props, 'total_memory', None) if props else None,
+                    'vendor': 'huawei',
                 })
     except Exception:
         pass

@@ -1,0 +1,99 @@
+name: Build and Release VRAMancer
+
+on:
+  push:
+    tags:
+      - 'v*' # S'exécute quand un tag version (v1.0.0, etc.) est créé
+
+jobs:
+  # 1. Build pour Serveurs (DOCKER)
+  docker-build:
+    name: Build & Push Docker Image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: type=semver,pattern={{version}}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  # 2. Build de l'Exécutable "One-Click" avec PyInstaller (Windows)
+  windows-executable:
+    name: Build Windows Standalone
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies (Lightweight for packaging)
+        # On installe juste le nécessaire core pour la compilation
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build the standalone executable
+        env:
+          VRM_BUILD_DIR: '1' # Utiliser le mode dossier (onedir) pour de meilleures perfs
+        run: |
+          python build_standalone.py
+
+      - name: Archive Exécutable Windows
+        run: |
+          # Compresse le dossier généré (onedir) en ZIP pour la distribution
+          Compress-Archive -Path dist/vramancer/* -DestinationPath VRAMancer-Windows.zip
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: VRAMancer-Windows
+          path: VRAMancer-Windows.zip
+
+  # 3. Publication sur la page GitHub Releases
+  release:
+    name: Create GitHub Release
+    needs: [windows-executable]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: VRAMancer-Windows
+          path: artifacts/
+
+      - name: Create Release and Upload Asset
+        uses: softprops/action-gh-release@v1
+        with:
+          files: artifacts/VRAMancer-Windows.zip
+          generate_release_notes: true
