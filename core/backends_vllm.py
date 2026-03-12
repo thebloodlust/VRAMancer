@@ -47,9 +47,13 @@ class vLLMBackend(BaseLLMBackend):
         return [self.engine]
 
     def infer(self, inputs: Any) -> Any:
-        raise NotImplementedError("L'inférence par tenseur brut n'est pas supportée par vLLM directement via VRAMancer.")
+        raise NotImplementedError("L'inférence par tenseur brut n'est pas supportée par vLLM directement.")
 
     def generate(self, prompt: str, max_new_tokens: int = 128, **kwargs) -> str:
+        if kwargs.get('stream', False):
+            # Fallback automatique vers le streaming si demandé via cette fonction
+            return "".join([chunk for chunk in self.generate_stream(prompt, max_new_tokens, **kwargs)])
+
         if not self.is_loaded or self.engine is None:
             raise RuntimeError("Le moteur vLLM n'est pas initialisé.")
             
@@ -104,7 +108,6 @@ class vLLMBackend(BaseLLMBackend):
             for output in step_outputs:
                 if output.request_id == request_id:
                     current_text = output.outputs[0].text
-                    # On calcule la différence entre le nouveau texte et l'ancien
                     new_text = current_text[len(last_text):]
                     if new_text:
                         yield new_text
