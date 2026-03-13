@@ -134,35 +134,45 @@ class KVCacheBlock(_nn.Module if _HAS_TORCH else object):
 
             # Try calling with KV cache kwargs (different HF model signatures)
             try:
-                # Try Llama/Mistral signature first (past_key_value)
+                # Try Modern HF signature first (Llama > 4.36, Qwen2, past_key_values plural)
                 output = layer(
                     hidden_states,
-                    past_key_value=layer_past,
+                    past_key_values=layer_past,
                     use_cache=use_cache,
                     attention_mask=attention_mask,
                     position_ids=position_ids,
                 )
             except TypeError:
                 try:
-                    # Try GPT-2 signature (layer_past)
+                    # Try Legacy Llama/Mistral signature (past_key_value singular)
                     output = layer(
                         hidden_states,
-                        layer_past=layer_past,
+                        past_key_value=layer_past,
                         use_cache=use_cache,
                         attention_mask=attention_mask,
+                        position_ids=position_ids,
                     )
                 except TypeError:
-                    # Fallback: Qwen and newer architectures sometimes require kwargs via **kwargs
                     try:
+                        # Try GPT-2 signature (layer_past)
                         output = layer(
-                            hidden_states, 
+                            hidden_states,
+                            layer_past=layer_past,
+                            use_cache=use_cache,
                             attention_mask=attention_mask,
-                            position_ids=position_ids,
-                            use_cache=use_cache
                         )
                     except TypeError:
-                        # Final fallback
-                        output = layer(hidden_states)
+                        # Fallback: Qwen and newer architectures sometimes require kwargs via **kwargs
+                        try:
+                            output = layer(
+                                hidden_states, 
+                                attention_mask=attention_mask,
+                                position_ids=position_ids,
+                                use_cache=use_cache
+                            )
+                        except TypeError:
+                            # Final fallback
+                            output = layer(hidden_states)
 
             # Parse output: tuple (hidden_states, present_kv, ...) or just tensor
             if isinstance(output, tuple):
@@ -429,58 +439,6 @@ class HuggingFaceBackend(BaseLLMBackend):
         x = inputs
         self.log.debug("Début inférence séquentielle sur %d blocs", len(self.blocks))
         for idx, block in enumerate(self.blocks):
-            if self.block_devices and idx > 0:
-                prev_gpu = self.block_devices[idx - 1]
-                curr_gpu = self.block_devices[idx]
-                if prev_gpu != curr_gpu:
-                    x = self._transfer_to_device(x, prev_gpu, curr_gpu)
-            out = block(x)
-            if hasattr(out, "logits"):
-                out = out.logits
-            elif hasattr(out, "last_hidden_state"):
-                out = out.last_hidden_state
-            x = out
-        self.log.debug("Fin inférence")
-        return x
-
-    def _infer_with_kv_cache(self, input_ids: Any,
-                              past_key_values: Optional[List] = None,
-                              use_cache: bool = False):
-        """Multi-GPU forward with proper embedding → blocks → head pipeline.
-
-        Handles KV-cache passing between blocks and inter-GPU transfers.
-        """
-        comp = self._components
-        first_dev = f"cuda:{self.block_devices[0]}" if (
-            _torch.cuda.is_available() and self.block_devices
-        ) else "cpu"
-
-        # 1. Embedding (on first GPU)
-        input_ids = input_ids.to(first_dev) if _torch.is_tensor(input_ids) else input_ids
-        hidden_states = comp["embed"](input_ids)
-
-        # Position embeddings (GPT-2 style)
-        if comp["pos_embed"] is not None:
-            seq_len = input_ids.shape[-1]
-            # If using KV cache, position IDs start after cached length
-            past_len = 0
-            if past_key_values and past_key_values[0] and past_key_values[0][0] is not None:
-                # past_key_values[block_idx][layer_idx] = (key, value)
-                first_block_first_layer = past_key_values[0][0]
-                if isinstance(first_block_first_layer, tuple) and len(first_block_first_layer) >= 1:
-                    past_len = first_block_first_layer[0].shape[-2]
-            position_ids = _torch.arange(
-                past_len, past_len + seq_len, dtype=_torch.long, device=input_ids.device
-            ).unsqueeze(0)
-            hidden_states = hidden_states + comp["pos_embed"](position_ids)
-
-        # Apply dropout if present
-        if comp.get("drop") is not None:
-            hidden_states = comp["drop"](hidden_states)
-
-        # 2. Forward through KVCacheBlocks
-        all_presents = [] if use_cache else None
-        for idx, block in enumerate(self.blocks):
             # Transfer hidden states to block's GPU
             if self.block_devices and idx > 0:
                 prev_gpu = self.block_devices[idx - 1]
@@ -494,18 +452,14 @@ class HuggingFaceBackend(BaseLLMBackend):
 
             if isinstance(block, KVCacheBlock):
                 # Provide standard kwargs so new architectures (Qwen, Llama3) don't crash
-                # Since position_ids inside the model blocks expect specific format, 
-                # we pass them carefully to the block forward
                 # We calculate global position_ids for sequence
-                position_ids = None
-                if use_cache:
-                    import torch as pt
-                    seq_length = hidden_states.shape[1]
-                    past_length = 0
-                    if block_past is not None and len(block_past) > 0 and block_past[0] is not None:
-                        # Inspect the past_key_value tuple to extract length (seq_len is at index -2)
-                        past_length = block_past[0][0].shape[-2]
-                    position_ids = pt.arange(past_length, past_length + seq_length, dtype=pt.long, device=hidden_states.device).unsqueeze(0)
+                import torch as pt
+                seq_length = hidden_states.shape[1]
+                past_length = 0
+                if block_past is not None and len(block_past) > 0 and block_past[0] is not None:
+                    # Inspect the past_key_value tuple to extract length (seq_len is at index -2)
+                    past_length = block_past[0][0].shape[-2]
+                position_ids = pt.arange(past_length, past_length + seq_length, dtype=pt.long, device=hidden_states.device).unsqueeze(0)
 
                 hidden_states, presents = block(
                     hidden_states,
