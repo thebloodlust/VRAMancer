@@ -439,53 +439,76 @@ class HuggingFaceBackend(BaseLLMBackend):
         x = inputs
         self.log.debug("Début inférence séquentielle sur %d blocs", len(self.blocks))
         for idx, block in enumerate(self.blocks):
-            # Transfer hidden states to block's GPU
             if self.block_devices and idx > 0:
                 prev_gpu = self.block_devices[idx - 1]
                 curr_gpu = self.block_devices[idx]
                 if prev_gpu != curr_gpu:
-                    hidden_states = self._transfer_to_device(
-                        hidden_states, prev_gpu, curr_gpu
-                    )
-
-            block_past = past_key_values[idx] if past_key_values else None
-
-            if isinstance(block, KVCacheBlock):
-                # Provide standard kwargs so new architectures (Qwen, Llama3) don't crash
-                # We calculate global position_ids for sequence
-                import torch as pt
-                seq_length = hidden_states.shape[1]
-                past_length = 0
-                if block_past is not None and len(block_past) > 0 and block_past[0] is not None:
-                    # Inspect the past_key_value tuple to extract length (seq_len is at index -2)
-                    past_length = block_past[0][0].shape[-2]
-                position_ids = pt.arange(past_length, past_length + seq_length, dtype=pt.long, device=hidden_states.device).unsqueeze(0)
-
-                hidden_states, presents = block(
-                    hidden_states,
-                    past_key_values=block_past,
-                    use_cache=use_cache,
-                    position_ids=position_ids
-                )
-                if use_cache:
-                    all_presents.append(presents)
+                    x = self._transfer_to_device(x, prev_gpu, curr_gpu)
+            
+            out = block(x)
+            if isinstance(out, tuple):
+                x = out[0]
             else:
-                # Legacy nn.Sequential block
-                out = block(hidden_states)
-                if isinstance(out, tuple):
-                    hidden_states = out[0]
-                else:
-                    hidden_states = out
-                if use_cache:
-                    all_presents.append(None)
+                x = out
+                
+        if use_cache:
+            return x, None
+        return x
 
+    def _infer_with_kv_cache(self, inputs: Any, past_key_values: Optional[List] = None, use_cache: bool = False) -> Any:
+        import torch as pt
+        all_presents = [] if use_cache else None
+        
+        comp = self._components
+        first_gpu_dev = f"cuda:{self.block_devices[0]}" if (self.block_devices and pt.cuda.is_available()) else "cpu"
+        
+        # 1. Embeddings (on first GPU)
+        inputs = inputs.to(first_gpu_dev)
+        hidden_states = comp["embed"](inputs)
+        
+        if comp["pos_embed"] is not None:
+            seq_len = inputs.shape[1]
+            past_len = past_key_values[0][0][0].shape[-2] if past_key_values and past_key_values[0] else 0
+            pos = pt.arange(past_len, past_len + seq_len, dtype=pt.long, device=first_gpu_dev).unsqueeze(0)
+            hidden_states = hidden_states + comp["pos_embed"](pos)
+            
+        if comp["drop"] is not None:
+            hidden_states = comp["drop"](hidden_states)
+
+        # 2. Process blocks sequentially
+        for idx, block in enumerate(self.blocks):
+            if self.block_devices and idx > 0:
+                prev_gpu = self.block_devices[idx - 1]
+                curr_gpu = self.block_devices[idx]
+                if prev_gpu != curr_gpu:
+                    hidden_states = self._transfer_to_device(hidden_states, prev_gpu, curr_gpu)
+            
+            block_past = past_key_values[idx] if past_key_values else None
+            
+            seq_length = hidden_states.shape[1]
+            past_length = 0
+            if block_past is not None and len(block_past) > 0 and block_past[0] is not None:
+                past_length = block_past[0][0].shape[-2]
+                
+            position_ids = pt.arange(past_length, past_length + seq_length, dtype=pt.long, device=hidden_states.device).unsqueeze(0)
+
+            hidden_states, presents = block(
+                hidden_states,
+                past_key_values=block_past,
+                use_cache=use_cache,
+                position_ids=position_ids
+            )
+            
+            if use_cache:
+                all_presents.append(presents)
+                
         # 3. Final layer norm (on last GPU)
         if comp["final_norm"] is not None:
             hidden_states = comp["final_norm"](hidden_states)
-
+            
         # 4. LM head → logits (on last GPU)
         logits = comp["lm_head"](hidden_states)
-
+        
         if use_cache:
             return logits, all_presents
         return logits
