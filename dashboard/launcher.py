@@ -21,4 +21,8 @@ def main():
         from dashboard import launch_cli_dashboard
         launch_cli_dashboard()
     else:
-        dashboard_web.launch()
+        from dashboard import dashboard_web
+        dashboard_web()
+
+if __name__ == "__main__":
+    main()
