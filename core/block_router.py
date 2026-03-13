@@ -92,9 +92,17 @@ class RemoteExecutor:
                 
                 # Si x est un Tenseur ou un Dict de Tenseurs, on utilise Safetensors (Zero-Copy)
                 if isinstance(x, torch.Tensor):
+                    if getattr(x, "is_cuda", False):
+                        # Fix P2P Rust : point de synchronisation dur CUDA préréglé
+                        # pour forcer la file d'attente VRAM à se purger avant d'extraire via ReBAR
+                        torch.cuda.synchronize(device=x.device)
                     data = save({"tensor": x})
                     is_safetensor = True
                 elif isinstance(x, dict) and all(isinstance(v, torch.Tensor) for v in x.values()):
+                    # Fix P2P Rust (Multi) : synchro systématique sur chaque Device GPU du dict
+                    for v in x.values():
+                        if getattr(v, "is_cuda", False):
+                            torch.cuda.synchronize(device=v.device)
                     data = save(x)
                     is_safetensor = True
                 else:

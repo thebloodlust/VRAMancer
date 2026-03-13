@@ -1,7 +1,8 @@
 import uuid
+from typing import Optional
 
 class MemoryBlock:
-    def __init__(self, size_mb, gpu_id: int = 0, status="free", id: str | None = None):
+    def __init__(self, size_mb, gpu_id: int = 0, status="free", id: Optional[str] = None):
         # Accepte param id explicite (tests persistence / eviction)
         self.id = id or str(uuid.uuid4())
         self.size_mb = size_mb

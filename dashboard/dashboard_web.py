@@ -346,7 +346,7 @@ TEMPLATE = """
     </script>
 </body>
 </html>
-""""""
+"""
 
 @app.route("/")
 def dashboard():

@@ -591,10 +591,7 @@ class HuggingFaceBackend(BaseLLMBackend):
 
             # Sampling
             if temperature > 0 and temperature != 1.0:
-                next                curl -X POST http://127.0.0.1:5030/api/models/load \
-                  -H "Authorization: Bearer testtoken" \
-                  -H "Content-Type: application/json" \
-                  -d '{"model": "TinyLlama/TinyLlama-1.1B-Chat-v1.0", "backend": "huggingface", "num_gpus": 2}'_logits = next_logits / temperature
+                next_logits = next_logits / temperature
 
             if top_k > 0 and top_k < next_logits.size(-1):
                 topk_vals, _ = _torch.topk(next_logits, top_k)
