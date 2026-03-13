@@ -214,7 +214,7 @@ def _check_test_bypass(request) -> Optional[bool]:
 def _check_cors(request, allowed_origins: set) -> Optional[Tuple[str, int]]:
     """Validate CORS origin. Returns error tuple or None."""
     origin = request.headers.get("Origin")
-    if origin and origin not in allowed_origins:
+    if origin and '*' not in allowed_origins and origin not in allowed_origins:
         return ("forbidden origin", 403)
     return None
 
@@ -389,7 +389,7 @@ def install_security(app):
         """RFC 6454-compliant CORS + standard security headers."""
         from flask import request as _req
         origin = _req.headers.get("Origin")
-        if origin and origin in allowed_origins:
+        if origin and ('*' in allowed_origins or origin in allowed_origins):
             resp.headers['Access-Control-Allow-Origin'] = origin
             resp.headers['Vary'] = 'Origin'
         # If origin is absent (same-origin / non-browser) or not allowed,

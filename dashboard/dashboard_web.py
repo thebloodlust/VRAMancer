@@ -456,9 +456,11 @@ def model_browser():
 
 @app.route("/api/models/search")
 def api_models_search():
+    print(">>> SEARCH ROUTE HIT! Query:", request.args.get("q"))
     try:
         import requests
     except ImportError:
+        print(">>> MISSING REQUESTS LIB")
         return jsonify({"results": [{"id": "Erreur: request library missing", "source": "Internal"}]})
     
     query = request.args.get("q", "")
@@ -466,25 +468,31 @@ def api_models_search():
     
     # --- Recherche Hugging Face ---
     try:
-        # L'API HF limite les requêtes non-authentifiées, on met un timeout court
+        print(">>> FETCHING FROM HF...")
         hf_resp = requests.get(f"https://huggingface.co/api/models?search={query}&limit=10", timeout=3)
         if hf_resp.ok:
             for m in hf_resp.json():
                 results.append({"id": m["id"], "source": "Hugging Face"})
+        else:
+            print(">>> HF ERROR:", hf_resp.status_code, hf_resp.text)
     except Exception as e:
-        pass
+        print(">>> HF EXCEPTION:", e)
 
     # --- Recherche Ollama locale ---
     try:
+        print(">>> FETCHING FROM OLLAMA...")
         ollama_resp = requests.get("http://localhost:11434/api/tags", timeout=1.5)
         if ollama_resp.ok:
             models = ollama_resp.json().get("models", [])
             for m in models:
                 if query.lower() in m["name"].lower():
                     results.append({"id": m["name"], "source": "Ollama"})
-    except Exception:
-        pass
+        else:
+            print(">>> OLLAMA ERROR:", ollama_resp.status_code, ollama_resp.text)
+    except Exception as e:
+        print(">>> OLLAMA EXCEPTION:", e)
 
+    print(">>> RESULTS:", results)
     return jsonify({"results": results})
 
 @app.route("/api/memory")
