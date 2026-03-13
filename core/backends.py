@@ -132,15 +132,28 @@ class KVCacheBlock(_nn.Module if _HAS_TORCH else object):
         for i, layer in enumerate(self.layers):
             layer_past = past_key_values[i] if past_key_values else None
 
+            # Base kwargs
+            layer_kwargs = {
+                "use_cache": use_cache,
+                "attention_mask": attention_mask,
+                "position_ids": position_ids,
+            }
+
+            # Llama >= 4.38 / Qwen2 require precomputed position_embeddings
+            if position_ids is not None and hasattr(layer, "self_attn") and hasattr(layer.self_attn, "rotary_emb"):
+                try:
+                    pos_emb = layer.self_attn.rotary_emb(hidden_states, position_ids)
+                    layer_kwargs["position_embeddings"] = pos_emb
+                except Exception:
+                    pass
+
             # Try calling with KV cache kwargs (different HF model signatures)
             try:
                 # Try Modern HF signature first (Llama > 4.36, Qwen2, past_key_values plural)
                 output = layer(
                     hidden_states,
                     past_key_values=layer_past,
-                    use_cache=use_cache,
-                    attention_mask=attention_mask,
-                    position_ids=position_ids,
+                    **layer_kwargs
                 )
             except TypeError:
                 try:
@@ -148,9 +161,7 @@ class KVCacheBlock(_nn.Module if _HAS_TORCH else object):
                     output = layer(
                         hidden_states,
                         past_key_value=layer_past,
-                        use_cache=use_cache,
-                        attention_mask=attention_mask,
-                        position_ids=position_ids,
+                        **layer_kwargs
                     )
                 except TypeError:
                     try:
@@ -166,9 +177,7 @@ class KVCacheBlock(_nn.Module if _HAS_TORCH else object):
                         try:
                             output = layer(
                                 hidden_states, 
-                                attention_mask=attention_mask,
-                                position_ids=position_ids,
-                                use_cache=use_cache
+                                **layer_kwargs
                             )
                         except TypeError:
                             # Final fallback
@@ -582,7 +591,10 @@ class HuggingFaceBackend(BaseLLMBackend):
 
             # Sampling
             if temperature > 0 and temperature != 1.0:
-                next_logits = next_logits / temperature
+                next                curl -X POST http://127.0.0.1:5030/api/models/load \
+                  -H "Authorization: Bearer testtoken" \
+                  -H "Content-Type: application/json" \
+                  -d '{"model": "TinyLlama/TinyLlama-1.1B-Chat-v1.0", "backend": "huggingface", "num_gpus": 2}'_logits = next_logits / temperature
 
             if top_k > 0 and top_k < next_logits.size(-1):
                 topk_vals, _ = _torch.topk(next_logits, top_k)
