@@ -259,6 +259,7 @@ def install_vramancer(pip_cmd: str, mode: str, base_dir: Path):
         subprocess.check_call([pip_cmd, "install", "maturin"])
         rust_dir = base_dir / "rust_core"
         if rust_dir.exists():
+            venv_path = base_dir / VENV_DIR
             py_cmd = str(venv_path / "bin" / "python") if os.name != "nt" else str(venv_path / "Scripts" / "python.exe")
             if not venv_path.exists():
                 py_cmd = sys.executable
