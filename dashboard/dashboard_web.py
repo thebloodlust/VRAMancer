@@ -572,7 +572,7 @@ def launch():
     import threading
     if socketio:
         threading.Thread(target=push_memory_periodic, daemon=True).start()
-        socketio.run(app, debug=False, host="0.0.0.0", port=5000)
+        socketio.run(app, debug=True, host="0.0.0.0", port=5000)
     else:
         # Fallback Flask pur
-        app.run(host="0.0.0.0", port=5000)
+        app.run(debug=True, host="0.0.0.0", port=5000)
