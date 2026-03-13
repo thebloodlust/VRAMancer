@@ -254,7 +254,7 @@ def install_vramancer(pip_cmd: str, mode: str, base_dir: Path):
     subprocess.check_call([pip_cmd, "install", "-e", target], cwd=str(base_dir))
 
     # --- ETAPE A : Build the Rust Core automatically (Zero-Copy P2P bypass) ---
-    print_step("Compilation du module Rust (vramancer_rust) pour le bypass P2P Zero-Trust...")
+    step("Compilation du module Rust (vramancer_rust) pour le bypass P2P Zero-Trust...")
     try:
         subprocess.check_call([pip_cmd, "install", "maturin"])
         rust_dir = base_dir / "rust_core"
@@ -263,12 +263,12 @@ def install_vramancer(pip_cmd: str, mode: str, base_dir: Path):
             if not venv_path.exists():
                 py_cmd = sys.executable
             subprocess.check_call([py_cmd, "-m", "maturin", "develop", "--release"], cwd=str(rust_dir))
-            print_success("Module Rust (vramancer_rust) compilé et injecté avec succès !")
+            info("Module Rust (vramancer_rust) compilé et injecté avec succès !")
         else:
-            print_warning("Dossier rust_core/ introuvable, skip de l'étape Rust.")
+            warn("Dossier rust_core/ introuvable, skip de l'étape Rust.")
     except Exception as e:
-        print_error(f"Erreur lors de la compilation de vramancer_rust: {e}")
-        print_warning("La compilation Rust (Cargo) n'a pas pu aboutir. VRAMancer fonctionnera en réseau Python classique (sans bypass PCIe). Installez l'outil système 'cargo' si besoin.")
+        fail(f"Erreur lors de la compilation de vramancer_rust: {e}")
+        warn("La compilation Rust (Cargo) n'a pas pu aboutir. VRAMancer fonctionnera en réseau Python classique (sans bypass PCIe). Installez l'outil système 'cargo' si besoin.")
     # --------------------------------------------------------------------------
 
 # ── Génération du token API ──────────────────────────────────────────
