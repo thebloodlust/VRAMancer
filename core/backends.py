@@ -135,37 +135,56 @@ class KVCacheBlock(_nn.Module if _HAS_TORCH else object):
         for i, layer in enumerate(self.layers):
             layer_past = past_key_values[i] if past_key_values else None
 
+            # Base kwargs
+            layer_kwargs = {
+                "use_cache": use_cache,
+                "attention_mask": attention_mask,
+                "position_ids": position_ids,
+            }
+
+            # Llama >= 4.38 / Qwen2 require precomputed position_embeddings
+            if position_ids is not None and hasattr(layer, "self_attn") and hasattr(layer.self_attn, "rotary_emb"):
+                try:
+                    pos_emb = layer.self_attn.rotary_emb(hidden_states, position_ids)
+                    layer_kwargs["position_embeddings"] = pos_emb
+                except Exception:
+                    pass
+
             # Try calling with KV cache kwargs (different HF model signatures)
             try:
-                # Try Llama/Mistral signature first (past_key_value)
+                # Try Modern HF signature first (Llama > 4.36, Qwen2, past_key_values plural)
                 output = layer(
                     hidden_states,
-                    past_key_value=layer_past,
-                    use_cache=use_cache,
-                    attention_mask=attention_mask,
-                    position_ids=position_ids,
+                    past_key_values=layer_past,
+                    **layer_kwargs
                 )
             except TypeError:
                 try:
-                    # Try GPT-2 signature (layer_past)
+                    # Try Legacy Llama/Mistral signature (past_key_value singular)
                     output = layer(
                         hidden_states,
-                        layer_past=layer_past,
-                        use_cache=use_cache,
-                        attention_mask=attention_mask,
+                        past_key_value=layer_past,
+                        **layer_kwargs
                     )
                 except TypeError:
-                    # Fallback: Qwen and newer architectures sometimes require kwargs via **kwargs
                     try:
+                        # Try GPT-2 signature (layer_past)
                         output = layer(
-                            hidden_states, 
+                            hidden_states,
+                            layer_past=layer_past,
+                            use_cache=use_cache,
                             attention_mask=attention_mask,
-                            position_ids=position_ids,
-                            use_cache=use_cache
                         )
                     except TypeError:
-                        # Final fallback
-                        output = layer(hidden_states)
+                        # Fallback: Qwen and newer architectures sometimes require kwargs via **kwargs
+                        try:
+                            output = layer(
+                                hidden_states, 
+                                **layer_kwargs
+                            )
+                        except TypeError:
+                            # Final fallback
+                            output = layer(hidden_states)
 
             # Parse output: tuple (hidden_states, present_kv, ...) or just tensor
             if isinstance(output, tuple):
@@ -413,104 +432,71 @@ class HuggingFaceBackend(BaseLLMBackend):
                 curr_gpu = self.block_devices[idx]
                 if prev_gpu != curr_gpu:
                     x = self._transfer_to_device(x, prev_gpu, curr_gpu)
+            
             out = block(x)
-            if hasattr(out, "logits"):
-                out = out.logits
-            elif hasattr(out, "last_hidden_state"):
-                out = out.last_hidden_state
-            x = out
-        self.log.debug("Fin inférence")
+            if isinstance(out, tuple):
+                x = out[0]
+            else:
+                x = out
+                
+        if use_cache:
+            return x, None
         return x
 
-    def _infer_with_kv_cache(self, input_ids: Any,
-                              past_key_values: Optional[List] = None,
-                              use_cache: bool = False):
-        """Multi-GPU forward with proper embedding → blocks → head pipeline.
-
-        Handles KV-cache passing between blocks and inter-GPU transfers.
-        """
+    def _infer_with_kv_cache(self, inputs: Any, past_key_values: Optional[List] = None, use_cache: bool = False) -> Any:
+        import torch as pt
+        all_presents = [] if use_cache else None
+        
         comp = self._components
-        first_dev = f"cuda:{self.block_devices[0]}" if (
-            _torch.cuda.is_available() and self.block_devices
-        ) else "cpu"
-
-        # 1. Embedding (on first GPU)
-        input_ids = input_ids.to(first_dev) if _torch.is_tensor(input_ids) else input_ids
-        hidden_states = comp["embed"](input_ids)
-
-        # Position embeddings (GPT-2 style)
+        first_gpu_dev = f"cuda:{self.block_devices[0]}" if (self.block_devices and pt.cuda.is_available()) else "cpu"
+        
+        # 1. Embeddings (on first GPU)
+        inputs = inputs.to(first_gpu_dev)
+        hidden_states = comp["embed"](inputs)
+        
         if comp["pos_embed"] is not None:
-            seq_len = input_ids.shape[-1]
-            # If using KV cache, position IDs start after cached length
-            past_len = 0
-            if past_key_values and past_key_values[0] and past_key_values[0][0] is not None:
-                # past_key_values[block_idx][layer_idx] = (key, value)
-                first_block_first_layer = past_key_values[0][0]
-                if isinstance(first_block_first_layer, tuple) and len(first_block_first_layer) >= 1:
-                    past_len = first_block_first_layer[0].shape[-2]
-            position_ids = _torch.arange(
-                past_len, past_len + seq_len, dtype=_torch.long, device=input_ids.device
-            ).unsqueeze(0)
-            hidden_states = hidden_states + comp["pos_embed"](position_ids)
-
-        # Apply dropout if present
-        if comp.get("drop") is not None:
+            seq_len = inputs.shape[1]
+            past_len = past_key_values[0][0][0].shape[-2] if past_key_values and past_key_values[0] else 0
+            pos = pt.arange(past_len, past_len + seq_len, dtype=pt.long, device=first_gpu_dev).unsqueeze(0)
+            hidden_states = hidden_states + comp["pos_embed"](pos)
+            
+        if comp["drop"] is not None:
             hidden_states = comp["drop"](hidden_states)
 
-        # 2. Forward through KVCacheBlocks
-        all_presents = [] if use_cache else None
+        # 2. Process blocks sequentially
         for idx, block in enumerate(self.blocks):
-            # Transfer hidden states to block's GPU
             if self.block_devices and idx > 0:
                 prev_gpu = self.block_devices[idx - 1]
                 curr_gpu = self.block_devices[idx]
                 if prev_gpu != curr_gpu:
-                    hidden_states = self._transfer_to_device(
-                        hidden_states, prev_gpu, curr_gpu
-                    )
-
+                    hidden_states = self._transfer_to_device(hidden_states, prev_gpu, curr_gpu)
+            
             block_past = past_key_values[idx] if past_key_values else None
+            
+            seq_length = hidden_states.shape[1]
+            past_length = 0
+            if block_past is not None and len(block_past) > 0 and block_past[0] is not None:
+                past_length = block_past[0][0].shape[-2]
+                
+            position_ids = pt.arange(past_length, past_length + seq_length, dtype=pt.long, device=hidden_states.device).unsqueeze(0)
 
-            if isinstance(block, KVCacheBlock):
-                # Provide standard kwargs so new architectures (Qwen, Llama3) don't crash
-                # Since position_ids inside the model blocks expect specific format, 
-                # we pass them carefully to the block forward
-                # We calculate global position_ids for sequence
-                position_ids = None
-                if use_cache:
-                    import torch as pt
-                    seq_length = hidden_states.shape[1]
-                    past_length = 0
-                    if block_past is not None and len(block_past) > 0 and block_past[0] is not None:
-                        # Inspect the past_key_value tuple to extract length (seq_len is at index -2)
-                        past_length = block_past[0][0].shape[-2]
-                    position_ids = pt.arange(past_length, past_length + seq_length, dtype=pt.long, device=hidden_states.device).unsqueeze(0)
-
-                hidden_states, presents = block(
-                    hidden_states,
-                    past_key_values=block_past,
-                    use_cache=use_cache,
-                    position_ids=position_ids
-                )
-                if use_cache:
-                    all_presents.append(presents)
-            else:
-                # Legacy nn.Sequential block
-                out = block(hidden_states)
-                if isinstance(out, tuple):
-                    hidden_states = out[0]
-                else:
-                    hidden_states = out
-                if use_cache:
-                    all_presents.append(None)
-
+            hidden_states, presents = block(
+                hidden_states,
+                past_key_values=block_past,
+                use_cache=use_cache,
+                position_ids=position_ids
+            )
+            
+            if use_cache:
+                all_presents.append(presents)
+                
         # 3. Final layer norm (on last GPU)
         if comp["final_norm"] is not None:
             hidden_states = comp["final_norm"](hidden_states)
-
+            
         # 4. LM head → logits (on last GPU)
         logits = comp["lm_head"](hidden_states)
-
+        
         if use_cache:
             return logits, all_presents
         return logits
@@ -529,22 +515,24 @@ class HuggingFaceBackend(BaseLLMBackend):
             raise RuntimeError("Tokenizer non disponible")
 
         inputs = self.tokenizer(prompt, return_tensors="pt")
-        input_ids = inputs["input_ids"]
+        input_ids = inputs.input_ids
+        attention_mask = inputs.get("attention_mask", None)
 
-        # Move to first device if GPU available
-        if _HAS_TORCH and _torch.cuda.is_available() and self.block_devices:
-            try:
-                device = f"cuda:{self.block_devices[0]}"
-                input_ids = input_ids.to(device)
-                if self.model is not None and not self.blocks:
-                    self.model = self.model.to(device)
-            except Exception:
-                pass
+        if self.tokenizer.pad_token_id is None:
+            self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
 
         # Path 1: No split — use native generate() (already uses KV cache)
         if self.blocks is None or len(self.blocks) <= 1:
+            if self.model is not None:
+                # Move correctly to model's execution device
+                device = getattr(self.model, "device", _torch.device("cpu"))
+                input_ids = input_ids.to(device)
+                if attention_mask is not None:
+                    attention_mask = attention_mask.to(device)
+
             out_ids = self.model.generate(
-                input_ids,
+                input_ids=input_ids,
+                attention_mask=attention_mask,
                 max_new_tokens=max_new_tokens,
                 pad_token_id=self.tokenizer.pad_token_id,
                 **kwargs,

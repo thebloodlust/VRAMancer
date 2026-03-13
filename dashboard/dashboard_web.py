@@ -61,6 +61,8 @@ TEMPLATE = """
     <script src="https://unpkg.com/@phosphor-icons/web"></script>
     <!-- AlpineJS for reactivity (lightweight) -->
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <!-- 3D Force Graph for Interactive Network Map -->
+    <script src="https://unpkg.com/3d-force-graph"></script>
 
     <script>
         tailwind.config = {
@@ -127,33 +129,34 @@ TEMPLATE = """
             <!-- Col 1: Hardware & GPUs -->
             <div class="lg:col-span-2 space-y-6">
                 <!-- Swarm Attention Widget -->
-                <div class="glass-panel p-6 rounded-2xl relative overflow-hidden">
-                    <div class="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-cyber-accent to-transparent opacity-50"></div>
+                <div class="glass-panel p-0 rounded-2xl relative overflow-hidden flex flex-col justify-between" style="min-height: 320px; border: 1px solid rgba(0, 242, 254, 0.2);">
+                    <div class="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-cyber-accent to-transparent opacity-80 z-20"></div>
                     
-                    <div class="flex justify-between items-start mb-6">
+                    <!-- Graph 3D Container -->
+                    <div id="3d-graph" class="absolute inset-0 w-full h-full z-0 cursor-move"></div>
+
+                    <!-- Overlay UI Elements -->
+                    <div class="relative z-10 p-6 flex justify-between items-start pointer-events-none">
                         <div>
-                            <h2 class="text-xl font-bold text-white flex items-center gap-2"><i class="ph ph-share-network"></i> WebGPU Swarm Neural Mesh</h2>
-                            <p class="text-xs text-gray-400 mt-1">Live Holographic Parity & Tensor Offloading</p>
+                            <h2 class="text-xl font-bold text-white flex items-center gap-2 drop-shadow-md"><i class="ph ph-share-network"></i> Tokio Network Data Plane</h2>
+                            <p class="text-xs text-cyber-success mt-1 font-mono drop-shadow-md">Rust / Zero-Copy Safetensors Active <i class="ph-fill ph-check-circle"></i></p>
                         </div>
-                        <div class="bg-cyber-dark px-3 py-1 pb-1.5 rounded-full border border-gray-700 text-xs font-bold text-cyber-success">
-                            <span x-text="metrics.activeNodes">3</span> Nodes Online
+                        <div class="bg-cyber-dark/80 backdrop-blur px-3 py-1 pb-1.5 rounded-full border border-cyber-accent/50 text-xs font-bold text-cyber-neon flex items-center gap-2">
+                            <span class="w-2 h-2 rounded-full bg-cyber-success animate-ping"></span>
+                            <span>Swarm Linked</span>
                         </div>
                     </div>
 
-                    <!-- Canvas for Neural Net -->
-                    <div class="w-full bg-black/40 rounded-xl border border-gray-800 h-[220px] relative">
-                        <canvas id="neuralCanvas" class="w-full h-full"></canvas>
-                        
-                        <!-- Overlay metrics -->
-                        <div class="absolute bottom-4 left-4 flex gap-4">
-                            <div class="bg-black/80 backdrop-blur px-3 py-2 rounded text-xs border border-gray-800">
-                                <span class="text-gray-500">Offload Bw:</span>
-                                <span class="text-cyber-neon font-bold ml-1" x-text="metrics.bandwidth + ' GB/s'">24.5 GB/s</span>
-                            </div>
-                            <div class="bg-black/80 backdrop-blur px-3 py-2 rounded text-xs border border-gray-800">
-                                <span class="text-gray-500">WebGPU Tensors:</span>
-                                <span class="text-cyber-accent font-bold ml-1" x-text="metrics.tensorsProcessed">1,402</span>
-                            </div>
+                    <div class="relative z-10 p-6 grid grid-cols-2 gap-4 mt-auto pointer-events-none">
+                        <div class="bg-black/70 backdrop-blur rounded-xl p-4 border border-gray-800">
+                            <div class="text-[0.65rem] text-gray-500 uppercase tracking-widest mb-1">Tier Actif</div>
+                            <div class="text-lg font-bold text-white">Tier 2: <span class="text-cyber-accent">Zero-Copy TCP</span></div>
+                            <div class="text-xs text-gray-400 mt-1">Latence Bypass CPU</div>
+                        </div>
+                        <div class="bg-black/70 backdrop-blur rounded-xl p-4 border border-gray-800">
+                            <div class="text-[0.65rem] text-gray-500 uppercase tracking-widest mb-1">Tenseurs Routés (P2P)</div>
+                            <div class="text-lg font-bold text-cyber-success font-mono" x-text="metrics.tensorsProcessed">0</div>
+                            <div class="text-xs text-gray-400 mt-1">Via HMAC Zero-Trust</div>
                         </div>
                     </div>
                 </div>
@@ -274,9 +277,12 @@ TEMPLATE = """
                             let html = '';
                             Object.entries(js.active || {}).forEach(([res, info]) => {
                                 const id = info.id || info.task_id || 'n/a';
-                                html += `<div class="text-gray-300"><span class="text-cyber-accent">[TASK]</span> ${res} -> ${id} (Running)</div>`;
+                                html += `<div class="text-cyber-accent"><span class="text-white">[TASK]</span> Routage Tenseur via Rust/Tokio: ${id}</div>`;
                             });
-                            if (html === "") html = `<div class="text-gray-600">[IDLE] Waiting for inference jobs...</div>`;
+                            if (html === "") {
+                                html = `<div class="text-gray-600">[IDLE] Attente des requêtes /v1/chat/completions...</div>`;
+                                html += `<div class="text-cyber-success mt-2">[WOI] Écoute Magic Packets Wake-on-Inference activée.</div>`;
+                            }
                             logContainer.innerHTML = html;
                         }
                     } catch(e) {}
@@ -286,65 +292,61 @@ TEMPLATE = """
             }
         }
 
-        // --- Neural Swarm Canvas Animation ---
-        const canvas = document.getElementById('neuralCanvas');
-        const ctx = canvas.getContext('2d');
+        // --- 3D INTERACTIVE NETWORK MAP (Tokio Cluster) ---
+        // Dynamically generating cluster nodes
+        const Graph = ForceGraph3D()(document.getElementById('3d-graph'))
+            .backgroundColor('rgba(0,0,0,0)')
+            .nodeRelSize(8)
+            .nodeAutoColorBy('group')
+            .nodeColor(node => node.group === 1 ? '#00f2fe' : (node.group === 2 ? '#4facfe' : '#fb2c36'))
+            .linkColor(() => 'rgba(0, 242, 254, 0.4)')
+            .linkWidth(2)
+            .linkDirectionalParticles(4)
+            .linkDirectionalParticleWidth(3)
+            .linkDirectionalParticleSpeed(d => d.value * 0.005)
+            .cameraPosition({ x: 0, y: 0, z: 250 });
+
+        // Simulate a cluster of exactly 1 Orchestrator, 4 Worker GPUs, 2 NVMe Nodes
+        const gData = {
+            nodes: [
+                { id: 'Orchestrator (Rust/Python)', group: 1, val: 20 },
+                { id: 'Worker GPU 1 (RTX 4090)', group: 2, val: 15 },
+                { id: 'Worker GPU 2 (RTX 3090)', group: 2, val: 15 },
+                { id: 'Worker GPU 3 (Apple M3)', group: 2, val: 10 },
+                { id: 'Worker GPU 4 (WebGPU Edge)', group: 2, val: 8 },
+                { id: 'NVMe Swap Node A', group: 3, val: 5 },
+            ],
+            links: [
+                { source: 'Worker GPU 1 (RTX 4090)', target: 'Orchestrator (Rust/Python)', value: 8 },
+                { source: 'Worker GPU 2 (RTX 3090)', target: 'Orchestrator (Rust/Python)', value: 6 },
+                { source: 'Worker GPU 3 (Apple M3)', target: 'Orchestrator (Rust/Python)', value: 4 },
+                { source: 'Worker GPU 4 (WebGPU Edge)', target: 'Orchestrator (Rust/Python)', value: 2 },
+                { source: 'NVMe Swap Node A', target: 'Orchestrator (Rust/Python)', value: 1 },
+                { source: 'Worker GPU 1 (RTX 4090)', target: 'Worker GPU 2 (RTX 3090)', value: 3 }, // P2P Tokio Link
+            ]
+        };
+
+        Graph.graphData(gData);
+
+        // Make the graph spin slowly for the WOW factor
+        let angle = 0;
+        setInterval(() => {
+            angle += Math.PI / 800;
+            Graph.cameraPosition({
+                x: 250 * Math.sin(angle),
+                z: 250 * Math.cos(angle)
+            });
+        }, 30);
         
-        function resizeCanvas() {
-            canvas.width = canvas.parentElement.offsetWidth;
-            canvas.height = canvas.parentElement.offsetHeight;
-        }
-        window.addEventListener('resize', resizeCanvas);
-        resizeCanvas();
-
-        let particles = [];
-        for (let i = 0; i < 40; i++) {
-            particles.push({
-                x: Math.random() * canvas.width,
-                y: Math.random() * canvas.height,
-                vx: (Math.random() - 0.5) * 1,
-                vy: (Math.random() - 0.5) * 1,
-                radius: Math.random() * 2 + 1
-            });
-        }
-
-        function drawNeuralNet() {
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-            ctx.fillStyle = 'rgba(0, 242, 254, 0.8)';
-            ctx.strokeStyle = 'rgba(0, 242, 254, 0.15)';
-            ctx.lineWidth = 1;
-
-            particles.forEach((p, index) => {
-                p.x += p.vx;
-                p.y += p.vy;
-
-                if (p.x < 0 || p.x > canvas.width) p.vx *= -1;
-                if (p.y < 0 || p.y > canvas.height) p.vy *= -1;
-
-                ctx.beginPath();
-                ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
-                ctx.fill();
-
-                for (let j = index + 1; j < particles.length; j++) {
-                    const p2 = particles[j];
-                    const dist = Math.hypot(p.x - p2.x, p.y - p2.y);
-                    if (dist < 80) {
-                        ctx.beginPath();
-                        ctx.moveTo(p.x, p.y);
-                        ctx.lineTo(p2.x, p2.y);
-                        ctx.globalAlpha = 1 - dist / 80;
-                        ctx.stroke();
-                        ctx.globalAlpha = 1;
-                    }
-                }
-            });
-            requestAnimationFrame(drawNeuralNet);
-        }
-        drawNeuralNet();
+        // Handle Resize to keep Graph responsive
+        window.addEventListener('resize', () => {
+            const container = document.getElementById('3d-graph');
+            Graph.width(container.clientWidth).height(container.clientHeight);
+        });
     </script>
 </body>
 </html>
-""""""
+"""
 
 @app.route("/")
 def dashboard():

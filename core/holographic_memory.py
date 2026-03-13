@@ -25,14 +25,19 @@ class HolographicKVManager:
         self.log = logging.getLogger("vramancer.holographic_memory")
         self.active_engrams: Dict[str, Dict[str, Any]] = {}
 
-        # Attempt to load C++ Native extension (Zero-GIL, AVX2 accelerated)
+        # Attempt to load Rust/C++ Native extension (Zero-GIL, AVX2 accelerated)
         self.native_core = None
         try:
-            import swarm_core
+            import vramancer_rust as swarm_core
             self.native_core = swarm_core
-            self.log.info("⚡ [Brain] C++ Swarm Core engaged. Python GIL bypassed for Holographic Processing.")
+            self.log.info("⚡ [Brain] Rust Swarm Core engaged. Python GIL bypassed for Holographic Processing.")
         except ImportError:
-            self.log.warning("🐢 [Brain] C++ Swarm Core not found. Falling back to slow Python loops.")
+            try:
+                import swarm_core
+                self.native_core = swarm_core
+                self.log.info("⚡ [Brain] C++ Swarm Core engaged. Python GIL bypassed for Holographic Processing.")
+            except ImportError:
+                self.log.warning("🐢 [Brain] Native Swarm Core not found. Falling back to slow Python loops.")
         
     def _xor_bytes(self, b1: bytes, b2: bytes) -> bytes:
         """Fast low-level XOR for parity generation/reconstruction."""

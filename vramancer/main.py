@@ -73,6 +73,9 @@ def main(argv=None):
     # ---- health ----
     sub.add_parser("health", help="Verifier la sante du systeme")
 
+    # ---- auth ----
+    p_auth = sub.add_parser("auth", help="Générer une identité Swarm Ledger (sk-VRAM-...)")
+
     # ---- version ----
     sub.add_parser("version", help="Afficher la version")
 
@@ -84,6 +87,12 @@ def main(argv=None):
 
     if args.command == "version":
         _cmd_version()
+    elif args.command == "auth":
+        try:
+            from vramancer.cli.swarm_cli import ui_auth_generate
+            ui_auth_generate()
+        except ImportError as e:
+            print(f"Erreur UI (rich manquant?): {e}")
     elif args.command == "status":
         _cmd_status()
     elif args.command == "serve":

@@ -43,14 +43,17 @@ except Exception:
 
 try:
     from core.logger import LoggerAdapter
+    _logger = LoggerAdapter("paged_attn")
+except Exception:
+    import logging
+    _logger = logging.getLogger("vramancer.paged_attention")
+
 from typing import TYPE_CHECKING
 try:
     from core.hierarchical_memory import Tier
 except ImportError:
     Tier = str
-    _logger = LoggerAdapter("paged_attn")
-except Exception:
-    _logger = logging.getLogger("vramancer.paged_attention")
+
 _MINIMAL = os.environ.get("VRM_MINIMAL_TEST", "")
 
 try:

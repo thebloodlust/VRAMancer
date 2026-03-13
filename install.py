@@ -253,6 +253,23 @@ def install_vramancer(pip_cmd: str, mode: str, base_dir: Path):
     subprocess.check_call([pip_cmd, "install", "--upgrade", "pip", "setuptools", "wheel"])
     subprocess.check_call([pip_cmd, "install", "-e", target], cwd=str(base_dir))
 
+    # --- ETAPE A : Build the Rust Core automatically (Zero-Copy P2P bypass) ---
+    print_step("Compilation du module Rust (vramancer_rust) pour le bypass P2P Zero-Trust...")
+    try:
+        subprocess.check_call([pip_cmd, "install", "maturin"])
+        rust_dir = base_dir / "rust_core"
+        if rust_dir.exists():
+            py_cmd = str(venv_path / "bin" / "python") if os.name != "nt" else str(venv_path / "Scripts" / "python.exe")
+            if not venv_path.exists():
+                py_cmd = sys.executable
+            subprocess.check_call([py_cmd, "-m", "maturin", "develop", "--release"], cwd=str(rust_dir))
+            print_success("Module Rust (vramancer_rust) compilé et injecté avec succès !")
+        else:
+            print_warning("Dossier rust_core/ introuvable, skip de l'étape Rust.")
+    except Exception as e:
+        print_error(f"Erreur lors de la compilation de vramancer_rust: {e}")
+        print_warning("La compilation Rust (Cargo) n'a pas pu aboutir. VRAMancer fonctionnera en réseau Python classique (sans bypass PCIe). Installez l'outil système 'cargo' si besoin.")
+    # --------------------------------------------------------------------------
 
 # ── Génération du token API ──────────────────────────────────────────
 def generate_env_file(base_dir: Path):

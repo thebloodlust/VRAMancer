@@ -82,43 +82,111 @@ class RemoteExecutor:
             import hashlib
             import os
 
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(self.timeout)
+            # ---------------------------------------------------------
+            # ZERO-COPY PATH (Niveau 2) : Bypass Pickle si c'est un Tenseur PyTorch
+            # ---------------------------------------------------------
+            is_safetensor = False
             try:
-                sock.connect((self.host, self.port))
-                data = pickle.dumps(x)
+                import torch
+                from safetensors.torch import save
+                
+                # Si x est un Tenseur ou un Dict de Tenseurs, on utilise Safetensors (Zero-Copy)
+                if isinstance(x, torch.Tensor):
+                    if getattr(x, "is_cuda", False):
+                        # Fix P2P Rust : point de synchronisation dur CUDA préréglé
+                        # pour forcer la file d'attente VRAM à se purger avant d'extraire via ReBAR
+                        torch.cuda.synchronize(device=x.device)
+                    data = save({"tensor": x})
+                    is_safetensor = True
+                elif isinstance(x, dict) and all(isinstance(v, torch.Tensor) for v in x.values()):
+                    # Fix P2P Rust (Multi) : synchro systématique sur chaque Device GPU du dict
+                    for v in x.values():
+                        if getattr(v, "is_cuda", False):
+                            torch.cuda.synchronize(device=v.device)
+                    data = save(x)
+                    is_safetensor = True
+                else:
+                    data = pickle.dumps(x) # Type Python complexe -> Fallback Pickle
+            except ImportError:
+                data = pickle.dumps(x) # torch/safetensors non installés -> Fallback Pickle
 
-                # Zero-Trust: Sign the payload to prevent RCE from rogue nodes
-                secret = os.environ.get("VRM_API_TOKEN", "default_insecure_token").encode()
-                signature = hmac.new(secret, data, hashlib.sha256).digest()
+            # Prefix de métadonnées rapide (1 octet) pour dire au récepteur comment décoder
+            # 0x01 = Pickle (Legacy), 0x02 = Safetensors (Zero-Copy)
+            header_type = b'\x02' if is_safetensor else b'\x01'
+            data = header_type + data
 
-                # Format: [8 bytes total len] + [32 bytes sha256 signature] + [data]
-                payload = signature + data
-                sock.sendall(len(payload).to_bytes(8, "big") + payload)
-                
-                resp_len_bytes = sock.recv(8)
-                if not resp_len_bytes:
-                    raise ConnectionError("Remote node disconnected prematurely (Empty response header)")
-                resp_len = int.from_bytes(resp_len_bytes, "big")
-                
-                resp_data = b""
-                while len(resp_data) < resp_len:
-                    chunk = sock.recv(min(65536, resp_len - len(resp_data)))
-                    if not chunk:
-                        raise ConnectionError("Remote node dropped connection during payload transfer")
-                    resp_data += chunk
-                
-                # Verify response signature
-                resp_sig = resp_data[:32]
-                resp_payload = resp_data[32:]
+            secret = os.environ.get("VRM_API_TOKEN", "default_insecure_token").encode()
+
+            # 1. Option Tokio (Rust) -> GIL relâché, asynchrone natif
+            try:
+                import vramancer_rust
+                tier = vramancer_rust.detect_best_transport()
+                if tier == vramancer_rust.TransportTier.ZeroCopyTcp:
+                    _logger.debug("Utilisation du pont réseau ZeroCopy Tokio/Rust")
+                # Le réseau P2P natif super rapide
+                resp_data = vramancer_rust.send_tensor_p2p(self.host, self.port, secret, data)
+            except (ImportError, Exception) as e:
+                if isinstance(e, ImportError):
+                    _logger.debug("vramancer_rust unavailable, using CPU fallback for TCP P2P")
+                else:
+                    _logger.warning(f"Rust native P2P failed ({e}), falling back to Python sockets")
+
+                # 2. Option Python classique -> Sockets synchrones (+GIL block)
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(self.timeout)
+                try:
+                    sock.connect((self.host, self.port))
+                    
+                    # Signature CPU
+                    signature = hmac.new(secret, data, hashlib.sha256).digest()
+                    payload = signature + data
+                    sock.sendall(len(payload).to_bytes(8, "big") + payload)
+                    
+                    resp_len_bytes = sock.recv(8)
+                    if not resp_len_bytes:
+                        raise ConnectionError("Remote node disconnected prematurely (Empty response header)")
+                    resp_len = int.from_bytes(resp_len_bytes, "big")
+                    
+                    resp_data = b""
+                    while len(resp_data) < resp_len:
+                        chunk = sock.recv(min(65536, resp_len - len(resp_data)))
+                        if not chunk:
+                            raise ConnectionError("Remote node dropped connection during payload transfer")
+                        resp_data += chunk
+                finally:
+                    sock.close()
+            
+            # Verify response signature (Commun pour Rust & Python)
+            resp_sig = resp_data[:32]
+            resp_payload = resp_data[32:]
+            
+            # Prudence: Verification Rust native ou fallback CPU
+            try:
+                import vramancer_rust
+                is_valid = vramancer_rust.verify_hmac_fast(secret, resp_payload, resp_sig)
+            except ImportError:
                 expected_sig = hmac.new(secret, resp_payload, hashlib.sha256).digest()
-                if not hmac.compare_digest(resp_sig, expected_sig):
-                    _logger.error(f"Zero-Trust Violation: Invalid signature from {self.host}:{self.port}")
-                    raise ValueError("Untrusted response payload")
+                is_valid = hmac.compare_digest(resp_sig, expected_sig)
+                
+            if not is_valid:
+                _logger.error(f"Zero-Trust Violation: Invalid signature from {self.host}:{self.port}")
+                raise ValueError("Untrusted response payload")
 
-                return pickle.loads(resp_payload)
-            finally:
-                sock.close()
+            # Dessérialisation dynamique (Zero-Copy ou Pickle Legacy)
+            resp_type = resp_payload[:1]
+            pure_data = resp_payload[1:]
+            
+            if resp_type == b'\x02':
+                try:
+                    from safetensors.torch import load
+                    parsed_dict = load(pure_data)
+                    # Si c'était un Tenseur unique, on le ressort du dict
+                    return parsed_dict["tensor"] if "tensor" in parsed_dict else parsed_dict
+                except Exception as e:
+                    _logger.error(f"Erreur Safetensors au décodage réseau: {e}")
+                    raise
+            else:
+                return pickle.loads(pure_data)
                 
         except socket.timeout:
             _logger.error(f"Timeout réseau ({self.timeout}s) vers {self.host}:{self.port}")

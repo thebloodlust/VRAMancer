@@ -1,0 +1,49 @@
+name: Build Rust Core (vramancer_rust)
+
+on:
+  push:
+    branches:
+      - main
+      - 'experimental/rust-core'
+    tags:
+      - 'v*'
+  pull_request:
+    paths:
+      - 'rust_core/**'
+
+jobs:
+  build-wheels:
+    name: Build wheels on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install maturin
+        run: pip install maturin
+
+      - name: Build wheel (Linux/MacOS)
+        if: runner.os != 'Windows'
+        run: |
+          cd rust_core
+          maturin build --release
+          
+      - name: Build wheel (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          cd rust_core
+          maturin build --release
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.os }}
+          path: rust_core/target/wheels/*.whl
