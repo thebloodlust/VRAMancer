@@ -185,10 +185,10 @@ class KVCacheBlock(_nn.Module if _HAS_TORCH else object):
 def select_backend(model_name: str, cache_dir: str = None, backend: str = "auto", num_gpus: int = 1):
     logger.info(f"Sélection du backend pour {model_name} (demandé: {backend}, gpus: {num_gpus})")
     
-    if backend == "vllm" or (backend == "auto" and num_gpus > 1):
-        # On retire temporairement le try/except ImportError pour forcer l'affichage de l'erreur d'import vLLM
-        import vllm
-        logger.info("Utilisation du backend vLLM pour le support natif multi-GPU (Tensor Parallelism).")
+    # FORCER vLLM DANS TOUS LES CAS (auto ou vllm)
+    if backend == "vllm" or backend == "auto":
+        import vllm  # Lèvera une erreur stricte s'il n'est pas installé
+        logger.info(f"Utilisation du backend vLLM pour le modèle {model_name}.")
         from core.backends_vllm import vLLMBackend
         return vLLMBackend(model_name, cache_dir=cache_dir, tensor_parallel_size=num_gpus)
 
@@ -196,7 +196,7 @@ def select_backend(model_name: str, cache_dir: str = None, backend: str = "auto"
         from core.backends_ollama import OllamaBackend
         return OllamaBackend(model_name)
         
-    if backend == "huggingface" or backend == "auto":
+    if backend == "huggingface":
         from core.backends import HuggingFaceBackend
         return HuggingFaceBackend(model_name, cache_dir=cache_dir)
         
