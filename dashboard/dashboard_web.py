@@ -480,6 +480,8 @@ BROWSER_TEMPLATE = """
     </script>
 </body>
 </html>
+"""
+
 CHAT_TEMPLATE = """
 <html>
 <head>
