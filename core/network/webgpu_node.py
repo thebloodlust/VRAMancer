@@ -83,15 +83,37 @@ class WebGPUNodeManager:
         import os
         import hmac
 
-        # Extract token from the WebSocket path (e.g. ws://host:port/?token=xyz)
+        # Extract token, ring_id, and hardware specs from the WebSocket path
         query = path.split('?')
         token = ""
+        ring_id = ""
+        device_type = "unknown"
+        gpu_vram = 8.0
+        battery_level = 100.0
+        
         if len(query) > 1:
             for param in query[1].split('&'):
                 if param.startswith('token='):
                     token = param.split('=')[1]
-                    break
+                elif param.startswith('ring_id='):
+                    ring_id = param.split('=')[1]
+                elif param.startswith('device='):
+                    device_type = param.split('=')[1]
+                elif param.startswith('vram='):
+                    try: gpu_vram = float(param.split('=')[1])
+                    except: pass
+                elif param.startswith('battery='):
+                    try: battery_level = float(param.split('=')[1])
+                    except: pass
+                    
+        # Check Trust Ring (Groupes Privés/Cercles de confiance)
+        from core.network.trust_ring import TRUST_MANAGER
+        if not TRUST_MANAGER.verify_node(ring_id, token):
+            _log.warning(f"Rejet connexion {client_id}: Trust Ring invalide ou Token rejeté (Ring: {ring_id}).")
+            await websocket.close(1008, "Invalid Trust Ring Token")
+            return
         
+        # Backward compatibility for base API Token
         secret = os.environ.get("VRM_API_TOKEN")
         is_production = os.environ.get('VRM_PRODUCTION') == '1'
         
@@ -100,19 +122,25 @@ class WebGPUNodeManager:
             await websocket.close(1008, "Token required")
             return
             
-        if token and secret:
+        if not ring_id and token and secret:
             from core.security import _maybe_rotate
             eff_secret = _maybe_rotate(secret)
             if not hmac.compare_digest(token, eff_secret) and not hmac.compare_digest(token, secret):
-                _log.warning(f"Rejet connexion {client_id} (Zero-Trust): Token invalide.")
+                _log.warning(f"Rejet connexion {client_id} (Zero-Trust): Legacy Token invalide.")
                 await websocket.close(1008, "Invalid token")
                 return
 
         self.clients[client_id] = {
             "ws": websocket,
             "last_seen": time.time(),
-            "busy": False
+            "busy": False,
+            "hw_specs": {
+                "device": device_type,
+                "vram_gb": gpu_vram,
+                "battery": battery_level
+            }
         }
+        _log.info(f"Node [ID:{client_id} | {device_type.upper()} | {gpu_vram}GB | Bat:{battery_level}%] a rejoint le Ring '{ring_id or 'Public'}'.")
         WEBGPU_CONNECTED_CLIENTS.set(len(self.clients))
 
         # Lancer le heartbeat en tâche de fond
@@ -163,27 +191,57 @@ class WebGPUNodeManager:
                                 _log.error("Failed to decode binary header from WebGPU client.")
                 continue
 
-            # Trouver un client libre
-            available_client = next((cid for cid, c in self.clients.items() if not c["busy"]), None)
+
+
+        except Exception as e:
+            _log.error(f"Erreur client {client_id}: {e}")
+        finally:
+            await self._disconnect_client(client_id)
             
-            if available_client:
-                task = await self.task_queue.get()
-                ws = self.clients[available_client]["ws"]
-                self.clients[available_client]["busy"] = True
+    async def _task_dispatcher(self):
+        """Smart Task Dispatcher with Load-Balancing & GPU ranking."""
+        while True:
+            # 1. Attends qu'une tâche soit disponible
+            task = await self.task_queue.get()
+            
+            # 2. Cherche un client libre
+            while True:
+                available_clients = [(cid, c) for cid, c in self.clients.items() if not c.get("busy", False)]
+                if not available_clients:
+                    await asyncio.sleep(0.01)
+                    continue
+                
+                # Smart Load Balancing: prioriser les meilleurs GPUs (M-series, RTX, etc)
+                def get_gpu_score(client_data):
+                    gpu_name = client_data.get("gpu", "").lower()
+                    if "rtx" in gpu_name or "m3 max" in gpu_name or "m4 max" in gpu_name: return 100
+                    if "m2" in gpu_name or "m1 max" in gpu_name or "rx 7900" in gpu_name or "m3 pro" in gpu_name: return 80
+                    if "m1" in gpu_name or "gtx 1080" in gpu_name: return 50
+                    return 10 # generic
+                
+                # Trie par score décroissant (meilleur GPU d'abord)
+                available_clients.sort(key=lambda x: get_gpu_score(x[1]), reverse=True)
+                
+                best_client_id = available_clients[0][0]
+                ws = self.clients[best_client_id]["ws"]
+                self.clients[best_client_id]["busy"] = True
                 self.pending_tasks[task.task_id] = task
                 
                 # Envoi binaire (Header JSON + Payload Tenseur)
+                import json
+                import struct
                 header = json.dumps({"type": "compute", "task_id": task.task_id, "layer": task.layer_id, "quant_scale": task.quant_scale}).encode('utf-8')
                 header_len = struct.pack('<I', len(header))
                 payload = header_len + header + task.tensor_data
                 
                 try:
                     await ws.send(payload)
-                except ConnectionClosed:
-                    self.clients[available_client]["busy"] = False
-                    await self.task_queue.put(task) # Remettre la tâche dans la file
-            else:
-                await asyncio.sleep(0.01)
+                    break # Succès, on passe à la tâche suivante
+                except Exception:
+                    # En cas d'erreur de websocket
+                    self.clients[best_client_id]["busy"] = False
+                    await self._disconnect_client(best_client_id)
+                    # La boucle va recommencer pour cette tâche
 
     def submit_tensor(self, layer_id: int, tensor_data: bytes, quant_scale: float = 1.0) -> asyncio.Future:
         """API publique pour soumettre un tenseur au cluster WebGPU."""
