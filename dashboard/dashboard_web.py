@@ -116,6 +116,10 @@ TEMPLATE = """
                 </div>
             </div>
             <div class="flex gap-4">
+                <a href="/chat" class="group relative px-6 py-3 font-semibold text-white bg-cyber-dark border border-cyber-accent/50 rounded-lg overflow-hidden transition-all hover:border-cyber-neon hover:shadow-[0_0_15px_rgba(78,205,196,0.4)]">
+                    <div class="absolute inset-0 w-0 bg-cyber-neon/10 transition-all duration-[250ms] ease-out group-hover:w-full"></div>
+                    <span class="relative flex items-center gap-2"><i class="ph ph-chat-centered-text"></i> Chat UI</span>
+                </a>
                 <a href="/browser" class="group relative px-6 py-3 font-semibold text-white bg-cyber-dark border border-cyber-accent/50 rounded-lg overflow-hidden transition-all hover:border-cyber-accent hover:shadow-[0_0_15px_rgba(0,242,254,0.4)]">
                     <div class="absolute inset-0 w-0 bg-cyber-accent/10 transition-all duration-[250ms] ease-out group-hover:w-full"></div>
                     <span class="relative flex items-center gap-2"><i class="ph ph-magnifying-glass"></i> Model Browser</span>
@@ -476,7 +480,113 @@ BROWSER_TEMPLATE = """
     </script>
 </body>
 </html>
+CHAT_TEMPLATE = """
+<html>
+<head>
+    <title>VRAMancer - Chat Terminal</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { background-color: #0d0d12; color: #eee; font-family: 'Segoe UI', Tahoma, sans-serif; }
+        .cyber-panel { background: #1a1a24; border: 1px solid #333; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
+        .cyber-input { background: #111118; border: 1px solid #444; color: white; }
+        .cyber-input:focus { outline: none; border-color: #00d2ff; box-shadow: 0 0 10px rgba(0,210,255,0.2); }
+        .msg-user { background: rgba(0, 210, 255, 0.1); border-left: 3px solid #00d2ff; }
+        .msg-ai { background: rgba(78, 205, 196, 0.1); border-left: 3px solid #4ecdc4; }
+        .back-link { display: inline-block; margin-bottom: 20px; color: #00d2ff; text-decoration: none; font-weight: bold; font-size: 1.1em; }
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #111118; }
+        ::-webkit-scrollbar-thumb { background: #333; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #00d2ff; }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col items-center py-8 px-4">
+    <div class="w-full max-w-5xl"><a href="/" class="back-link">⬅ Retour au Nexus Swarm</a></div>
+    
+    <div class="w-full max-w-5xl cyber-panel rounded-xl flex flex-col overflow-hidden" style="height: 75vh;">
+        <div class="p-4 bg-[#111118] border-b border-gray-700 flex justify-between items-center">
+            <span class="font-bold text-lg"><span class="text-[#00d2ff]">VRAMancer</span> <span class="text-white">Asymmetric Neural Chat</span></span>
+            <span id="speed-indicator" class="text-xs font-mono text-[#4ecdc4] bg-[#0d0d12] px-3 py-1 rounded-full border border-[#4ecdc4]/30">Idle</span>
+        </div>
+        
+        <div id="chat-box" class="flex-1 overflow-y-auto p-6 flex flex-col gap-6">
+            <div class="p-4 rounded msg-ai text-sm font-mono leading-relaxed max-w-[85%]">
+                <span class="text-[#4ecdc4] font-bold">Système:</span> Moteur Rust P2P Zero-Copy activé. Les graphes PagedAttention sont compilés sur les GPUs. En attente de charge d'inférence.
+            </div>
+        </div>
+
+        <div class="p-4 bg-[#111118] border-t border-gray-700 flex gap-3">
+            <input type="text" id="prompt-input" class="flex-1 cyber-input rounded-lg px-4 py-3 font-mono text-sm" placeholder="Entrez un prompt pour le cluster..." onkeydown="if(event.key==='Enter') sendMessage()">
+            <button onclick="sendMessage()" class="px-8 py-3 bg-gradient-to-r from-[#00d2ff] to-[#3a7bd5] hover:opacity-80 text-black font-bold rounded-lg transition-all shadow-[0_0_15px_rgba(0,210,255,0.3)]">Générer</button>
+        </div>
+    </div>
+
+    <script>
+        async function sendMessage() {
+            const input = document.getElementById('prompt-input');
+            const chatBox = document.getElementById('chat-box');
+            const speedInd = document.getElementById('speed-indicator');
+            const prompt = input.value.trim();
+            if (!prompt) return;
+
+            chatBox.innerHTML += `<div class="p-4 rounded msg-user text-sm font-mono self-end max-w-[85%] whitespace-pre-wrap"><span class="text-[#00d2ff] font-bold">Vous:</span><br>${prompt}</div>`;
+            input.value = '';
+            chatBox.scrollTo(0, chatBox.scrollHeight);
+
+            const msgId = 'msg-' + Date.now();
+            chatBox.innerHTML += `<div id="wrap-${msgId}" class="p-4 rounded msg-ai text-sm font-mono self-start max-w-[85%] whitespace-pre-wrap"><span class="text-[#4ecdc4] font-bold">VRAMancer:</span><br><span id="${msgId}" class="animate-pulse">Calcul tensoriel en cours...</span></div>`;
+            chatBox.scrollTo(0, chatBox.scrollHeight);
+            speedInd.innerHTML = `<span class="text-[#ffcc00] animate-pulse">Processing...</span>`;
+
+            const startTime = Date.now();
+
+            try {
+                // Determine base URL dynamically
+                let baseUrl = window.location.origin;
+                if (window.location.port === "8500") {
+                   baseUrl = `http://${window.location.hostname}:5000`;
+                }
+
+                const response = await fetch(`${baseUrl}/v1/completions`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer testtoken' },
+                    body: JSON.stringify({
+                        model: 'Qwen/Qwen2.5-14B-Instruct',
+                        prompt: prompt,
+                        max_tokens: 500,
+                        temperature: 0.7
+                    })
+                });
+
+                const data = await response.json();
+                const timeSec = (Date.now() - startTime) / 1000;
+                
+                let text = "Erreur de génération";
+                let tps = 0;
+                if (data.choices && data.choices.length > 0) {
+                    text = data.choices[0].text;
+                    const tokens = data.usage?.completion_tokens || 0;
+                    tps = (tokens / timeSec).toFixed(1);
+                }
+
+                document.getElementById(msgId).classList.remove('animate-pulse');
+                document.getElementById(msgId).innerHTML = text;
+                speedInd.innerHTML = `⚡ ${tps} tok/s | Latency: ${timeSec.toFixed(2)}s`;
+
+            } catch (err) {
+                document.getElementById(msgId).classList.remove('animate-pulse');
+                document.getElementById(msgId).innerHTML = `<span class="text-red-500">Erreur réseau : Impossible de joindre l'API d'inférence. Le modèle est-il chargé via VRAMancer P2P ?</span>`;
+                speedInd.innerText = "Error";
+            }
+            chatBox.scrollTo(0, chatBox.scrollHeight);
+        }
+    </script>
+</body>
+</html>
 """
+
+@app.route("/chat")
+def chat_ui():
+    return render_template_string(CHAT_TEMPLATE)
 
 @app.route("/browser")
 def model_browser():
