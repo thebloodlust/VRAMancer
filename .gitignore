@@ -1,5 +1,5 @@
 # Fichiers et dossiers à ignorer
-.venv/
+.venv*/
 __pycache__/
 *.pyc
 *.pyo

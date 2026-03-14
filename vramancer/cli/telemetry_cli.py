@@ -1,7 +1,7 @@
 """Client CLI pour décoder un flux binaire de télémétrie.
 
 Usage:
-    python -m cli.telemetry_cli --url http://localhost:5010/api/telemetry.bin
+    python -m vramancer.cli.telemetry_cli --url http://localhost:5010/api/telemetry.bin
 """
 from __future__ import annotations
 import argparse, requests, sys

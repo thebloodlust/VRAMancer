@@ -30,7 +30,7 @@ except ImportError:
 from .packets import Packet
 
 try:
-    from utils.helpers import serialize_tensors, deserialize_tensors
+    from core.utils import serialize_tensors, deserialize_tensors
 except ImportError:
     def serialize_tensors(tensors):
         """Fallback serializer when utils.helpers is unavailable."""

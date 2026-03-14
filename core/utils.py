@@ -416,3 +416,25 @@ __all__ = [
     'enumerate_devices',
     'assign_block_to_device',
 ]
+
+# ------------------------------------------------------------------
+# Tensor Serialization (Moved from legacy utils/helpers.py)
+# ------------------------------------------------------------------
+def serialize_tensors(tensors):
+    """Serialize a list of tensors into bytes."""
+    import torch
+    import numpy as np
+    return b"".join([t.contiguous().cpu().numpy().tobytes() for t in tensors])
+
+def deserialize_tensors(data, shapes, dtypes):
+    """Deserialize a list of bytes back into tensors."""
+    import torch
+    import numpy as np
+    tensors = []
+    offset = 0
+    for shape, dtype in zip(shapes, dtypes):
+        size = int(np.prod(shape))
+        arr = np.frombuffer(data[offset:offset+size*dtype.itemsize], dtype=dtype)
+        tensors.append(torch.from_numpy(arr.copy()).reshape(shape))
+        offset += size * dtype.itemsize
+    return tensors
