@@ -25,7 +25,10 @@ class vLLMBackend(BaseLLMBackend):
 
         logger.info(f"Initialisation de vLLM (TP={self.tensor_parallel_size}, PP={self.pipeline_parallel_size}) pour {self.model_name}")
         
-        gpu_utilization = kwargs.get("gpu_memory_utilization", 0.90)
+        gpu_utilization = float(kwargs.get("gpu_memory_utilization", 0.90))
+        max_model_len = int(kwargs.get("max_model_len", 8192)) # Force a smaller context length to save KV cache (default would try 32k for Qwen)
+        
+        logger.info(f"Paramètres vLLM: gpu_memory_utilization={gpu_utilization}, max_model_len={max_model_len}")
         
         engine_args = EngineArgs(
             model=self.model_name,
@@ -34,6 +37,7 @@ class vLLMBackend(BaseLLMBackend):
             pipeline_parallel_size=self.pipeline_parallel_size,
             trust_remote_code=True,
             gpu_memory_utilization=gpu_utilization,
+            max_model_len=max_model_len,
             enforce_eager=kwargs.get("enforce_eager", False)
         )
         self.engine = LLMEngine.from_engine_args(engine_args)
