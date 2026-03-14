@@ -215,6 +215,38 @@ def detect_device_backend(device_index: int) -> str:
         return 'cpu'
 
 
+_LOGICAL_MAPPING: Optional[Dict[int, int]] = None
+
+def _get_logical_mapping() -> Dict[int, int]:
+    global _LOGICAL_MAPPING
+    if _LOGICAL_MAPPING is not None:
+        return _LOGICAL_MAPPING
+    
+    mapping = {}
+    backend = detect_backend()
+    if backend in ('cuda', 'rocm') and torch.cuda.is_available():
+        count = torch.cuda.device_count()
+        devices_info = []
+        for i in range(count):
+            try:
+                props = torch.cuda.get_device_properties(i)
+                cap = getattr(props, 'major', 0) * 10 + getattr(props, 'minor', 0)
+                vram = getattr(props, 'total_memory', 0)
+                name = getattr(props, 'name', '').lower()
+                # Priorité absolue pour les architectures 5070 ou Blackwell ou NVFP4
+                tier = 2 if ('5070' in name or 'blackwell' in name or 'nvfp4' in name) else 1
+                devices_info.append((i, tier, cap, vram))
+            except Exception:
+                devices_info.append((i, 0, 0, 0))
+        
+        # Tri décroissant par (tier, capability, VRAM)
+        sorted_info = sorted(devices_info, key=lambda x: (x[1], x[2], x[3]), reverse=True)
+        for logical_idx, info in enumerate(sorted_info):
+            mapping[logical_idx] = info[0]
+            
+    _LOGICAL_MAPPING = mapping
+    return mapping
+
 def get_device_type(idx: int) -> torch.device:
     """Retourne un objet torch.device cohérent pour un index.
 
@@ -222,8 +254,11 @@ def get_device_type(idx: int) -> torch.device:
     `cuda:{idx}` tout en exposant le backend logique "rocm" ailleurs.
     """
     backend = detect_backend()
-    if backend in ('cuda', 'rocm') and torch.cuda.device_count() > idx:
-        return torch.device(f"cuda:{idx}")
+    if backend in ('cuda', 'rocm') and torch.cuda.is_available():
+        mapping = _get_logical_mapping()
+        phys_idx = mapping.get(idx, idx)
+        if torch.cuda.device_count() > phys_idx:
+            return torch.device(f"cuda:{phys_idx}")
     if backend == 'xpu' and hasattr(torch, 'xpu') and torch.xpu.device_count() > idx:
         return torch.device(f"xpu:{idx}")
     if backend == 'npu' and hasattr(torch, 'npu') and torch.npu.device_count() > idx:
@@ -253,18 +288,27 @@ def enumerate_devices() -> List[Dict[str, Any]]:
     # CUDA / ROCm partagent torch.cuda
     try:
         if torch.cuda.is_available():
+            mapping = _get_logical_mapping()
+            # Inverser le mapping pour obtenir phys->logical
+            phys_to_logical = {v: k for k, v in mapping.items()}
+            # Créer une liste temporaire pour CUDA
+            cuda_devices = []
             for i in range(torch.cuda.device_count()):
                 props = torch.cuda.get_device_properties(i)
                 dev_backend = detect_device_backend(i)
-                devices.append({
+                cuda_devices.append({
                     'id': f"{dev_backend}:{i}",
                     'backend': dev_backend,
                     'index': i,
+                    'logical_index': phys_to_logical.get(i, i),
                     'name': props.name,
                     'total_memory': props.total_memory,
                     'vendor': 'amd' if dev_backend == 'rocm' else (
                         'nvidia' if dev_backend == 'cuda' else 'unknown'),
                 })
+            # Trier selon l'index logique pour que L0 soit le puissant GPU
+            cuda_devices.sort(key=lambda d: d.get('logical_index', d['index']))
+            devices.extend(cuda_devices)
     except Exception:
         pass
     # Intel XPU

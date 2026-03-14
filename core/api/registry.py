@@ -61,6 +61,12 @@ class PipelineRegistry:
     # ------------------------------------------------------------------
 
     def generate(self, prompt: str, **kwargs) -> str:
+        try:
+            from core.wake_on_inference import get_woi_manager
+            get_woi_manager().wake_all()
+        except ImportError:
+            pass
+
         with self._lock:
             p = self._pipeline
         if p is None:
@@ -69,6 +75,12 @@ class PipelineRegistry:
 
     def generate_stream(self, prompt: str, **kwargs):
         """Yield tokens for streaming. Falls back to word-level split."""
+        try:
+            from core.wake_on_inference import get_woi_manager
+            get_woi_manager().wake_all()
+        except ImportError:
+            pass
+
         with self._lock:
             p = self._pipeline
         if p is None:

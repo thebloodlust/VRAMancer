@@ -47,7 +47,7 @@ except ImportError:
     pynvml = None
 
 try:
-    from core.utils import detect_backend, get_device_type
+    from core.utils import detect_backend, get_device_type, _get_logical_mapping
 except ImportError:  # pragma: no cover
     def detect_backend():
         return "cpu"

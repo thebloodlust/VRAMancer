@@ -316,6 +316,13 @@ class InferencePipeline:
         """
         self._ensure_loaded()
 
+        # Wake on Inference - Dynamically pull nodes from sleep
+        try:
+            from core.wake_on_inference import get_woi_manager
+            get_woi_manager().wake_all()
+        except Exception:
+            pass
+
         if _METRICS:
             INFER_REQUESTS.inc()
 

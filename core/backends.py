@@ -215,6 +215,14 @@ def select_backend(model_name: str, cache_dir: str = None, backend: str = "auto"
         from core.backends_ollama import OllamaBackend
         return OllamaBackend(model_name)
         
+    if backend == "webgpu":
+        try:
+            from core.backends_webgpu import WebGPUBackend
+            return WebGPUBackend()
+        except ImportError as e:
+            logger.error(f"Failed to import WebGPUBackend: {e}")
+            raise ValueError("WebGPU support requires extra dependencies. Ensure they are installed.")
+        
     if backend == "huggingface":
         from core.backends import HuggingFaceBackend
         return HuggingFaceBackend(model_name, cache_dir=cache_dir)
@@ -564,7 +572,13 @@ class HuggingFaceBackend(BaseLLMBackend):
 
             # Take last token logits
             if logits.dim() >= 2:
-                next_logits = logits[:, -1, :]
+                next_logits = logits[:, -1, :]                curl -X POST "http://192.168.1.21:5000/api/models/load" \
+                     -H "Content-Type: application/json" \
+                     -H "Authorization: Bearer testtoken" \
+                     -d '{"model": "TinyLlama/TinyLlama-1.1B-Chat-v1.0", "num_gpus": 2, "backend": "huggingface"}'                    curl -X POST http://192.168.1.21:5000/api/models/load \
+                         -H "Content-Type: application/json" \
+                         -H "Authorization: Bearer testtoken" \
+                         -d '{"model": "Qwen/Qwen2.5-14B-Instruct", "gpu_memory_utilization": 0.50}'
             else:
                 next_logits = logits
 
