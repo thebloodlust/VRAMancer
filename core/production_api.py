@@ -900,7 +900,9 @@ def _register_routes(application: Flask, _run_with_timeout, queue_depth, queue_l
         backend = data.get('backend', 'auto')
 
         try:
-            _registry.load(model_name, backend=backend, num_gpus=num_gpus)
+            # Pass all extra parameters from the API request (such as gpu_memory_utilization) 
+            kwargs = {k: v for k, v in data.items() if k not in ['model', 'num_gpus', 'backend']}
+            _registry.load(model_name, backend=backend, num_gpus=num_gpus, **kwargs)
             return jsonify({
                 'status': 'loaded',
                 'model': model_name,

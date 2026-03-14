@@ -33,8 +33,7 @@ class PipelineRegistry:
         with self._lock:
             return self._pipeline is not None and self._pipeline.is_loaded()
 
-    def load(self, model_name: str, backend: str = "auto",
-             num_gpus: Optional[int] = None, verbose: bool = False):
+    def load(self, model_name: str, backend: str = "auto", num_gpus: Optional[int] = None, verbose: bool = False, **kwargs):
         """Load a model, shutting down any existing pipeline first."""
         with self._lock:
             if self._pipeline is not None:
@@ -46,7 +45,7 @@ class PipelineRegistry:
             self._pipeline = InferencePipeline(
                 backend_name=backend, verbose=verbose
             )
-            self._pipeline.load(model_name, num_gpus=num_gpus)
+            self._pipeline.load(model_name, num_gpus=num_gpus, **kwargs)
 
     def shutdown(self):
         with self._lock:
