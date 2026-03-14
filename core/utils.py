@@ -408,15 +408,6 @@ def assign_block_to_device(block: torch.nn.Module, idx: int) -> torch.nn.Module:
             pass
     return moved
 
-__all__ = [
-    'get_tokenizer',
-    'get_device_type',
-    'detect_backend',
-    'detect_device_backend',
-    'enumerate_devices',
-    'assign_block_to_device',
-]
-
 # ------------------------------------------------------------------
 # Tensor Serialization (Moved from legacy utils/helpers.py)
 # ------------------------------------------------------------------
@@ -438,3 +429,14 @@ def deserialize_tensors(data, shapes, dtypes):
         tensors.append(torch.from_numpy(arr.copy()).reshape(shape))
         offset += size * dtype.itemsize
     return tensors
+
+__all__ = [
+    'get_tokenizer',
+    'get_device_type',
+    'detect_backend',
+    'detect_device_backend',
+    'enumerate_devices',
+    'assign_block_to_device',
+    'serialize_tensors',
+    'deserialize_tensors',
+]
