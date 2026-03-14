@@ -63,6 +63,10 @@ USER vramancer
 
 # Expose the correct port
 EXPOSE 5030
+EXPOSE 8081
+EXPOSE 9108
+EXPOSE 8081
+EXPOSE 9108
 
 # -------------------------------------------------------------
 # 6. Health check (correct endpoint and port)
