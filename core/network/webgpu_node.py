@@ -40,10 +40,11 @@ except ImportError:
     WEBGPU_FLOPS_TOTAL = DummyMetric()
 
 class WebGPUTask:
-    def __init__(self, layer_id: int, tensor_data: bytes):
+    def __init__(self, layer_id: int, tensor_data: bytes, quant_scale: float = 1.0):
         self.task_id = uuid.uuid4().hex
         self.layer_id = layer_id
         self.tensor_data = tensor_data
+        self.quant_scale = quant_scale
         self.future = asyncio.Future()
         self.created_at = time.time()
 
@@ -172,7 +173,7 @@ class WebGPUNodeManager:
                 self.pending_tasks[task.task_id] = task
                 
                 # Envoi binaire (Header JSON + Payload Tenseur)
-                header = json.dumps({"type": "compute", "task_id": task.task_id, "layer": task.layer_id}).encode('utf-8')
+                header = json.dumps({"type": "compute", "task_id": task.task_id, "layer": task.layer_id, "quant_scale": task.quant_scale}).encode('utf-8')
                 header_len = struct.pack('<I', len(header))
                 payload = header_len + header + task.tensor_data
                 
@@ -184,9 +185,9 @@ class WebGPUNodeManager:
             else:
                 await asyncio.sleep(0.01)
 
-    def submit_tensor(self, layer_id: int, tensor_data: bytes) -> asyncio.Future:
+    def submit_tensor(self, layer_id: int, tensor_data: bytes, quant_scale: float = 1.0) -> asyncio.Future:
         """API publique pour soumettre un tenseur au cluster WebGPU."""
-        task = WebGPUTask(layer_id, tensor_data)
+        task = WebGPUTask(layer_id, tensor_data, quant_scale)
         self.task_queue.put_nowait(task)
         return task.future
 

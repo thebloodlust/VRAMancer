@@ -73,15 +73,27 @@ class WebGPUBackend(BaseLLMBackend):
     def split_model(self, num_gpus: int, vram_per_gpu: List[int] = None):
         return [self]
 
-    def _serialize_tensor(self, tensor) -> bytes:
+    def _serialize_tensor(self, tensor) -> tuple[bytes, float]:
         if torch is None:
-            return b"dummy_tensor_data"
+            return b"dummy_tensor_data", 1.0
         if not isinstance(tensor, torch.Tensor):
-            return b""
+            return b"", 1.0
         try:
-            return tensor.detach().cpu().to(torch.float32).numpy().tobytes()
-        except Exception:
-            return b""
+            import numpy as np
+            # 8-bit Quantization (Symmetric Q8_0)
+            np_arr = tensor.detach().cpu().to(torch.float32).numpy()
+            max_val = float(np.max(np.abs(np_arr))) if np_arr.size > 0 else 0.0
+            if max_val == 0:
+                scale = 1.0
+                quantized = np_arr.astype(np.int8)
+            else:
+                scale = max_val / 127.0
+                quantized = np.round(np_arr / scale).astype(np.int8)
+            
+            return quantized.tobytes(), scale
+        except Exception as e:
+            self.log.warning(f"Quantization failed: {e}")
+            return b"", 1.0
             
     def _deserialize_tensor(self, data: bytes) -> Any:
         if torch is None or not data:
@@ -96,19 +108,24 @@ class WebGPUBackend(BaseLLMBackend):
         if not self.node_manager.clients:
             return "[Error: No WebGPU workers connected via browser]"
             
-        tensor_bytes = self._serialize_tensor(inputs) if torch else b"dummy_tensor_data"
-        fut = self.node_manager.submit_tensor(layer_id=0, tensor_data=tensor_bytes)
+        tensor_bytes, quant_scale = self._serialize_tensor(inputs) if torch else (b"dummy_tensor_data", 1.0)
         
-        try:
-            result_bytes = asyncio.run_coroutine_threadsafe(asyncio.wait_for(fut, timeout=10.0), self._loop).result()
-            if torch and result_bytes:
-                return self._deserialize_tensor(result_bytes)
-            return result_bytes
-        except asyncio.TimeoutError:
-            self.log.error("WebGPU Tensor computation timed out.")
-            return "[WebGPU Timeout]"
-        except Exception as e:
-            return f"[WebGPU Error: {e}]"
+        # --- Fallback & Redundancy System ---
+        max_retries = 3
+        for attempt in range(max_retries):
+            fut = self.node_manager.submit_tensor(layer_id=0, tensor_data=tensor_bytes, quant_scale=quant_scale)
+            try:
+                result_bytes = asyncio.run_coroutine_threadsafe(asyncio.wait_for(fut, timeout=10.0), self._loop).result()
+                if torch and result_bytes:
+                    return self._deserialize_tensor(result_bytes)
+                return result_bytes
+            except asyncio.TimeoutError:
+                self.log.warning(f"WebGPU Tensor timeout, retrying ({attempt+1}/{max_retries})...")
+            except Exception as e:
+                self.log.warning(f"WebGPU Worker error: {e}, retrying ({attempt+1}/{max_retries})...")
+                
+        self.log.error("WebGPU inference failed after maximum retries.")
+        return "[WebGPU Timeout/Crash Prevention]"
 
     def generate(self, prompt: str, max_new_tokens: int = 128, **kwargs) -> Any:
         if kwargs.get("stream", False):
@@ -127,12 +144,12 @@ class WebGPUBackend(BaseLLMBackend):
         current_input = input_ids
         
         for step in range(max_new_tokens):
-            tensor_bytes = self._serialize_tensor(current_input) if torch else json.dumps(current_input).encode()
+            tensor_bytes, quant_scale = self._serialize_tensor(current_input) if torch else (json.dumps(current_input).encode(), 1.0)
             # Redundancy: Retries across multiple dynamic clients if node disconnected
             max_retries = 3
             res_bytes = None
             for attempt in range(max_retries):
-                fut = self.node_manager.submit_tensor(layer_id=step % 12, tensor_data=tensor_bytes)
+                fut = self.node_manager.submit_tensor(layer_id=step % 12, tensor_data=tensor_bytes, quant_scale=quant_scale)
                 try:
                     res_bytes = asyncio.run_coroutine_threadsafe(asyncio.wait_for(fut, timeout=10.0), self._loop).result()
                     break
@@ -174,11 +191,11 @@ class WebGPUBackend(BaseLLMBackend):
             
         current_input = input_ids
         for step in range(max_new_tokens):
-            tensor_bytes = self._serialize_tensor(current_input) if torch else json.dumps(current_input).encode()
+            tensor_bytes, quant_scale = self._serialize_tensor(current_input) if torch else (json.dumps(current_input).encode(), 1.0)
             max_retries = 3
             res_bytes = None
             for attempt in range(max_retries):
-                fut = self.node_manager.submit_tensor(layer_id=step % 12, tensor_data=tensor_bytes) 
+                fut = self.node_manager.submit_tensor(layer_id=step % 12, tensor_data=tensor_bytes, quant_scale=quant_scale) 
                 try:
                     res_bytes = asyncio.run_coroutine_threadsafe(asyncio.wait_for(fut, timeout=7.0), self._loop).result()
                     break
