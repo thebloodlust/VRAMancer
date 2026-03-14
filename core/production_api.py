@@ -887,10 +887,10 @@ def _register_routes(application: Flask, _run_with_timeout, queue_depth, queue_l
 
     @application.route('/api/models/load', methods=['POST', 'OPTIONS'])
     def load_model():
-        """Load a model into the pipeline.
-
-        Request body: {"model": "gpt2", "num_gpus": 2, "backend": "auto"}
-        """
+        """Load a model into the pipeline."""
+        if request.method == 'OPTIONS':
+            return '', 200
+            
         data = request.get_json(silent=True) or {}
         model_name = data.get('model')
         if not model_name:
