@@ -133,21 +133,33 @@ class WebGPUNodeManager:
                         if task_id in self.pending_tasks:
                             task = self.pending_tasks.pop(task_id)
                             self.clients[client_id]["busy"] = False
-                            # Enregistrer les FLOPS pour Prometheus
                             WEBGPU_FLOPS_TOTAL.inc(data.get("flops", 0))
-                            task.future.set_result(data.get("tensor_result"))
-                            
-        except ConnectionClosed:
-            pass
-        finally:
-            heartbeat_task.cancel()
-            await self._disconnect_client(client_id)
-
-    async def _task_dispatcher(self):
-        """Distribue les tâches de la file d'attente aux navigateurs disponibles."""
-        while self.is_running:
-            if not self.clients:
-                await asyncio.sleep(0.1)
+                            # Le tensor_result peut être base64 ou juste du texte
+                            res = data.get("tensor_result")
+                            if isinstance(res, str) and res.startswith("BASE64:"):
+                                import base64
+                                task.future.set_result(base64.b64decode(res[7:]))
+                            else:
+                                # Fallback vers encode
+                                task.future.set_result(str(res).encode())
+                                
+                elif isinstance(message, bytes):
+                    # Direct binary payload from WebGPU: [HeaderLen(4)][HeaderJSON][TensorData]
+                    if len(message) >= 4:
+                        header_len = struct.unpack('<I', message[:4])[0]
+                        if len(message) >= 4 + header_len:
+                            try:
+                                header = json.loads(message[4:4+header_len].decode('utf-8'))
+                                payload = message[4+header_len:]
+                                if header.get("type") == "result":
+                                    task_id = header.get("task_id")
+                                    if task_id in self.pending_tasks:
+                                        task = self.pending_tasks.pop(task_id)
+                                        self.clients[client_id]["busy"] = False
+                                        WEBGPU_FLOPS_TOTAL.inc(header.get("flops", 0))
+                                        task.future.set_result(payload)
+                            except json.JSONDecodeError:
+                                _log.error("Failed to decode binary header from WebGPU client.")
                 continue
 
             # Trouver un client libre

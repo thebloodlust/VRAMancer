@@ -128,12 +128,20 @@ class WebGPUBackend(BaseLLMBackend):
         
         for step in range(max_new_tokens):
             tensor_bytes = self._serialize_tensor(current_input) if torch else json.dumps(current_input).encode()
-            fut = self.node_manager.submit_tensor(layer_id=step % 12, tensor_data=tensor_bytes)
-            
-            try:
-                res_bytes = asyncio.run_coroutine_threadsafe(asyncio.wait_for(fut, timeout=15.0), self._loop).result()
-            except Exception as e:
-                self.log.error(f"WebGPU worker failed at step {step}: {e}")
+            # Redundancy: Retries across multiple dynamic clients if node disconnected
+            max_retries = 3
+            res_bytes = None
+            for attempt in range(max_retries):
+                fut = self.node_manager.submit_tensor(layer_id=step % 12, tensor_data=tensor_bytes)
+                try:
+                    res_bytes = asyncio.run_coroutine_threadsafe(asyncio.wait_for(fut, timeout=10.0), self._loop).result()
+                    break
+                except Exception as e:
+                    self.log.warning(f"WebGPU node disconnected/failed at step {step}, attempt {attempt+1}: {e}")
+                    time.sleep(0.1)
+                    
+            if res_bytes is None:
+                self.log.error(f"Swarm failure: All redundant attempts exhausted at step {step}")
                 break
                 
             next_token = 32
@@ -167,12 +175,18 @@ class WebGPUBackend(BaseLLMBackend):
         current_input = input_ids
         for step in range(max_new_tokens):
             tensor_bytes = self._serialize_tensor(current_input) if torch else json.dumps(current_input).encode()
-            fut = self.node_manager.submit_tensor(layer_id=step % 12, tensor_data=tensor_bytes) 
+            max_retries = 3
+            res_bytes = None
+            for attempt in range(max_retries):
+                fut = self.node_manager.submit_tensor(layer_id=step % 12, tensor_data=tensor_bytes) 
+                try:
+                    res_bytes = asyncio.run_coroutine_threadsafe(asyncio.wait_for(fut, timeout=7.0), self._loop).result()
+                    break
+                except Exception as e:
+                    self.log.warning(f"Rescheduling token {step} computation due to crash (attempt {attempt+1})...")
             
-            try:
-                res_bytes = asyncio.run_coroutine_threadsafe(asyncio.wait_for(fut, timeout=15.0), self._loop).result()
-            except Exception as e:
-                yield f"[WebGPU Error: Timeout client at step {step}]"
+            if res_bytes is None:
+                yield f"\n[WebGPU Crash Prevention: Stream halted after {max_retries} attempts]"
                 break
                 
             next_token = 32
