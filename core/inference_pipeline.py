@@ -168,11 +168,7 @@ class InferencePipeline:
             _logger.info("Loading model: %s (backend=%s)", model_name, self.backend_name)
             self.model_name = model_name
 
-            # 1. Select backend
-            from core.backends import select_backend
-            self.backend = select_backend(self.backend_name)
-
-            # 2. Init scheduler (detects GPUs)
+            # 1. Init scheduler (detects GPUs) first
             from core.scheduler import SimpleScheduler
             self.scheduler = SimpleScheduler(blocks=[])
 
@@ -181,6 +177,10 @@ class InferencePipeline:
                 num_gpus = len(gpus)
             self.num_gpus = min(num_gpus, len(gpus))
             _logger.info("GPUs: %d available, using %d", len(gpus), self.num_gpus)
+
+            # 2. Select backend
+            from core.backends import select_backend
+            self.backend = select_backend(model_name, backend=self.backend_name, num_gpus=self.num_gpus)
 
             # 3. Init GPU monitor
             try:
