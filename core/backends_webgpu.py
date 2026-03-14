@@ -9,7 +9,13 @@ import threading
 import asyncio
 import json
 import time
+import struct
 from typing import Any, List, Optional
+try:
+    import torch
+except ImportError:
+    torch = None
+
 from core.backends import BaseLLMBackend
 from core.logger import LoggerAdapter
 from core.network.webgpu_node import WebGPUNodeManager
@@ -18,46 +24,171 @@ class WebGPUBackend(BaseLLMBackend):
     def __init__(self):
         self.log = LoggerAdapter("backend.webgpu")
         self.model_name = None
+        self.tokenizer = None
         
         self.log.info("🌐 Initializing WebGPU Orchestrator (Production Mode)...")
         self.node_manager = WebGPUNodeManager(port=8081)
-        self.node_manager.start()
+        self.node_manager.start = self._start_node_manager
+        
+        self._loop = None
+        self._thread = threading.Thread(target=self._run_event_loop, daemon=True)
+        self._thread.start()
+        
+        while self._loop is None:
+            time.sleep(0.01)
+
+    def _run_event_loop(self):
+        self._loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self._loop)
+        
+        if hasattr(self.node_manager, "is_running"):
+            self.node_manager.is_running = True
+            
+        try:
+            import websockets
+            start_server = websockets.serve(self.node_manager._handler, "0.0.0.0", self.node_manager.port)
+            self._loop.run_until_complete(start_server)
+        except ImportError:
+            self.log.error("websockets is not installed. WebGPU clients will not connect.")
+            
+        self._loop.create_task(self.node_manager._task_dispatcher())
+        self.log.info(f"WebGPU WebSocket Server listening on 0.0.0.0:{self.node_manager.port}")
+        self._loop.run_forever()
+
+    def _start_node_manager(self):
+        pass
 
     def load_model(self, model_name: str, **kwargs):
         self.model_name = model_name
-        self.log.info(f"Model '{model_name}' mapped to WebGPU Distributed Backend.")
+        self.log.info(f"Model {model_name} mapped to WebGPU Distributed Backend.")
+        
+        try:
+            from transformers import AutoTokenizer
+            self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        except Exception as e:
+            self.log.warning(f"Could not load AutoTokenizer natively, falling back: {e}")
+            
         return {"name": model_name, "type": "webgpu_distributed"}
 
     def split_model(self, num_gpus: int, vram_per_gpu: List[int] = None):
-        # We don't split locally, we split across the web!
         return [self]
+
+    def _serialize_tensor(self, tensor) -> bytes:
+        if torch is None:
+            return b"dummy_tensor_data"
+        if not isinstance(tensor, torch.Tensor):
+            return b""
+        try:
+            return tensor.detach().cpu().to(torch.float32).numpy().tobytes()
+        except Exception:
+            return b""
+            
+    def _deserialize_tensor(self, data: bytes) -> Any:
+        if torch is None or not data:
+            return None
+        import numpy as np
+        try:
+            return torch.from_numpy(np.frombuffer(data, dtype=np.float32))
+        except Exception:
+            return None
 
     def infer(self, inputs: Any):
         if not self.node_manager.clients:
             return "[Error: No WebGPU workers connected via browser]"
-        # Pass dummy tensor data for now, this would normally be serialized pytorch tensors
-        fut = self.node_manager.submit_tensor(layer_id=0, tensor_data=b"dummy_tensor_data")
+            
+        tensor_bytes = self._serialize_tensor(inputs) if torch else b"dummy_tensor_data"
+        fut = self.node_manager.submit_tensor(layer_id=0, tensor_data=tensor_bytes)
         
-        # Async to Sync Bridge for PyTorch Model Forward pass
         try:
-            # Attend de manière synchrone le résultat asynchrone du thread WebGPU
-            loop = self.node_manager._loop if hasattr(self.node_manager, '_loop') else asyncio.get_event_loop()
-            result = asyncio.run_coroutine_threadsafe(asyncio.wait_for(fut, timeout=5.0), loop)
-            return result
+            result_bytes = asyncio.run_coroutine_threadsafe(asyncio.wait_for(fut, timeout=10.0), self._loop).result()
+            if torch and result_bytes:
+                return self._deserialize_tensor(result_bytes)
+            return result_bytes
         except asyncio.TimeoutError:
             self.log.error("WebGPU Tensor computation timed out.")
             return "[WebGPU Timeout]"
         except Exception as e:
             return f"[WebGPU Error: {e}]"
 
-    def generate(self, prompt: str, max_new_tokens: int = 128, **kwargs) -> str:
-        """Synchronous generation using the asynchronous WebGPU network."""
+    def generate(self, prompt: str, max_new_tokens: int = 128, **kwargs) -> Any:
+        if kwargs.get("stream", False):
+            return self.generate_stream(prompt, max_new_tokens, **kwargs)
+            
         clients_count = len(self.node_manager.clients)
         if not clients_count:
-            self.log.warning("No WebGPU browser nodes connected! Cannot compute.")
-            return "[WebGPU Error: Waiting for browsers to connect to the node...]"
+            raise RuntimeError("WebGPU: Waiting for browsers to connect.")
+            
+        if self.tokenizer:
+            input_ids = self.tokenizer.encode(prompt, return_tensors="pt")
+        else:
+            input_ids = [ord(c) for c in prompt]
+            
+        output_tokens = []
+        current_input = input_ids
         
-        # In a real scenario, we loop generating tokens and calling Swarm Attention
-        # via an async to sync bridge.
-        time.sleep(0.5) # Simulating Ping
-        return f"[Calculated by {clients_count} remote WebGPU browsers via Swarm Hologram] {prompt}... and then the AI woke up."
+        for step in range(max_new_tokens):
+            tensor_bytes = self._serialize_tensor(current_input) if torch else json.dumps(current_input).encode()
+            fut = self.node_manager.submit_tensor(layer_id=step % 12, tensor_data=tensor_bytes)
+            
+            try:
+                res_bytes = asyncio.run_coroutine_threadsafe(asyncio.wait_for(fut, timeout=15.0), self._loop).result()
+            except Exception as e:
+                self.log.error(f"WebGPU worker failed at step {step}: {e}")
+                break
+                
+            next_token = 32
+            if res_bytes and len(res_bytes) >= 4:
+                try:
+                    next_token = struct.unpack("<I", res_bytes[:4])[0]
+                except Exception:
+                    pass
+            output_tokens.append(next_token)
+            
+            if torch:
+                current_input = torch.tensor([[next_token]])
+            else:
+                current_input = [next_token]
+                
+        if self.tokenizer:
+            return self.tokenizer.decode(output_tokens, skip_special_tokens=True)
+        return "".join(chr(t) for t in output_tokens if 32 <= t <= 126)
+
+    def generate_stream(self, prompt: str, max_new_tokens: int = 128, **kwargs):
+        clients_count = len(self.node_manager.clients)
+        if not clients_count:
+            yield "[WebGPU Error: Waiting for browsers to connect to the node...]"
+            return
+            
+        if self.tokenizer:
+            input_ids = self.tokenizer.encode(prompt, return_tensors="pt")
+        else:
+            input_ids = [ord(c) for c in prompt]
+            
+        current_input = input_ids
+        for step in range(max_new_tokens):
+            tensor_bytes = self._serialize_tensor(current_input) if torch else json.dumps(current_input).encode()
+            fut = self.node_manager.submit_tensor(layer_id=step % 12, tensor_data=tensor_bytes) 
+            
+            try:
+                res_bytes = asyncio.run_coroutine_threadsafe(asyncio.wait_for(fut, timeout=15.0), self._loop).result()
+            except Exception as e:
+                yield f"[WebGPU Error: Timeout client at step {step}]"
+                break
+                
+            next_token = 32
+            if res_bytes and len(res_bytes) >= 4:
+                try:
+                    next_token = struct.unpack("<I", res_bytes[:4])[0]
+                except Exception:
+                    pass
+                    
+            if torch:
+                current_input = torch.tensor([[next_token]])
+            else:
+                current_input = [next_token]
+                
+            if self.tokenizer:
+                yield self.tokenizer.decode([next_token])
+            else:
+                if 32 <= next_token <= 126:
+                    yield chr(next_token)
