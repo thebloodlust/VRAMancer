@@ -405,7 +405,10 @@ def install_security(app):
         resp.headers['X-Frame-Options'] = 'DENY'
         resp.headers['X-XSS-Protection'] = '1; mode=block'
         resp.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
-        resp.headers['Content-Security-Policy'] = "default-src 'none'"
+        # CSP assoupli pour supporter le tableau de bord web, Tailwind CDN, les scripts inline etc.
+        resp.headers['Content-Security-Policy'] = (
+            "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: https://cdn.tailwindcss.com https://unpkg.com https://cdn.jsdelivr.net https://fonts.googleapis.com https://fonts.gstatic.com;"
+        )
 
         # HSTS — only meaningful behind TLS (production)
         if os.environ.get('VRM_PRODUCTION') == '1':
