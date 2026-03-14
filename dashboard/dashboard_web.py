@@ -35,6 +35,46 @@ except Exception as _sec_err:  # Fallback Windows / extraction incomplète
             print(f"[WARN] security layer indisponible: {_sec_err} -> fallback no-op")
 
 app = Flask(__name__)
+
+
+import logging
+from collections import deque
+import time
+
+# Ring buffer in memory to keep the last 200 logs for Supervision
+log_buffer = deque(maxlen=200)
+
+class WebsocketLogHandler(logging.Handler):
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            log_entry = {
+                "time": time.time(),
+                "level": record.levelname,
+                "module": record.module,
+                "msg": msg
+            }
+            log_buffer.append(log_entry)
+            # if socketio is present, broadcast it
+            if globals().get('socketio'):
+                socketio.emit('new_log', log_entry)
+        except Exception:
+            pass
+
+try:
+    global_logger = logging.getLogger("vramancer")
+    ws_handler = WebsocketLogHandler()
+    ws_handler.setFormatter(logging.Formatter('%(message)s'))
+    global_logger.addHandler(ws_handler)
+except Exception:
+    pass
+
+
+@app.route("/api/debug/logs")
+def api_debug_logs():
+    return jsonify(list(log_buffer))
+
+
 if SocketIO:
     socketio = SocketIO(app, cors_allowed_origins="*")
 else:
@@ -265,11 +305,22 @@ TEMPLATE = """
                     this.fetchLiveTasks();
                     setInterval(() => this.updateMockMetrics(), 2000);
                 },
-                updateMockMetrics() {
-                    // Simulate dynamic visual data for the Swarm
-                    this.metrics.activeNodes = Math.floor(Math.random() * 5) + 2;
-                    this.metrics.bandwidth = (Math.random() * 50 + 10).toFixed(1);
-                    this.metrics.tensorsProcessed += Math.floor(Math.random() * 10);
+                async updateMockMetrics() {
+                    try {
+                        const r = await fetch('/api/swarm/status');
+                        if (r.ok) {
+                            const data = await r.json();
+                            // Real metrics
+                            this.metrics.activeNodes = data.activeNodes;
+                            this.metrics.bandwidth = data.bandwidth;
+                            this.metrics.tensorsProcessed = data.tensorsProcessed;
+                            
+                            // Let's update the 3D Graph dynamically!
+                            if (window.update3DGraph) {
+                                window.update3DGraph(data.activeNodes);
+                            }
+                        }
+                    } catch(e) {}
                 },
                 async fetchLiveTasks() {
                     const logContainer = document.getElementById('live-logs');
@@ -634,6 +685,26 @@ def api_models_search():
 
     print(">>> RESULTS:", results)
     return jsonify({"results": results})
+
+
+@app.route("/api/swarm/status")
+def api_swarm_status():
+    try:
+        from core.metrics import WEBGPU_CONNECTED_CLIENTS, WEBGPU_FLOPS_TOTAL
+        clients = max(0, int(WEBGPU_CONNECTED_CLIENTS._value.get()))
+        flops = WEBGPU_FLOPS_TOTAL._value.get()
+        tensors = int(flops // 15000000) # estimation for visuals
+    except Exception:
+        clients = 0
+        flops = 0
+        tensors = 0
+
+    return jsonify({
+        "activeNodes": clients,
+        "flopsProcessed": flops,
+        "tensorsProcessed": tensors,
+        "bandwidth": round(clients * 1.5, 1) # simple fake proxy for visuals if nodes exist
+    })
 
 @app.route("/api/memory")
 def api_memory():
