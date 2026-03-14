@@ -885,7 +885,7 @@ def _register_routes(application: Flask, _run_with_timeout, queue_depth, queue_l
             logger.error("Benchmark failed: %s", e, exc_info=True)
             return jsonify({'error': str(e)}), 500
 
-    @application.route('/api/models/load', methods=['POST'])
+    @application.route('/api/models/load', methods=['POST', 'OPTIONS'])
     def load_model():
         """Load a model into the pipeline.
 
