@@ -450,7 +450,7 @@ BROWSER_TEMPLATE = """
             
             try {
                 // Utilise le header d'authentification Bearer testtoken commun au projet minimal
-                const response = await fetch('http://192.168.1.21:5000/api/models/load', { 
+                const response = await fetch(`http://${window.location.hostname}:5000/api/models/load`, {
                     method: 'POST', 
                     headers: {
                         'Content-Type': 'application/json',
