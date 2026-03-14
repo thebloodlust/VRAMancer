@@ -609,7 +609,7 @@ class TransferManager:
         """Transfer KV cache pages between GPUs for model parallelism.
 
         Optimized for LLM inference: transfers key and value caches
-        as a single fused operation when possible.
+        as a single fused (contigous) operation when possible via memory stacking.
 
         Args:
             source_gpu: Source device
@@ -623,17 +623,32 @@ class TransferManager:
         """
         results = []
 
-        if layer_ids is not None and _TORCH_AVAILABLE:
+        if not _TORCH_AVAILABLE:
+            return results
+
+        if layer_ids is not None:
             # Transfer only specific layers (partial KV migration)
+            import torch
             for lid in layer_ids:
                 k_slice = k_cache[lid] if k_cache.dim() > 1 else k_cache
                 v_slice = v_cache[lid] if v_cache.dim() > 1 else v_cache
-                results.append(self.send_activation(source_gpu, target_gpu, k_slice))
-                results.append(self.send_activation(source_gpu, target_gpu, v_slice))
+                
+                # OPTIMIZATION: Fuse K and V slices into a single contiguous tensor to halve PCIe transactions
+                if k_slice.shape == v_slice.shape:
+                    fused_kv = torch.stack([k_slice, v_slice], dim=0)
+                    results.append(self.send_activation(source_gpu, target_gpu, fused_kv))
+                else:
+                    results.append(self.send_activation(source_gpu, target_gpu, k_slice))
+                    results.append(self.send_activation(source_gpu, target_gpu, v_slice))
         else:
             # Transfer full KV cache
-            results.append(self.send_activation(source_gpu, target_gpu, k_cache))
-            results.append(self.send_activation(source_gpu, target_gpu, v_cache))
+            import torch
+            if k_cache.shape == v_cache.shape:
+                fused_kv = torch.stack([k_cache, v_cache], dim=0)
+                results.append(self.send_activation(source_gpu, target_gpu, fused_kv))
+            else:
+                results.append(self.send_activation(source_gpu, target_gpu, k_cache))
+                results.append(self.send_activation(source_gpu, target_gpu, v_cache))
 
         if self.verbose:
             total_bytes = sum(r.bytes_transferred for r in results)

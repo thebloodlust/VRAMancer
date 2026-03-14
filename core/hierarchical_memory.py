@@ -65,9 +65,41 @@ class HierarchicalMemoryManager:
                     except Exception:
                         pass
                     time.sleep(int(os.environ.get('VRM_AUTOSAVE_INTERVAL','30')))
-            _thr.Thread(target=_autosave, daemon=True).start()
+            _thr.Thread(target=_autosave, daemon=True, name="HMM_Autosave").start()
 
+        # Eviction Balancer Thread (CPU RAM <-> NVMe)
+        self._balancing = True
+        _thr.Thread(target=self._cpu_nvme_balancer_loop, daemon=True, name="L4_L5_Balancer").start()
     
+    def _cpu_nvme_balancer_loop(self):
+        """Monitors system RAM (L4) and proactively evicts cold blocks to NVMe (L5) to prevent OOM."""
+        import psutil
+        while self._balancing:
+            try:
+                vm = psutil.virtual_memory()
+                # If RAM usage exceeds 85%, start aggressive NVMe spilling
+                if vm.percent > 85.0:
+                    self.log.warning(f"⚠️ [Balancer] Host RAM at {vm.percent}%. Triggering L4 (CPU) -> L5 (NVMe) eviction...")
+                    with self._lock:
+                        # Find coldest L4 blocks
+                        l4_blocks = [bid for bid, data in self.registry.items() if data.get('current_tier') == 'L4']
+                        if not l4_blocks:
+                            continue
+                        # Sort by hot score (ascending) and last touch
+                        l4_blocks.sort(key=lambda bid: (self._hot_scores.get(bid, 0), self._last_touch.get(bid, 0)))
+                        
+                        target_evicts = max(1, len(l4_blocks) // 4) # Evict 25%
+                        for bid in l4_blocks[:target_evicts]:
+                            dummy_block = MemoryBlock(id=bid, size_mb=self.registry[bid].get('size_mb', 0))
+                            tensor = self._tensor_registry.get(bid)
+                            if tensor is not None:
+                                self.spill_to_nvme(dummy_block, tensor)
+                                self._tensor_registry[bid] = None # Remove from L4 referencing
+                                self.log.info(f"❄️ Evicted Block {bid} to NVMe (L5)")
+            except Exception as e:
+                self.log.error(f"CPU-NVMe Balancing loop error: {e}")
+            time.sleep(10.0)
+
     def _init_vtp(self):
         """Initialise le VRAMancer Transport Protocol (vtp_core.cpp) s'il est compilé."""
         try:

@@ -219,6 +219,25 @@ def split_model_into_blocks(model_name: str, num_gpus: int,
     n_layers = len(layers)
     _logger.info("Detected %d layers in %s", n_layers, model_name)
 
+    # ---------------------------------------------------------
+    # Asymmetric VLM / MoE Structural Isolation
+    # ---------------------------------------------------------
+    if hasattr(model, 'vision_model') and hasattr(model, 'language_model'):
+        _logger.info(f"👁️ VLM Detected ({model_name}). Isolating Vision Tower to GPU 0.")
+        # We put Vision Tower on exactly GPU 0, then split Language Tower on the rest
+        if num_gpus > 1:
+            vision_block = nn.Sequential(model.vision_model)
+            language_layers = _extract_layers(model.language_model)
+            if language_layers:
+                # The remaining GPUs share the language model
+                lang_vram = _get_free_vram_per_gpu(num_gpus)[1:] if use_free_vram else [1] * (num_gpus - 1)
+                lang_blocks = _split_by_vram(language_layers, lang_vram)
+                return [vision_block] + lang_blocks
+    
+    if getattr(model.config, "num_local_experts", 0) > 0:
+        _logger.info(f"🧠 MoE Model Detected ({model_name} with {model.config.num_local_experts} experts). Forcing VRAM-proportional splitting to prevent OOM on compute-heavy nodes.")
+        use_profiler = False # Prefer pure VRAM splitting for MoEs due to parameter bloat
+
     backend = detect_backend()
     if num_gpus <= 1 or backend == "cpu":
         return [nn.Sequential(*layers)]
