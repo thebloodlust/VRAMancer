@@ -407,7 +407,7 @@ def install_security(app):
         resp.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
         # CSP assoupli pour supporter le tableau de bord web, Tailwind CDN, les scripts inline etc.
         resp.headers['Content-Security-Policy'] = (
-            "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: https://cdn.tailwindcss.com https://unpkg.com https://cdn.jsdelivr.net https://fonts.googleapis.com https://fonts.gstatic.com http://*;"
+            "default-src * 'unsafe-inline' 'unsafe-eval' data: blob:;"
         )
 
         # HSTS — only meaningful behind TLS (production)
