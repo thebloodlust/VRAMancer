@@ -683,6 +683,24 @@ def _register_routes(application: Flask, _run_with_timeout, queue_depth, queue_l
             logger.error("Infer failed: %s", e, exc_info=True)
             return jsonify({'error': str(e)}), 500
 
+    @application.route('/v1/models', methods=['GET', 'OPTIONS'])
+    def openai_list_models():
+        """OpenAI-compatible models list endpoint."""
+        if request.method == 'OPTIONS':
+            return '', 200
+        models_data = []
+        if _registry.is_loaded():
+            models_data.append({
+                "id": _registry.model_name,
+                "object": "model",
+                "created": 1686935002,
+                "owned_by": "vramancer"
+            })
+        return jsonify({
+            "object": "list",
+            "data": models_data
+        })
+
     @application.route('/api/models', methods=['GET'])
     def list_models():
         """List loaded model info."""
