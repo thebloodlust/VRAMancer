@@ -108,6 +108,18 @@ class InferencePipeline:
         self.scheduler = None
         self.transfer_manager = None
         self.stream_manager = None
+        
+        # WebGPU Edge Swarm
+        try:
+            from core.network.webgpu_node import WebGPUNodeManager
+            self.webgpu_manager = WebGPUNodeManager(port=8560)
+            self.webgpu_manager.start()
+        except Exception as e:
+            import traceback
+            _logger.warning(f"Could not start WebGPUNodeManager: {e}")
+            _logger.error(traceback.format_exc())
+            self.webgpu_manager = None
+
         self.compute_engine = None
         self.discovery = None
         self.monitor = None
@@ -181,6 +193,8 @@ class InferencePipeline:
             # 2. Select backend
             from core.backends import select_backend
             self.backend = select_backend(model_name, backend=self.backend_name, num_gpus=self.num_gpus)
+            if hasattr(self, 'webgpu_manager') and hasattr(self.backend, 'transfer_manager'):
+                self.backend.webgpu_manager = self.webgpu_manager
 
             # 3. Init GPU monitor
             try:
