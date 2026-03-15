@@ -441,6 +441,41 @@ class HuggingFaceBackend(BaseLLMBackend):
                 if prev_gpu != curr_gpu:
                     x = self._transfer_to_device(x, prev_gpu, curr_gpu)
             
+            # --- WEB GPU INTERCEPT (Mobile/Edge Node routing) ---
+            if getattr(self, "webgpu_manager", None) is not None and len(self.webgpu_manager.clients) > 0 and idx == len(self.blocks) // 2:
+                import torch as pt
+                import asyncio
+                self.log.info(f"🚀 [WebGPU] Offloading block {idx} to Edge Swarm (Mobile)...")
+                tensor_bytes = x.detach().cpu().numpy().tobytes()
+                # Compat with 'dispatch_layer' or 'submit_tensor'
+                submit_fn = getattr(self.webgpu_manager, "dispatch_layer", getattr(self.webgpu_manager, "submit_tensor", None))
+                if submit_fn:
+                    future = submit_fn(layer_id=idx, tensor_data=tensor_bytes)
+                    try:
+                        # Since we are in sync land, we have to block on future (or if threadsafe wait)
+                        if asyncio.iscoroutine(future):
+                            res_bytes = asyncio.run(future)
+                        else:
+                            # Might be concurrent.futures.Future or asyncio.Future
+                            # Let's cleanly wait
+                            loop = asyncio.get_event_loop() if asyncio.get_event_loop().is_running() else asyncio.new_event_loop()
+                            if hasattr(future, "result") and not isinstance(future, asyncio.Future):
+                                res_bytes = future.result(timeout=5.0)
+                            else:
+                                res_bytes = loop.run_until_complete(future)
+                                
+                        if res_bytes:
+                            import numpy as np
+                            # Reconstruct tensor (assuming same shape and dtype float32/16)
+                            dt = x.cpu().numpy().dtype
+                            arr = np.frombuffer(res_bytes, dtype=dt).reshape(x.shape)
+                            x = pt.tensor(arr).to(x.device)
+                            self.log.info(f"✅ [WebGPU] Block {idx} returned from Edge.")
+                            continue
+                    except Exception as e:
+                        self.log.warning(f"⚠️ [WebGPU] Edge Swarm failed for block {idx}, reverting to local GPU: {e}")
+            # ----------------------------------------------------
+
             out = block(x)
             if isinstance(out, tuple):
                 x = out[0]
@@ -479,6 +514,37 @@ class HuggingFaceBackend(BaseLLMBackend):
                 if prev_gpu != curr_gpu:
                     hidden_states = self._transfer_to_device(hidden_states, prev_gpu, curr_gpu)
             
+            # --- WEB GPU INTERCEPT (Mobile/Edge Node routing) ---
+            if getattr(self, "webgpu_manager", None) is not None and len(self.webgpu_manager.clients) > 0 and idx == len(self.blocks) // 2:
+                import asyncio
+                import numpy as np
+                self.log.info(f"🚀 [WebGPU] Offloading KV-cache block {idx} to Edge Swarm (Mobile)...")
+                tensor_bytes = hidden_states.detach().cpu().numpy().tobytes()
+                submit_fn = getattr(self.webgpu_manager, "dispatch_layer", getattr(self.webgpu_manager, "submit_tensor", None))
+                if submit_fn:
+                    future = submit_fn(layer_id=idx, tensor_data=tensor_bytes)
+                    try:
+                        loop = asyncio.get_event_loop() if asyncio.get_event_loop().is_running() else asyncio.new_event_loop()
+                        if asyncio.iscoroutine(future):
+                            res_bytes = asyncio.run(future)
+                        else:
+                            if hasattr(future, "result") and not isinstance(future, asyncio.Future):
+                                res_bytes = future.result(timeout=5.0)
+                            else:
+                                res_bytes = loop.run_until_complete(future)
+                        
+                        if res_bytes:
+                            dt = hidden_states.cpu().numpy().dtype
+                            arr = np.frombuffer(res_bytes, dtype=dt)
+                            # the dummy network might return a smaller/different size, just handle basic shape if exact
+                            if arr.size == hidden_states.numel():
+                                arr = arr.reshape(hidden_states.shape)
+                                hidden_states = pt.tensor(arr).to(hidden_states.device)
+                                self.log.info(f"✅ [WebGPU] Block {idx} returned from Edge.")
+                    except Exception as e:
+                        self.log.warning(f"⚠️ [WebGPU] Edge Swarm failed for block {idx}, reverting to local GPU: {e}")
+            # ----------------------------------------------------
+
             block_past = past_key_values[idx] if past_key_values else None
             
             seq_length = hidden_states.shape[1]
@@ -572,13 +638,7 @@ class HuggingFaceBackend(BaseLLMBackend):
 
             # Take last token logits
             if logits.dim() >= 2:
-                next_logits = logits[:, -1, :]                curl -X POST "http://192.168.1.21:5000/api/models/load" \
-                     -H "Content-Type: application/json" \
-                     -H "Authorization: Bearer testtoken" \
-                     -d '{"model": "TinyLlama/TinyLlama-1.1B-Chat-v1.0", "num_gpus": 2, "backend": "huggingface"}'                    curl -X POST http://192.168.1.21:5000/api/models/load \
-                         -H "Content-Type: application/json" \
-                         -H "Authorization: Bearer testtoken" \
-                         -d '{"model": "Qwen/Qwen2.5-14B-Instruct", "gpu_memory_utilization": 0.50}'
+                next_logits = logits[:, -1, :]
             else:
                 next_logits = logits
 
