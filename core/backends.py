@@ -307,6 +307,16 @@ class HuggingFaceBackend(BaseLLMBackend):
 
     def split_model(self, num_gpus: int, vram_per_gpu: Optional[List[int]] = None):
         from core.model_splitter import split_model_into_blocks, assign_blocks_to_gpus
+        
+        # Strip all HuggingFace accelerate hooks because VRAMancer manages devices manually!
+        if self.model is not None:
+            try:
+                import accelerate
+                accelerate.hooks.remove_hook_from_module(self.model, recurse=True)
+                self.log.info("Hooks Accelerate retirés pour éviter les conflits de devices")
+            except Exception as e:
+                self.log.debug(f"Impossible de retirer les hooks Accelerate: {e}")
+
         if self.model is None:
             raise RuntimeError("Modèle non chargé — appeler load_model() d'abord")
         self.log.debug(f"Découpage en blocs sur {num_gpus} GPUs")
@@ -519,6 +529,12 @@ class HuggingFaceBackend(BaseLLMBackend):
         
         inputs = inputs.to(embed_dev)
         hidden_states = comp["embed"](inputs)
+        # Ensure hidden_states stays on embed_dev
+        if hasattr(hidden_states, "device") and hidden_states.device != embed_dev:
+            hidden_states = hidden_states.to(embed_dev)
+        # Ensure hidden_states stays on embed_dev
+        if hasattr(hidden_states, "device") and hidden_states.device != embed_dev:
+            hidden_states = hidden_states.to(embed_dev)
         
         if comp["pos_embed"] is not None:
             pos_dev = first_gpu_dev
