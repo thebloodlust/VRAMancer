@@ -213,6 +213,9 @@ class GPUMonitor:
         _logger.info("GPU polling started (interval=%.1fs)", interval)
 
     def stop_polling(self) -> None:
+        import sys
+        if sys.meta_path is None:
+            return
         """Stop background polling."""
         self._polling = False
         if self._poll_thread and self._poll_thread.is_alive():
