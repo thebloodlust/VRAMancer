@@ -16,6 +16,7 @@ import sys
 import platform
 import subprocess
 import urllib.request
+import ssl
 import tarfile
 import zipfile
 import shutil
@@ -51,7 +52,12 @@ def get_mamba_url():
 def download_with_progress(url, dest_path):
     print(f"Téléchargement de {url}...")
     try:
-        urllib.request.urlretrieve(url, dest_path)
+        
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        with urllib.request.urlopen(url, context=ctx) as response, open(dest_path, "wb") as out_file:
+            shutil.copyfileobj(response, out_file)
     except Exception as e:
         print(f"Erreur de téléchargement : {e}")
         sys.exit(1)
