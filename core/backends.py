@@ -577,10 +577,23 @@ class HuggingFaceBackend(BaseLLMBackend):
                 
         # 3. Final layer norm (on last GPU)
         if comp["final_norm"] is not None:
+            if hasattr(hidden_states, "device") and hidden_states.device.type == "cuda":
+                last_gpu_dev = f"cuda:{self.block_devices[-1]}"
+                hidden_states = hidden_states.to(last_gpu_dev)
             hidden_states = comp["final_norm"](hidden_states)
             
         # 4. LM head → logits (on last GPU)
-        logits = comp["lm_head"](hidden_states)
+        if comp["lm_head"] is not None:
+            if hasattr(hidden_states, "device") and hidden_states.device.type == "cuda":
+                last_gpu_dev = f"cuda:{self.block_devices[-1]}"
+                hidden_states = hidden_states.to(last_gpu_dev)
+            logits = comp["lm_head"](hidden_states)
+        elif comp["embed"] is not None:
+            # tied weights fallback if head was missing
+            if hasattr(hidden_states, "device") and hidden_states.device.type == "cuda":
+                first_gpu_dev = f"cuda:{self.block_devices[0]}"
+                hidden_states = hidden_states.to(first_gpu_dev)
+            logits = comp["embed"](hidden_states)
         
         if use_cache:
             return logits, all_presents
