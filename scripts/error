@@ -256,3 +256,21 @@ On va y aller manuellement, c'est infaillible à 100% :
    cd Desktop
    python vramancer_web_installer.py
 
+
+=============================================
+ON ARRÊTE LES COMMANDES POWERSHELL
+=============================================
+Les commandes PowerShell bugguent avec ta version de Windows.
+On va y aller manuellement, c est infaillible a 100% :
+
+1. Ouvre ton navigateur internet et copie cette adresse :
+   https://raw.githubusercontent.com/thebloodlust/VRAMancer/main/scripts/vramancer_web_installer.py
+
+2. Fais Clic droit n importe ou sur le texte de la page -> Enregistrer sous...
+
+3. Sauvegarde le fichier sur ton Bureau (laisse le nom vramancer_web_installer.py).
+
+4. Ouvre ton terminal (celui que tu veux) et tape ces deux commandes l une apres l autre :
+   cd Desktop
+   python vramancer_web_installer.py
+
