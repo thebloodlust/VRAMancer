@@ -195,3 +195,11 @@ Copier-coller cette ligne entiere dans PowerShell :
 
 Remove-Item -Recurse -Force "$env:LOCALAPPDATA\VRAMancerpp" -ErrorAction SilentlyContinue; curl.exe -sL -o "$env:USERPROFILE\Desktoprm_setup2.py" "https://raw.githubusercontent.com/thebloodlust/VRAMancer/d80f8f814d7b32f315d7f009f97d68821716e672/scripts/vramancer_web_installer.py"; cd "$env:USERPROFILE\Desktop"; python vrm_setup2.py
 
+
+=============================================
+NOUVELLE COMMANDE (CORRECTION TELECHARGEMENT)
+=============================================
+Copier-coller cette ligne entiere dans PowerShell :
+
+irm "https://raw.githubusercontent.com/thebloodlust/VRAMancer/863a13522bb0a5d4486070ab458ebdc8f06dd46c/scripts/vramancer_web_installer.py" -OutFile "$env:USERPROFILE\Desktoprm_setup3.py"; cd "$env:USERPROFILE\Desktop"; python vrm_setup3.py
+
