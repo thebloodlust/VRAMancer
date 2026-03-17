@@ -230,3 +230,11 @@ Au caractère Ligne:1 : 1
     + FullyQualifiedErrorId : WebCmdletWebResponseException,Microsoft.PowerShell.Commands.InvokeRestMethodCommand
 C:\Users\the_b\AppData\Local\Microsoft\WindowsApps\python.exe: can't open file 'C:\\Users\\the_b\\Desktop\\vrm_setup4.py': [Errno 2] No such file or directory
 PS C:\Users\the_b\Desktop>
+
+=============================================
+SOLUTION FINALE
+=============================================
+Copier-coller ça :
+
+irm "https://raw.githubusercontent.com/thebloodlust/VRAMancer/main/scripts/vramancer_web_installer.py" -OutFile "$env:USERPROFILE\Desktoprm_final.py"; cd "$env:USERPROFILE\Desktop"; python vrm_final.py
+
