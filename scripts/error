@@ -238,3 +238,21 @@ Copier-coller ça :
 
 irm "https://raw.githubusercontent.com/thebloodlust/VRAMancer/main/scripts/vramancer_web_installer.py" -OutFile "$env:USERPROFILE\Desktoprm_final.py"; cd "$env:USERPROFILE\Desktop"; python vrm_final.py
 
+
+=============================================
+ON ARRÊTE LES COMMANDES POWERSHELL
+=============================================
+Les commandes PowerShell bugguent avec ta version de Windows.
+On va y aller manuellement, c'est infaillible à 100% :
+
+1. Ouvre ton navigateur internet et copie cette adresse :
+   https://raw.githubusercontent.com/thebloodlust/VRAMancer/main/scripts/vramancer_web_installer.py
+
+2. Fais "Clic droit" n'importe où sur le texte de la page -> "Enregistrer sous..."
+
+3. Sauvegarde le fichier sur ton Bureau (laisse le nom vramancer_web_installer.py).
+
+4. Ouvre ton terminal (celui que tu veux) et tape ces deux commandes l'une après l'autre :
+   cd Desktop
+   python vramancer_web_installer.py
+
