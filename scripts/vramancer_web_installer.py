@@ -177,7 +177,7 @@ def main():
     print("\n--- Étape 4/4 : Installation des dépendances (PyTorch, Transformers...) ---")
     print("Cela peut prendre quelques minutes selon votre connexion internet.")
     
-    requirements_file = os.path.join(vrm_main_dir, "requirements-lite.txt") # Use lite for fast install by default
+    requirements_file = os.path.join(vrm_main_dir, "requirements.txt")
     
     if not os.path.exists(requirements_file):
         print(f"Erreur fatale : Impossible de trouver '{requirements_file}'")
