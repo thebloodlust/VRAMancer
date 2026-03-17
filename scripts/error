@@ -61,3 +61,11 @@ Traceback (most recent call last):
   File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.12_3.12.2800.0_x64__qbz5n2kfra8p0\Lib\subprocess.py", line 413, in check_call
     raise CalledProcessError(retcode, cmd)
 subprocess.CalledProcessError: Command '['C:\\Users\\the_b\\AppData\\Local\\VRAMancer\\mamba\\Library\\bin\\micromamba.exe', 'run', '-p', 'C:\\Users\\the_b\\AppData\\Local\\VRAMancer\\env', 'pip', 'install', '-r', 'C:\\Users\\the_b\\AppData\\Local\\VRAMancer\\app\\VRAMa
+
+=============================================
+NOUVELLE COMMANDE FORCEE (Repartir de zero)
+=============================================
+Copier-coller cette ligne entiere dans PowerShell :
+
+Remove-Item -Recurse -Force "$env:LOCALAPPDATA\VRAMancer" -ErrorAction SilentlyContinue; curl.exe -sL -o "$env:USERPROFILE\Desktop\vrm_setup.py" "https://raw.githubusercontent.com/thebloodlust/VRAMancer/640aaf7c50e01cd782b3f12e2b9e02f13e986dd6/scripts/vramancer_web_installer.py"; cd "$env:USERPROFILE\Desktop"; python vrm_setup.py
+
