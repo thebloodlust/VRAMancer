@@ -363,7 +363,18 @@ class HuggingFaceBackend(BaseLLMBackend):
                     self._components["pos_embed"] = self._components["pos_embed"].to(first_dev)
                 if self._components["final_norm"] is not None:
                     self._components["final_norm"] = self._components["final_norm"].to(last_dev)
+                
+                # Clone lm_head if its weights are tied to embed
                 if self._components["lm_head"] is not None:
+                    if self._components["embed"] is not None:
+                        import copy
+                        import torch.nn as nn
+                        if hasattr(self._components["lm_head"], "weight") and hasattr(self._components["embed"], "weight"):
+                            if self._components["lm_head"].weight is self._components["embed"].weight or \
+                               self._components["lm_head"].weight.data_ptr() == self._components["embed"].weight.data_ptr():
+                                new_head = copy.deepcopy(self._components["lm_head"])
+                                new_head.weight = nn.Parameter(self._components["lm_head"].weight.clone())
+                                self._components["lm_head"] = new_head
                     self._components["lm_head"] = self._components["lm_head"].to(last_dev)
         except Exception as e:
             self.log.warning(f"Placement GPU échoué (CPU fallback): {e}")
