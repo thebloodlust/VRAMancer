@@ -203,3 +203,11 @@ Copier-coller cette ligne entiere dans PowerShell :
 
 irm "https://raw.githubusercontent.com/thebloodlust/VRAMancer/863a13522bb0a5d4486070ab458ebdc8f06dd46c/scripts/vramancer_web_installer.py" -OutFile "$env:USERPROFILE\Desktoprm_setup3.py"; cd "$env:USERPROFILE\Desktop"; python vrm_setup3.py
 
+
+PS C:\Users\the_b\Desktop>    Remove-Item -Recurse -Force "$env:LOCALAPPDATA\VRAMancerpp" -ErrorAction SilentlyContinue; curl.exe -sL -o "$env:USERPROFILE\Desktoprm_setup2.py" "https://raw.githubusercontent.com/thebloodlust/VRAMancer/d80f8f814d7b32f315d7f009f97d68821716e672/scripts/vramancer_web_installer.py"; cd "$env:USERPROFILE\Desktop"; python vrm_setup2.py
+C:\Users\the_b\AppData\Local\Microsoft\WindowsApps\python.exe: can't open file 'C:\\Users\\the_b\\Desktop\\vrm_setup2.py': [Errno 2] No such file or directory
+PS C:\Users\the_b\Desktop>    Remove-Item -Recurse -Force "$env:LOCALAPPDATA\VRAMancerpp" -ErrorAction SilentlyContinue; curl.exe -sL -o "$env:USERPROFILE\Desktoprm_setup2.py" "https://raw.githubusercontent.com/thebloodlust/VRAMancer/d80f8f814d7b32f315d7f009f97d68821716e672/scripts/vramancer_web_installer.py"; cd "$env:USERPROFILE\Desktop"; python vrm_setup2.py
+C:\Users\the_b\AppData\Local\Microsoft\WindowsApps\python.exe: can't open file 'C:\\Users\\the_b\\Desktop\\vrm_setup2.py': [Errno 2] No such file or directory
+PS C:\Users\the_b\Desktop> irm "https://raw.githubusercontent.com/thebloodlust/VRAMancer/863a13522bb0a5d4486070ab458ebdc8f06dd46c/scripts/vramancer_web_installer.py" -OutFile "$env:USERPROFILE\Desktoprm_setup3.py"; cd "$env:USERPROFILE\Desktop"; python vrm_setup3.py
+C:\Users\the_b\AppData\Local\Microsoft\WindowsApps\python.exe: can't open file 'C:\\Users\\the_b\\Desktop\\vrm_setup3.py': [Errno 2] No such file or directory
+PS C:\Users\the_b\Desktop>
