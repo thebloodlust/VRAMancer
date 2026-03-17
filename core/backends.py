@@ -514,6 +514,15 @@ class HuggingFaceBackend(BaseLLMBackend):
         return x
 
     def _infer_with_kv_cache(self, inputs: Any, past_key_values: Optional[List] = None, use_cache: bool = False) -> Any:
+        import traceback
+        try:
+            return self.__infer_with_kv_cache_impl(inputs, past_key_values, use_cache)
+        except Exception as e:
+            print('EXCEPTION IN INFER WITH KV CACHE:')
+            traceback.print_exc()
+            raise e
+
+    def __infer_with_kv_cache_impl(self, inputs: Any, past_key_values: Optional[List] = None, use_cache: bool = False) -> Any:
         import torch as pt
         all_presents = [] if use_cache else None
         
@@ -543,7 +552,9 @@ class HuggingFaceBackend(BaseLLMBackend):
             except StopIteration:
                 pass
             seq_len = inputs.shape[1]
-            past_len = past_key_values[0][0][0].shape[-2] if past_key_values and past_key_values[0] else 0
+            past_len = 0
+            if past_key_values and past_key_values[0] and past_key_values[0][0] is not None:
+                past_len = past_key_values[0][0][0].shape[-2]
             pos = pt.arange(past_len, past_len + seq_len, dtype=pt.long, device=pos_dev).unsqueeze(0)
             
             pos_emb = comp["pos_embed"](pos)
@@ -682,7 +693,10 @@ class HuggingFaceBackend(BaseLLMBackend):
         if self.blocks is None or len(self.blocks) <= 1:
             if self.model is not None:
                 # Move correctly to model's execution device
-                device = getattr(self.model, "device", _torch.device("cpu"))
+                try:
+                    device = next(self.model.parameters()).device
+                except StopIteration:
+                    device = getattr(self.model, "device", _torch.device("cpu"))
                 input_ids = input_ids.to(device)
                 if attention_mask is not None:
                     attention_mask = attention_mask.to(device)
