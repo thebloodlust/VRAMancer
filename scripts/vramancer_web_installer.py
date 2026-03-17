@@ -167,12 +167,25 @@ def main():
         dirs = [d for d in os.listdir(app_dir) if os.path.isdir(os.path.join(app_dir, d))]
         if dirs:
             vrm_main_dir = os.path.join(app_dir, dirs[0])
+            
+    # Fallback if requirements is right in app_dir
+    if not os.path.exists(os.path.join(vrm_main_dir, "requirements-lite.txt")):
+        if os.path.exists(os.path.join(app_dir, "requirements-lite.txt")):
+            vrm_main_dir = app_dir
 
     # 4. Install Dependencies
     print("\n--- Étape 4/4 : Installation des dépendances (PyTorch, Transformers...) ---")
     print("Cela peut prendre quelques minutes selon votre connexion internet.")
     
     requirements_file = os.path.join(vrm_main_dir, "requirements-lite.txt") # Use lite for fast install by default
+    
+    if not os.path.exists(requirements_file):
+        print(f"Erreur fatale : Impossible de trouver '{requirements_file}'")
+        print(f"Contenu de {app_dir} : {os.listdir(app_dir)}")
+        if os.path.exists(vrm_main_dir):
+            print(f"Contenu de {vrm_main_dir} : {os.listdir(vrm_main_dir)}")
+        sys.exit(1)
+
     subprocess.check_call([mamba_exe, "run", "-p", env_dir, "python", "-m", "pip", "install", "-r", requirements_file])
 
     # Install specific torch version depending on OS (for GPU support)
