@@ -211,3 +211,12 @@ C:\Users\the_b\AppData\Local\Microsoft\WindowsApps\python.exe: can't open file '
 PS C:\Users\the_b\Desktop> irm "https://raw.githubusercontent.com/thebloodlust/VRAMancer/863a13522bb0a5d4486070ab458ebdc8f06dd46c/scripts/vramancer_web_installer.py" -OutFile "$env:USERPROFILE\Desktoprm_setup3.py"; cd "$env:USERPROFILE\Desktop"; python vrm_setup3.py
 C:\Users\the_b\AppData\Local\Microsoft\WindowsApps\python.exe: can't open file 'C:\\Users\\the_b\\Desktop\\vrm_setup3.py': [Errno 2] No such file or directory
 PS C:\Users\the_b\Desktop>
+
+=============================================
+LA BONNE COMMANDE (DESOLE POUR LE BUG D'ESPACE)
+=============================================
+Attention : supprime bien le fichier vrm_setup3 (s'il existe).
+Copie/colle exactement ça :
+
+irm "https://raw.githubusercontent.com/thebloodlust/VRAMancer/e1817300c0f4fce80509a20db721f5fb3d05ea4f/scripts/vramancer_web_installer.py" -OutFile "$env:USERPROFILE\Desktop\vrm_setup4.py"; cd "$env:USERPROFILE\Desktop"; python vrm_setup4.py
+
