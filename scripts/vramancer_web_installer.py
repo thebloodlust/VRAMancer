@@ -173,20 +173,20 @@ def main():
     print("Cela peut prendre quelques minutes selon votre connexion internet.")
     
     requirements_file = os.path.join(vrm_main_dir, "requirements-lite.txt") # Use lite for fast install by default
-    subprocess.check_call([mamba_exe, "run", "-p", env_dir, "pip", "install", "-r", requirements_file])
+    subprocess.check_call([mamba_exe, "run", "-p", env_dir, "python", "-m", "pip", "install", "-r", requirements_file])
 
     # Install specific torch version depending on OS (for GPU support)
     sys_os = platform.system().lower()
     if sys_os == "darwin":
         # Mac MPS
-        subprocess.check_call([mamba_exe, "run", "-p", env_dir, "pip", "install", "torch", "torchvision", "torchaudio"])
+        subprocess.check_call([mamba_exe, "run", "-p", env_dir, "python", "-m", "pip", "install", "torch", "torchvision", "torchaudio"])
     elif sys_os == "windows":
         # Windows CUDA (Assuming CUDA 12.1 for modern RTX cards)
         print("Configuration de NVIDIA CUDA 12.1...")
-        subprocess.check_call([mamba_exe, "run", "-p", env_dir, "pip", "install", "torch", "torchvision", "torchaudio", "--index-url", "https://download.pytorch.org/whl/cu121"])
+        subprocess.check_call([mamba_exe, "run", "-p", env_dir, "python", "-m", "pip", "install", "torch", "torchvision", "torchaudio", "--index-url", "https://download.pytorch.org/whl/cu121"])
     else:
         # Linux Default (CUDA 12.1)
-        subprocess.check_call([mamba_exe, "run", "-p", env_dir, "pip", "install", "torch", "torchvision", "torchaudio", "--index-url", "https://download.pytorch.org/whl/cu121"])
+        subprocess.check_call([mamba_exe, "run", "-p", env_dir, "python", "-m", "pip", "install", "torch", "torchvision", "torchaudio", "--index-url", "https://download.pytorch.org/whl/cu121"])
 
     # 5. Create Shortcuts
     print("\n--- Finalisation ---")
