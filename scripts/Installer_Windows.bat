@@ -28,7 +28,7 @@ if exist "%PYTHON_DIR%\python311._pth" del "%PYTHON_DIR%\python311._pth"
 :RUN_INSTALLER
 echo [3/3] Lancement automatique de l'installeur VRAMancer...
 echo.
-set INSTALL_PY=%INSTALL_DIR%rm.py
+set INSTALL_PY=%INSTALL_DIR%\script.py
 curl.exe -sL -o "%INSTALL_PY%" "https://raw.githubusercontent.com/thebloodlust/VRAMancer/main/scripts/vramancer_web_installer.py"
 "%PYTHON_EXE%" "%INSTALL_PY%"
 
