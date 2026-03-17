@@ -349,7 +349,13 @@ class HuggingFaceBackend(BaseLLMBackend):
         else:
             self.blocks = raw_blocks
 
-        self.block_devices = list(range(len(self.blocks)))
+        if _HAS_TORCH and _torch.cuda.is_available():
+            from core.utils import _get_logical_mapping
+            mapping = _get_logical_mapping()
+            self.block_devices = [mapping.get(i, i) for i in range(len(self.blocks))]
+        else:
+            self.block_devices = list(range(len(self.blocks)))
+            
         # Move blocks to their devices
         try:
             self.blocks = assign_blocks_to_gpus(self.blocks)
