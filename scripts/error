@@ -77,3 +77,113 @@ Copier-coller cette ligne entiere dans PowerShell :
 
 Remove-Item -Recurse -Force "$env:LOCALAPPDATA\VRAMancer" -ErrorAction SilentlyContinue; curl.exe -sL -o "$env:USERPROFILE\Desktoprm_setup.py" "https://raw.githubusercontent.com/thebloodlust/VRAMancer/640aaf7c50e01cd782b3f12e2b9e02f13e986dd6/scripts/vramancer_web_installer.py"; cd "$env:USERPROFILE\Desktop"; python vrm_setup.py
 
+
+
+PS C:\Users\the_b\Desktop> Remove-Item -Recurse -Force "$env:LOCALAPPDATA\VRAMancer" -ErrorAction SilentlyContinue; curl.exe -sL -o "$env:USERPROFILE\Desktoprm_setup.py" "https://raw.githubusercontent.com/thebloodlust/VRAMancer/640aaf7c50e01cd782b3f12e2b9e02f13e986dd6/scripts/vramancer_web_installer.py"; cd "$env:USERPROFILE\Desktop"; python vrm_setup.py
+==================================================
+🚀 VRAMancer Smart Installer - Configuration Rapide
+==================================================
+
+Dossier d'installation : C:\Users\the_b\AppData\Local\VRAMancer
+
+--- Étape 1/4 : Moteur Python intégré déjà présent.
+
+--- Étape 2/4 : Création de l'environnement virtuel IA ---
+Installation de Python 3.10 et des packages de base (Conda-Forge)...
+conda-forge/noarch                                          Using cache
+conda-forge/win-64                                          Using cache
+
+
+Transaction
+
+  Prefix: C:\Users\the_b\AppData\Local\VRAMancer\env
+
+  Updating specs:
+
+   - python=3.10
+
+
+  Package                 Version  Build               Channel           Size
+-------------------------------------------------------------------------------
+  Install:
+-------------------------------------------------------------------------------
+
+  + bzip2                   1.0.8  h0ad9c76_9          conda-forge     Cached
+  + ca-certificates     2026.2.25  h4c7d964_0          conda-forge     Cached
+  + libexpat                2.7.4  hac47afa_0          conda-forge     Cached
+  + libffi                  3.5.2  h3d046cb_0          conda-forge     Cached
+  + liblzma                 5.8.2  hfd05255_0          conda-forge     Cached
+  + libsqlite              3.52.0  hf5d6505_0          conda-forge     Cached
+  + libzlib                 1.3.1  h2466b09_2          conda-forge     Cached
+  + openssl                 3.6.1  hf411b9b_1          conda-forge     Cached
+  + packaging                26.0  pyhcf101f3_0        conda-forge     Cached
+  + pip                    26.0.1  pyh8b19718_0        conda-forge     Cached
+  + python                3.10.20  hc20f281_0_cpython  conda-forge     Cached
+  + setuptools             82.0.1  pyh332efcf_0        conda-forge     Cached
+  + tk                     8.6.13  h6ed50ae_3          conda-forge     Cached
+  + tzdata                  2025c  hc9c84f9_1          conda-forge     Cached
+  + ucrt             10.0.26100.0  h57928b3_0          conda-forge     Cached
+  + vc                       14.3  h41ae7f8_34         conda-forge     Cached
+  + vc14_runtime      14.44.35208  h818238b_34         conda-forge     Cached
+  + vcomp14           14.44.35208  h818238b_34         conda-forge     Cached
+  + wheel                  0.46.3  pyhd8ed1ab_0        conda-forge     Cached
+
+  Summary:
+
+  Install: 19 packages
+
+  Total download: 0 B
+
+-------------------------------------------------------------------------------
+
+
+
+Transaction starting
+Linking tzdata-2025c-hc9c84f9_1
+Linking ca-certificates-2026.2.25-h4c7d964_0
+Linking ucrt-10.0.26100.0-h57928b3_0
+Linking vcomp14-14.44.35208-h818238b_34
+Linking vc14_runtime-14.44.35208-h818238b_34
+Linking vc-14.3-h41ae7f8_34
+Linking tk-8.6.13-h6ed50ae_3
+Linking libffi-3.5.2-h3d046cb_0
+Linking openssl-3.6.1-hf411b9b_1
+Linking libzlib-1.3.1-h2466b09_2
+Linking libsqlite-3.52.0-hf5d6505_0
+Linking bzip2-1.0.8-h0ad9c76_9
+Linking liblzma-5.8.2-hfd05255_0
+Linking libexpat-2.7.4-hac47afa_0
+Linking python-3.10.20-hc20f281_0_cpython
+Linking packaging-26.0-pyhcf101f3_0
+Linking setuptools-82.0.1-pyh332efcf_0
+Linking wheel-0.46.3-pyhd8ed1ab_0
+Linking pip-26.0.1-pyh8b19718_0
+
+Transaction finished
+
+
+To activate this environment, use:
+
+    micromamba activate C:\Users\the_b\AppData\Local\VRAMancer\env
+
+Or to execute a single command in this environment, use:
+
+    micromamba run -p C:\Users\the_b\AppData\Local\VRAMancer\env mycommand
+
+
+--- Étape 3/4 : Téléchargement du cœur de VRAMancer ---
+Téléchargement de https://github.com/thebloodlust/VRAMancer/archive/refs/heads/main.zip...
+Extraction de C:\Users\the_b\AppData\Local\VRAMancer\vrm_source.zip...
+
+--- Étape 4/4 : Installation des dépendances (PyTorch, Transformers...) ---
+Cela peut prendre quelques minutes selon votre connexion internet.
+Le chemin d’accès spécifié est introuvable.
+Traceback (most recent call last):
+  File "C:\Users\the_b\Desktop\vrm_setup.py", line 202, in <module>
+    main()
+  File "C:\Users\the_b\Desktop\vrm_setup.py", line 176, in main
+    subprocess.check_call([mamba_exe, "run", "-p", env_dir, "python", "-m", "pip", "install", "-r", requirements_file])
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.12_3.12.2800.0_x64__qbz5n2kfra8p0\Lib\subprocess.py", line 413, in check_call
+    raise CalledProcessError(retcode, cmd)
+subprocess.CalledProcessError: Command '['C:\\Users\\the_b\\AppData\\Local\\VRAMancer\\mamba\\Library\\bin\\micromamba.exe', 'run', '-p', 'C:\\Users\\the_b\\AppData\\Local\\VRAMancer\\env', 'python', '-m', 'pip', 'install', '-r', 'C:\\Users\\the_b\\AppData\\Local\\VRAMancer\\app\\VRAMancer-main\\requirements-lite.txt']' returned non-zero exit status 3.
+PS C:\Users\the_b\Desktop>
