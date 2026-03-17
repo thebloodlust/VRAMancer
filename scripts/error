@@ -290,3 +290,26 @@ Traceback (most recent call last):
     from flask import Flask, jsonify, request, Response
 ModuleNotFoundError: No module named 'flask'
 Appuyez sur une touche pour continuer...
+
+=============================================
+CORRECTIF DU RACCOURCI (Mise a jour module manquant)
+=============================================
+1. Fais un "Clic droit" -> "Modifier" sur le raccourci VRAMancer.bat situe sur ton Bureau.
+2. Efface absolument tout le texte a l'interieur.
+3. Copie/Colle exactement ce gros bloc de code a la place :
+
+@echo off
+cd /d "C:\Users\the_b\AppData\Local\VRAMancer\app\VRAMancer-main"
+
+echo Installation des petits modules manquants (Flask, etc.)...
+"C:\Users\the_b\AppData\Local\VRAMancer\mamba\Library\bin\micromamba.exe" run -p "C:\Users\the_b\AppData\Local\VRAMancer\env" python -m pip install -r requirements.txt
+
+echo ------------------------------------------
+echo Lancement de VRAMancer NODE
+echo ------------------------------------------
+"C:\Users\the_b\AppData\Local\VRAMancer\mamba\Library\bin\micromamba.exe" run -p "C:\Users\the_b\AppData\Local\VRAMancer\env" python -m vramancer.main serve --host 0.0.0.0
+
+pause
+
+4. Fais "Fichier > Enregistrer" (Ctrl+S) et ferme le bloc-notes.
+5. Double-clique sur ton raccourci VRAMancer.bat sur ton bureau, c'est regle et pret a discuter avec l'EPYC !
