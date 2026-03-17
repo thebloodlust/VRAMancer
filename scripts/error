@@ -33,3 +33,31 @@ Copie et colle EXACTEMENT cette ligne dans ton PowerShell (clic droit pour colle
 irm "https://raw.githubusercontent.com/thebloodlust/VRAMancer/main/scripts/vramancer_web_installer.py" -OutFile "$env:USERPROFILE\Desktop\vramancer_web_installer.py"; cd "$env:USERPROFILE\Desktop"; python vramancer_web_installer.py
 
 ---------------------------------------------
+
+
+===============================================
+🚀 VRAMancer Smart Installer - Configuration Rapide
+==================================================
+
+Dossier d'installation : C:\Users\the_b\AppData\Local\VRAMancer
+
+--- Étape 1/4 : Moteur Python intégré déjà présent.
+
+--- Étape 2/4 : Création de l'environnement virtuel IA ---
+Environnement déjà créé.
+
+--- Étape 3/4 : Téléchargement du cœur de VRAMancer ---
+Téléchargement de https://github.com/thebloodlust/VRAMancer/archive/refs/heads/main.zip...
+Extraction de C:\Users\the_b\AppData\Local\VRAMancer\vrm_source.zip...
+
+--- Étape 4/4 : Installation des dépendances (PyTorch, Transformers...) ---
+Cela peut prendre quelques minutes selon votre connexion internet.
+Le chemin d’accès spécifié est introuvable.
+Traceback (most recent call last):
+  File "C:\Users\the_b\Desktop\vramancer_web_installer.py", line 202, in <module>
+    main()
+  File "C:\Users\the_b\Desktop\vramancer_web_installer.py", line 176, in main
+    subprocess.check_call([mamba_exe, "run", "-p", env_dir, "pip", "install", "-r", requirements_file])
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.12_3.12.2800.0_x64__qbz5n2kfra8p0\Lib\subprocess.py", line 413, in check_call
+    raise CalledProcessError(retcode, cmd)
+subprocess.CalledProcessError: Command '['C:\\Users\\the_b\\AppData\\Local\\VRAMancer\\mamba\\Library\\bin\\micromamba.exe', 'run', '-p', 'C:\\Users\\the_b\\AppData\\Local\\VRAMancer\\env', 'pip', 'install', '-r', 'C:\\Users\\the_b\\AppData\\Local\\VRAMancer\\app\\VRAMa
