@@ -510,15 +510,30 @@ class HuggingFaceBackend(BaseLLMBackend):
         comp = self._components
         first_gpu_dev = f"cuda:{self.block_devices[0]}" if (self.block_devices and pt.cuda.is_available()) else "cpu"
         
-        # 1. Embeddings (on first GPU)
-        inputs = inputs.to(first_gpu_dev)
+        # 1. Embeddings (Dynamic device resolution to support Accelerate)
+        embed_dev = first_gpu_dev
+        try:
+            embed_dev = next(comp["embed"].parameters()).device
+        except StopIteration:
+            pass
+        
+        inputs = inputs.to(embed_dev)
         hidden_states = comp["embed"](inputs)
         
         if comp["pos_embed"] is not None:
+            pos_dev = first_gpu_dev
+            try:
+                pos_dev = next(comp["pos_embed"].parameters()).device
+            except StopIteration:
+                pass
             seq_len = inputs.shape[1]
             past_len = past_key_values[0][0][0].shape[-2] if past_key_values and past_key_values[0] else 0
-            pos = pt.arange(past_len, past_len + seq_len, dtype=pt.long, device=first_gpu_dev).unsqueeze(0)
-            hidden_states = hidden_states + comp["pos_embed"](pos)
+            pos = pt.arange(past_len, past_len + seq_len, dtype=pt.long, device=pos_dev).unsqueeze(0)
+            
+            pos_emb = comp["pos_embed"](pos)
+            if hidden_states.device != pos_emb.device:
+                hidden_states = hidden_states.to(pos_emb.device)
+            hidden_states = hidden_states + pos_emb
             
         if comp["drop"] is not None:
             hidden_states = comp["drop"](hidden_states)
@@ -581,24 +596,36 @@ class HuggingFaceBackend(BaseLLMBackend):
             if use_cache:
                 all_presents.append(presents)
                 
-        # 3. Final layer norm (on last GPU)
+        # 3. Final layer norm (Dynamic device)
         if comp["final_norm"] is not None:
-            if hasattr(hidden_states, "device") and hidden_states.device.type == "cuda":
-                last_gpu_dev = f"cuda:{self.block_devices[-1]}"
-                hidden_states = hidden_states.to(last_gpu_dev)
+            norm_dev = None
+            try:
+                norm_dev = next(comp["final_norm"].parameters()).device
+            except StopIteration:
+                pass
+            if norm_dev is not None:
+                hidden_states = hidden_states.to(norm_dev)
             hidden_states = comp["final_norm"](hidden_states)
             
-        # 4. LM head → logits (on last GPU)
+        # 4. LM head → logits (Dynamic device)
         if comp["lm_head"] is not None:
-            if hasattr(hidden_states, "device") and hidden_states.device.type == "cuda":
-                last_gpu_dev = f"cuda:{self.block_devices[-1]}"
-                hidden_states = hidden_states.to(last_gpu_dev)
+            head_dev = None
+            try:
+                head_dev = next(comp["lm_head"].parameters()).device
+            except StopIteration:
+                pass
+            if head_dev is not None:
+                hidden_states = hidden_states.to(head_dev)
             logits = comp["lm_head"](hidden_states)
         elif comp["embed"] is not None:
             # tied weights fallback if head was missing
-            if hasattr(hidden_states, "device") and hidden_states.device.type == "cuda":
-                first_gpu_dev = f"cuda:{self.block_devices[0]}"
-                hidden_states = hidden_states.to(first_gpu_dev)
+            embed_dev = None
+            try:
+                embed_dev = next(comp["embed"].parameters()).device
+            except StopIteration:
+                pass
+            if embed_dev is not None:
+                hidden_states = hidden_states.to(embed_dev)
             logits = comp["embed"](hidden_states)
         
         if use_cache:
