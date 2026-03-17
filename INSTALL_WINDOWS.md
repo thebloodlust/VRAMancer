@@ -1,6 +1,22 @@
 # Installation VRAMancer — Windows
 
-## Installation rapide
+## Installation Rapide Infaillible (Nouveau)
+
+Fini les bugs avec Python et PowerShell ! Utilisez notre installateur 100% autonome.
+
+1. **Cliquez ici pour obtenir l'installateur :** 
+   👉 [Télécharger Installer_Windows.bat](https://raw.githubusercontent.com/thebloodlust/VRAMancer/main/scripts/Installer_Windows.bat)
+2. Faites un **Clic-droit sur la page > "Enregistrer sous..."**
+3. Sauvegardez le fichier `Installer_Windows.bat` sur votre **Bureau**.
+4. Double-cliquez sur `Installer_Windows.bat`.
+
+Il va automatiquement télécharger un Python portable, les paquets VRAMancer, PyTorch CUDA et créer un raccourci de lancement sur votre bureau !
+
+---
+
+## Installation Manuelle (Avancée)
+
+Si vous préférez contrôler l'environnement vous-même :
 
 ### 1. Pré-requis
 
