@@ -69,3 +69,11 @@ Copier-coller cette ligne entiere dans PowerShell :
 
 Remove-Item -Recurse -Force "$env:LOCALAPPDATA\VRAMancer" -ErrorAction SilentlyContinue; curl.exe -sL -o "$env:USERPROFILE\Desktop\vrm_setup.py" "https://raw.githubusercontent.com/thebloodlust/VRAMancer/640aaf7c50e01cd782b3f12e2b9e02f13e986dd6/scripts/vramancer_web_installer.py"; cd "$env:USERPROFILE\Desktop"; python vrm_setup.py
 
+
+=============================================
+NOUVELLE COMMANDE FORCEE (Repartir de zero)
+=============================================
+Copier-coller cette ligne entiere dans PowerShell :
+
+Remove-Item -Recurse -Force "$env:LOCALAPPDATA\VRAMancer" -ErrorAction SilentlyContinue; curl.exe -sL -o "$env:USERPROFILE\Desktoprm_setup.py" "https://raw.githubusercontent.com/thebloodlust/VRAMancer/640aaf7c50e01cd782b3f12e2b9e02f13e986dd6/scripts/vramancer_web_installer.py"; cd "$env:USERPROFILE\Desktop"; python vrm_setup.py
+
