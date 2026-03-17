@@ -24,3 +24,12 @@ Traceback (most recent call last):
     raise CalledProcessError(retcode, cmd)
 subprocess.CalledProcessError: Command '['C:\\Users\\the_b\\AppData\\Local\\VRAMancer\\mamba\\Library\\bin\\micromamba.exe', 'run', '-p', 'C:\\Users\\the_b\\AppData\\Local\\VRAMancer\\env', 'pip', 'install', '-r', 'C:\\Users\\the_b\\AppData\\Local\\VRAMancer\\app\\VRAMancer-main\\requirements-lite.txt']' returned non-zero exit status 3.
 PS C:\Users\the_b>
+
+---------------------------------------------
+===== COMMANDE POUR TON PC PORTABLE =====
+
+Copie et colle EXACTEMENT cette ligne dans ton PowerShell (clic droit pour coller) et appuie sur Entrée :
+
+irm "https://raw.githubusercontent.com/thebloodlust/VRAMancer/main/scripts/vramancer_web_installer.py" -OutFile "$env:USERPROFILE\Desktop\vramancer_web_installer.py"; cd "$env:USERPROFILE\Desktop"; python vramancer_web_installer.py
+
+---------------------------------------------
