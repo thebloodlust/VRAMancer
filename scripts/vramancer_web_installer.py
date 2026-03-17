@@ -162,6 +162,11 @@ def main():
     os.remove(app_zip)
 
     vrm_main_dir = os.path.join(app_dir, "VRAMancer-main")
+    if not os.path.exists(vrm_main_dir):
+        # Fix if github renames the zip folder to lowercase or something else
+        dirs = [d for d in os.listdir(app_dir) if os.path.isdir(os.path.join(app_dir, d))]
+        if dirs:
+            vrm_main_dir = os.path.join(app_dir, dirs[0])
 
     # 4. Install Dependencies
     print("\n--- Étape 4/4 : Installation des dépendances (PyTorch, Transformers...) ---")
