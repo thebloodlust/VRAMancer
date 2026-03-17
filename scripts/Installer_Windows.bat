@@ -23,15 +23,14 @@ echo [2/3] Extraction du systeme Python...
 if not exist "%PYTHON_DIR%" mkdir "%PYTHON_DIR%"
 tar.exe -xf "%INSTALL_DIR%\python.zip" -C "%PYTHON_DIR%"
 del "%INSTALL_DIR%\python.zip"
-
 if exist "%PYTHON_DIR%\python311._pth" del "%PYTHON_DIR%\python311._pth"
 
 :RUN_INSTALLER
 echo [3/3] Lancement automatique de l'installeur VRAMancer...
 echo.
-curl.exe -sL -o "%INSTALL_DIR%rm_installer.py" "https://raw.githubusercontent.com/thebloodlust/VRAMancer/main/scripts/vramancer_web_installer.py"
-
-"%PYTHON_EXE%" "%INSTALL_DIR%rm_installer.py"
+set INSTALL_PY=%INSTALL_DIR%rm.py
+curl.exe -sL -o "%INSTALL_PY%" "https://raw.githubusercontent.com/thebloodlust/VRAMancer/main/scripts/vramancer_web_installer.py"
+"%PYTHON_EXE%" "%INSTALL_PY%"
 
 echo.
 pause
