@@ -540,7 +540,17 @@ class HuggingFaceBackend(BaseLLMBackend):
 
         # 2. Process blocks sequentially
         for idx, block in enumerate(self.blocks):
-            if self.block_devices and idx > 0:
+            # Dynamic device resolution for the block
+            block_dev = None
+            try:
+                block_dev = next(block.parameters()).device
+            except StopIteration:
+                pass
+            
+            if block_dev is not None and hidden_states.device != block_dev:
+                hidden_states = hidden_states.to(block_dev)
+            elif self.block_devices and idx > 0:
+                # Fallback to static mapping if dynamic fails
                 prev_gpu = self.block_devices[idx - 1]
                 curr_gpu = self.block_devices[idx]
                 if prev_gpu != curr_gpu:
