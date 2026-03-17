@@ -603,3 +603,17 @@ Traceback (most recent call last):
     from flask import Flask, jsonify, request, Response
 ModuleNotFoundError: No module named 'flask'
 Appuyez sur une touche pour continuer...
+
+
+PS C:\Users\the_b> %LOCALAPPDATA%\VRAMancer\python_sys\python.exe -m vramancer.main serve --host 0.0.0.0 --port 5031
+%LOCALAPPDATA%\VRAMancer\python_sys\python.exe : Le module «%LOCALAPPDATA%» n’a pas pu être chargé. Pour plus
+d’informations, exécutez la commande «Import-Module %LOCALAPPDATA%».
+Au caractère Ligne:1 : 1
++ %LOCALAPPDATA%\VRAMancer\python_sys\python.exe -m vramancer.main serv ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (%LOCALAPPDATA%\..._sys\python.exe:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CouldNotAutoLoadModule
+
+PS C:\Users\the_b> C:\Users\the_b\AppData\Local\VRAMancer\python_sys\python.exe -m vramancer.main serve --host 0.0.0.0 --port 5031
+C:\Users\the_b\AppData\Local\VRAMancer\python_sys\python.exe: Error while finding module specification for 'vramancer.main' (ModuleNotFoundError: No module named 'vramancer')
+PS C:\Users\the_b> -m vramancer.main serve --host 0.0.0.0 --port 5031
