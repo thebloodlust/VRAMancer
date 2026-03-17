@@ -220,3 +220,13 @@ Copie/colle exactement ça :
 
 irm "https://raw.githubusercontent.com/thebloodlust/VRAMancer/e1817300c0f4fce80509a20db721f5fb3d05ea4f/scripts/vramancer_web_installer.py" -OutFile "$env:USERPROFILE\Desktop\vrm_setup4.py"; cd "$env:USERPROFILE\Desktop"; python vrm_setup4.py
 
+b\Desktop> irm "https://raw.githubusercontent.com/thebloodlust/VRAMancer/e1817300c0f4fce80509a20db721f5fb3d05ea4f/scripts/vramancer_web_installer.py" -OutFile "$env:USERPROFILE\Desktop\vrm_setup4.py"; cd "$env:USERPROFILE\Desktop"; python vrm_setup4.py
+irm : 404: Not Found
+Au caractère Ligne:1 : 1
++ irm "https://raw.githubusercontent.com/thebloodlust/VRAMancer/e181730 ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation : (System.Net.HttpWebRequest:HttpWebRequest) [Invoke-RestMethod], WebEx
+   ception
+    + FullyQualifiedErrorId : WebCmdletWebResponseException,Microsoft.PowerShell.Commands.InvokeRestMethodCommand
+C:\Users\the_b\AppData\Local\Microsoft\WindowsApps\python.exe: can't open file 'C:\\Users\\the_b\\Desktop\\vrm_setup4.py': [Errno 2] No such file or directory
+PS C:\Users\the_b\Desktop>
