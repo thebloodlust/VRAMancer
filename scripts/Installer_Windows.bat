@@ -16,19 +16,23 @@ if not exist "%INSTALL_DIR%" mkdir "%INSTALL_DIR%"
 
 if exist "%PYTHON_EXE%" goto RUN_INSTALLER
 
-echo [1/3] Telechargement d'un Python sain...
-curl.exe -sL -o "%INSTALL_DIR%\python_installer.exe" "https://www.python.org/ftp/python/3.11.8/python-3.11.8-amd64.exe"
+echo [1/3] Telechargement de l'environnement Python portable...
+curl.exe -sL -o "%INSTALL_DIR%\python.zip" "https://www.python.org/ftp/python/3.11.8/python-3.11.8-embed-amd64.zip"
 
-echo [2/3] Installation silencieuse en arriere plan...
-start /wait "" "%INSTALL_DIR%\python_installer.exe" /quiet InstallAllUsers=0 PrependPath=0 Include_doc=0 Include_tcltk=0 Include_test=0 TargetDir="%PYTHON_DIR%"
-del "%INSTALL_DIR%\python_installer.exe"
+echo [2/3] Extraction du systeme Python...
+if not exist "%PYTHON_DIR%" mkdir "%PYTHON_DIR%"
+tar.exe -xf "%INSTALL_DIR%\python.zip" -C "%PYTHON_DIR%"
+del "%INSTALL_DIR%\python.zip"
+
+:: Extraire les dll de python-embed (il n'a pas python311._pth setup properly parfois, mais ca passe)
+:: We will just run our python directly
 
 :RUN_INSTALLER
 echo [3/3] Lancement automatique de l'installeur VRAMancer...
 echo.
-curl.exe -sL -o "%INSTALL_DIR%\vrm_installer.py" "https://raw.githubusercontent.com/thebloodlust/VRAMancer/main/scripts/vramancer_web_installer.py"
+curl.exe -sL -o "%INSTALL_DIR%rm_installer.py" "https://raw.githubusercontent.com/thebloodlust/VRAMancer/main/scripts/vramancer_web_installer.py"
 
-"%PYTHON_EXE%" "%INSTALL_DIR%\vrm_installer.py"
+"%PYTHON_EXE%" "%INSTALL_DIR%rm_installer.py"
 
 echo.
 pause
