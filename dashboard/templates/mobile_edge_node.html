@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="fr" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VRAMancer Mobile Node</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+    <style>
+        body { background-color: #030712; color: #e5e7eb; font-family: 'Inter', sans-serif; }
+        .glass-panel { background: rgba(17, 24, 39, 0.8); backdrop-filter: blur(12px); border: 1px solid rgba(255,255,255,0.05); }
+    </style>
+</head>
+<body class="h-screen flex flex-col items-center justify-center p-4">
+
+    <div class="w-full max-w-md glass-panel rounded-2xl p-6 shadow-2xl">
+        <h2 class="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-emerald-400 flex items-center gap-2 mb-6">
+            <i class="ph-fill ph-cpu"></i> Mobile Edge Node
+        </h2>
+
+        <div class="space-y-4">
+            <!-- Hardware / Battery Info -->
+            <div class="bg-gray-900 border border-gray-800 rounded-lg p-4 text-sm">
+                <div class="flex justify-between items-center mb-2">
+                    <span class="text-gray-400">Puce NPU / GPU:</span>
+                    <span id="gpu-info" class="text-emerald-400 font-mono">Détection...</span>
+                </div>
+                <div class="flex justify-between items-center mb-2">
+                    <span class="text-gray-400">VRAM Estimée:</span>
+                    <span id="vram-info" class="text-blue-400 font-mono">-- GB</span>
+                </div>
+                <div class="flex justify-between items-center">
+                    <span class="text-gray-400">Batterie:</span>
+                    <span id="battery-info" class="text-yellow-400 font-mono flex items-center gap-1">
+                        <i class="ph ph-battery-warning"></i> --%
+                    </span>
+                </div>
+            </div>
+
+            <!-- Connection Setup -->
+            <div class="space-y-2">
+                <label class="text-xs text-gray-500 uppercase tracking-widest">Target Master IP</label>
+                <input type="text" id="master-ip" value="" placeholder="Ex: 192.168.x.x:8560" class="w-full bg-black border border-gray-700 rounded-lg px-3 py-2 text-white outline-none focus:border-blue-500">
+            </div>
+
+            <div class="space-y-2">
+                <label class="text-xs text-gray-500 uppercase tracking-widest">Trust Ring Token</label>
+                <input type="text" id="ring-token" placeholder="Optionnel (Groupe Privé)" class="w-full bg-black border border-gray-700 rounded-lg px-3 py-2 text-white outline-none focus:border-blue-500">
+            </div>
+
+            <button id="btn-connect" onclick="toggleCompute()" class="w-full py-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold transition flex items-center justify-center gap-2 mt-4">
+                <i class="ph-bold ph-power"></i> Activer WebNN / WebGPU
+            </button>
+            <p id="status-text" class="text-xs text-center text-gray-500 mt-2">En attente...</p>
+        </div>
+    </div>
+
+    <!-- Web Console log -->
+    <div class="w-full max-w-md mt-4 p-4 glass-panel rounded-xl h-40 overflow-y-auto font-mono text-[10px]" id="logs">
+        <div class="text-gray-600">VRAMancer Web Client Initialized...</div>
+    </div>
+
+    <script>
+        let ws = null;
+        let isComputing = false;
+        let wakeLock = null;
+        let batteryObj = null;
+
+        // Helpers
+        function logMsg(msg, color="text-gray-300") {
+            const el = document.getElementById('logs');
+            el.innerHTML += `<div class="${color}">> ${msg}</div>`;
+            el.scrollTop = el.scrollHeight;
+        }
+
+        // Hardware init
+        async function initHardware() {
+            // WebGPU / WebNN Mock Detection
+            let gpuName = "Mobile WebGL Fallback";
+            if (navigator.gpu) {
+                gpuName = "WebGPU (NPU/GPU Mobile)";
+                document.getElementById('gpu-info').innerText = gpuName;
+            } else {
+                document.getElementById('gpu-info').innerText = "WebNN / CPU";
+            }
+            
+            // Random heuristics based on deviceMemory if available
+            const ram = navigator.deviceMemory || 4;
+            let useableVram = (ram / 2).toFixed(1);
+            document.getElementById('vram-info').innerText = `${useableVram} GB (UMA)`;
+
+            // Battery API
+            if ('getBattery' in navigator) {
+                batteryObj = await navigator.getBattery();
+                updateBattery();
+                batteryObj.addEventListener('levelchange', updateBattery);
+                batteryObj.addEventListener('chargingchange', updateBattery);
+            } else {
+                document.getElementById('battery-info').innerHTML = "Non supporté par l'OS";
+            }
+        }
+
+        function updateBattery() {
+            if(!batteryObj) return;
+            const lvl = Math.round(batteryObj.level * 100);
+            const charging = batteryObj.charging;
+            
+            let icon = "ph-battery-full";
+            let color = "text-emerald-400";
+            if (lvl < 20) {
+                icon = "ph-battery-warning"; color = "text-red-400";
+            }
+            if (charging) icon = "ph-plug-charging";
+
+            document.getElementById('battery-info').innerHTML = `<i class="ph ${icon}"></i> ${lvl}%`;
+            document.getElementById('battery-info').className = `${color} font-mono flex items-center gap-1`;
+
+            // Auto-stop if battery is critically low and not charging
+            if (lvl < 20 && !charging && isComputing) {
+                logMsg("CRITICAL: Batterie faible. Arrêt de l'effort de calcul Swarm.", "text-red-500");
+                toggleCompute(); // Stop safely
+            }
+        }
+
+        async function requestWakeLock() {
+            try {
+                if ('wakeLock' in navigator) {
+                    wakeLock = await navigator.wakeLock.request('screen');
+                    logMsg("WakeLock acquis : Écran maintenu allumé pour le calcul.");
+                }
+            } catch (err) {
+                logMsg(`WakeLock erreur: ${err.name}`, "text-red-400");
+            }
+        }
+
+        function releaseWakeLock() {
+            if (wakeLock !== null) {
+                wakeLock.release().then(() => {
+                    wakeLock = null;
+                    logMsg("WakeLock relâché.");
+                });
+            }
+        }
+
+        function toggleCompute() {
+            const btn = document.getElementById('btn-connect');
+            if (isComputing) {
+                // STOP
+                if(ws) { ws.close(); ws = null; }
+                releaseWakeLock();
+                isComputing = false;
+                btn.innerHTML = `<i class="ph-bold ph-power"></i> Activer WebNN / WebGPU`;
+                btn.className = "w-full py-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold transition flex items-center justify-center gap-2 mt-4";
+                document.getElementById('status-text').innerText = "Déconnecté.";
+                logMsg("Calcul décentralisé stoppé.", "text-red-400");
+            } else {
+                // START
+                startConnection();
+            }
+        }
+
+        function startConnection() {
+            const ip = document.getElementById('master-ip').value || (window.location.hostname + ':8560');
+            const token = document.getElementById('ring-token').value;
+            const vram = (navigator.deviceMemory || 4) / 2;
+            const bat = batteryObj ? Math.round(batteryObj.level * 100) : 100;
+            
+            // Construire l'URL avec les specs matérielles pour l'Orchestrateur
+            let wsUrl = `ws://${ip}/?device=smartphone&vram=${vram}&battery=${bat}`;
+            if (token) wsUrl += `&token=${token}`;
+
+            logMsg(`Connexion au Master: ${ip}...`);
+
+            try {
+                ws = new WebSocket(wsUrl);
+                ws.onopen = async () => {
+                    isComputing = true;
+                    await requestWakeLock();
+                    const btn = document.getElementById('btn-connect');
+                    btn.innerHTML = `<i class="ph-bold ph-x-circle"></i> Stopper l'Inférence`;
+                    btn.className = "w-full py-3 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold transition flex items-center justify-center gap-2 mt-4";
+                    document.getElementById('status-text').innerText = "Connecté - Prêt à recevoir des Tensors";
+                    logMsg("Connecté au Swarm Ring avec succès !", "text-emerald-400");
+                };
+
+                ws.onmessage = (e) => {
+                    logMsg(`Reçu: Chunk (Layer Async)... Calcul simulé.`);
+                    // WebGPU emulation fake delay
+                    setTimeout(() => {
+                        if(ws && ws.readyState === WebSocket.OPEN) {
+                            ws.send(JSON.stringify({status: "done", target: "mock"}));
+                            logMsg(`Tenseur renvoyé au Master.`, "text-blue-300");
+                        }
+                    }, Math.random() * 500 + 200);
+                };
+
+                ws.onerror = (e) => {
+                    logMsg("Erreur WS object: " + Object.keys(e).join(","));
+
+                    console.error("WS Error:", e);
+                    logMsg(`Erreur WebSocket vers ${wsUrl} - Voir console`, "text-red-400");
+                };
+                ws.onclose = (e) => {
+                    logMsg(`Fermé! Code: ${e.code} | Raison: ${e.reason || "inconnue"}`, "text-orange-400");
+                    if(isComputing) toggleCompute(); 
+                };
+
+            } catch (e) {
+                logMsg("Erreur fatale: " + e.message, "text-red-500");
+            }
+        }
+
+        window.onload = initHardware;
+    </script>
+</body>
+</html>

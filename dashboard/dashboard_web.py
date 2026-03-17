@@ -779,6 +779,14 @@ def push_memory_periodic():  # pragma: no cover - thread
                 pass
         time.sleep(3)
 
+
+@app.route("/node")
+def api_mobile_node():
+    import os
+    path = os.path.join(os.path.dirname(__file__), "templates", "mobile_edge_node.html")
+    with open(path, "r") as f:
+        return f.read()
+
 def launch():
     import threading
     if socketio:
