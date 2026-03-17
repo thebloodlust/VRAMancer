@@ -187,3 +187,11 @@ Traceback (most recent call last):
     raise CalledProcessError(retcode, cmd)
 subprocess.CalledProcessError: Command '['C:\\Users\\the_b\\AppData\\Local\\VRAMancer\\mamba\\Library\\bin\\micromamba.exe', 'run', '-p', 'C:\\Users\\the_b\\AppData\\Local\\VRAMancer\\env', 'python', '-m', 'pip', 'install', '-r', 'C:\\Users\\the_b\\AppData\\Local\\VRAMancer\\app\\VRAMancer-main\\requirements-lite.txt']' returned non-zero exit status 3.
 PS C:\Users\the_b\Desktop>
+
+=============================================
+NOUVELLE COMMANDE (CORRECTION CHEMIN)
+=============================================
+Copier-coller cette ligne entiere dans PowerShell :
+
+Remove-Item -Recurse -Force "$env:LOCALAPPDATA\VRAMancerpp" -ErrorAction SilentlyContinue; curl.exe -sL -o "$env:USERPROFILE\Desktoprm_setup2.py" "https://raw.githubusercontent.com/thebloodlust/VRAMancer/d80f8f814d7b32f315d7f009f97d68821716e672/scripts/vramancer_web_installer.py"; cd "$env:USERPROFILE\Desktop"; python vrm_setup2.py
+
