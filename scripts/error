@@ -274,3 +274,19 @@ On va y aller manuellement, c est infaillible a 100% :
    cd Desktop
    python vramancer_web_installer.py
 
+
+Traceback (most recent call last):
+  File "C:\Users\the_b\AppData\Local\VRAMancer\env\lib\runpy.py", line 196, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+  File "C:\Users\the_b\AppData\Local\VRAMancer\env\lib\runpy.py", line 86, in _run_code
+    exec(code, run_globals)
+  File "C:\Users\the_b\AppData\Local\VRAMancer\app\VRAMancer-main\vramancer\main.py", line 471, in <module>
+    main()
+  File "C:\Users\the_b\AppData\Local\VRAMancer\app\VRAMancer-main\vramancer\main.py", line 99, in main
+    _cmd_serve(args)
+  File "C:\Users\the_b\AppData\Local\VRAMancer\app\VRAMancer-main\vramancer\main.py", line 165, in _cmd_serve
+    from core.production_api import app
+  File "C:\Users\the_b\AppData\Local\VRAMancer\app\VRAMancer-main\core\production_api.py", line 20, in <module>
+    from flask import Flask, jsonify, request, Response
+ModuleNotFoundError: No module named 'flask'
+Appuyez sur une touche pour continuer...
