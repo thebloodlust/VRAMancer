@@ -24,8 +24,7 @@ if not exist "%PYTHON_DIR%" mkdir "%PYTHON_DIR%"
 tar.exe -xf "%INSTALL_DIR%\python.zip" -C "%PYTHON_DIR%"
 del "%INSTALL_DIR%\python.zip"
 
-:: Extraire les dll de python-embed (il n'a pas python311._pth setup properly parfois, mais ca passe)
-:: We will just run our python directly
+if exist "%PYTHON_DIR%\python311._pth" del "%PYTHON_DIR%\python311._pth"
 
 :RUN_INSTALLER
 echo [3/3] Lancement automatique de l'installeur VRAMancer...
