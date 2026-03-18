@@ -338,7 +338,7 @@ def _cmd_discover(args):
         if nodes:
             for node in nodes:
                 print(f"  [{node.get('hostname', '?')}] {node}")
-                print(f"  [{hostname}] {info}")
+                
         else:
             print("  No nodes discovered (try a longer timeout or check network)")
     except Exception as e:
