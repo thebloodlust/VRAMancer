@@ -48,6 +48,14 @@ def get_logger(name: str = "vramancer", level: str = None) -> logging.Logger:
             
     if handler and not base.handlers:
         base.addHandler(handler)
+        
+    log_file = os.environ.get("VRAMANCER_LOG_FILE") or os.environ.get("VRM_LOG_FILE")
+    if log_file:
+        file_handler = logging.FileHandler(log_file)
+        fmt = "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+        file_handler.setFormatter(logging.Formatter(fmt))
+        base.addHandler(file_handler)
+
     base.propagate = False
     _LOGGER = base
     return base.getChild(name)
