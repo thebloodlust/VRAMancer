@@ -1,0 +1,7 @@
+# Sur la machine Windows (Worker), exécutez ces commandes dans PowerShell :
+git pull
+
+$env:VRM_API_TOKEN="mon_super_secret_cluster"
+$env:VRAMANCER_LOG="DEBUG"
+$env:VRM_LOG_FILE="windows_worker.log"
+python -m vramancer serve --host 0.0.0.0 --port 8000
