@@ -234,11 +234,19 @@ def nodes_info():
         try:
             import torch
             if torch.cuda.is_available():
-                props = torch.cuda.get_device_properties(0)
+                total_vram = 0
+                gpu_count = torch.cuda.device_count()
+                names = []
+                for i in range(gpu_count):
+                    props = torch.cuda.get_device_properties(i)
+                    total_vram += props.total_memory
+                    if props.name not in names:
+                        names.append(props.name)
+                        
                 gpu_data = {
-                    'name': props.name,
-                    'vram': round(props.total_memory / (1024**2)),
-                    'count': torch.cuda.device_count(),
+                    'name': " + ".join(names) if names else "Multiple GPUs",
+                    'vram': round(total_vram / (1024**2)),
+                    'count': gpu_count,
                 }
         except Exception:
             pass
