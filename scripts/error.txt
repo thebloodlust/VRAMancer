@@ -1,7 +1,37 @@
-# Sur la machine Windows (Worker), exécutez ces commandes dans PowerShell :
+# COMMANDES A LANCER POUR LE CLUSTER VRAMANCER
+
+# ---------------------------------------------------------
+# 1. SUR LE SERVEUR LINUX (Maître, bi-GPU)
+# ---------------------------------------------------------
 git pull
 
-$env:VRM_API_TOKEN="mon_super_secret_cluster"
-$env:VRAMANCER_LOG="DEBUG"
-$env:VRM_LOG_FILE="windows_worker.log"
+# Remplacez l'adresse IP par celle de votre PC Windows !
+VRM_API_TOKEN="mon_super_secret_cluster" \
+VRM_PEER_IPS="METTEZ_L_IP_DU_PC_WINDOWS_ICI" \
+VRAMANCER_LOG=DEBUG \
 python -m vramancer serve --host 0.0.0.0 --port 8000
+
+
+# ---------------------------------------------------------
+# 2. SUR LE PC WINDOWS (Worker, RTX 4060)
+# ---------------------------------------------------------
+git pull
+
+# Lignes a mettre a la fin de votre fichier "fix_windows.bat" 
+# en remplacant l'adresse IP par celle de votre serveur Linux :
+set VRM_API_TOKEN="mon_super_secret_cluster"
+set VRM_PEER_IPS="METTEZ_L_IP_DU_LINUX_ICI"
+set VRAMANCER_LOG=DEBUG
+
+"%PYEXE%" vramancer/main.py serve --host 0.0.0.0 --port 8000
+pause
+
+
+# ---------------------------------------------------------
+# 3. POUR TESTER LE CHARGEMENT (Dans un autre terminal Linux)
+#    (Une fois que le noeud Windows est detecte dans les logs)
+# ---------------------------------------------------------
+curl -X POST http://127.0.0.1:8000/api/models/load \
+     -H "Content-Type: application/json" \
+     -H "Authorization: Bearer mon_super_secret_cluster" \
+     -d '{"model": "gpt2"}'
