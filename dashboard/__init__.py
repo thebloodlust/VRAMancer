@@ -1,7 +1,7 @@
 # Rend le package 'dashboard' importable et expose les interfaces principales
 
 try:
-    from .dashboard_cli import launch as launch_cli_dashboard  # type: ignore
+    from .cli_dashboard import launch as launch_cli_dashboard  # type: ignore
 except Exception:
     def launch_cli_dashboard():  # pragma: no cover
         print("CLI dashboard non disponible")
