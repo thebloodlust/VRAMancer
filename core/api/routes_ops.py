@@ -7,7 +7,7 @@ These routes don't require inference state (_run_with_timeout, queue, etc.).
 import os
 import time
 
-from flask import Blueprint, jsonify, Response
+from flask import Blueprint, jsonify, Response, request
 
 from core.logger import get_logger
 
@@ -221,9 +221,37 @@ def system_info():
         return jsonify({'error': str(e)}), 500
 
 
-@ops_bp.route('/api/nodes')
+@ops_bp.route('/api/nodes', methods=['GET', 'POST'])
 def nodes_info():
-    """Cluster node information."""
+    """Cluster node information and manual registration."""
+    if request.method == 'POST':
+        # Accept explicit node registration via POST to bypass UDP issues
+        try:
+            data = request.json or {}
+            if not data.get("hostname"):
+                return jsonify({'error': 'Missing "hostname" field'}), 400
+                
+            data["timestamp"] = time.time()
+            data["discovery"] = "http"
+            
+            # Inject into discovery registry if accessible
+            if _registry_ref and hasattr(_registry_ref, 'discovery') and _registry_ref.discovery:
+                _registry_ref.discovery._register_node(data)
+                return jsonify({"status": "ok", "message": f"Node {data['hostname']} joined via HTTP"})
+            
+            # Fallback to pipeline discovery
+            if _registry_ref:
+                pipeline = _registry_ref.get()
+                if pipeline and hasattr(pipeline, "discovery") and pipeline.discovery:
+                    pipeline.discovery._register_node(data)
+                    return jsonify({"status": "ok", "message": f"Node {data['hostname']} joined via HTTP"})
+            
+            return jsonify({"error": "Global discovery service not initialized"}), 500
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return jsonify({"error": str(e)}), 500
+
     try:
         import psutil
         import platform

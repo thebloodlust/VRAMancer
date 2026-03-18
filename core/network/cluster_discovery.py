@@ -439,8 +439,19 @@ class ClusterDiscovery:
                     for peer_ip in peer_ips.split(","):
                         peer_ip = peer_ip.strip()
                         if peer_ip:
+                            # 1. UDP Unicast
                             try:
                                 sock.sendto(msg, (peer_ip, self.port))
+                            except Exception:
+                                pass
+                                
+                            # 2. HTTP POST fallback (si UDP est bloqué au niveau firewall)
+                            try:
+                                import requests
+                                target_port = os.environ.get("VRM_API_PORT", "8000")
+                                requests.post(f"http://{peer_ip}:{target_port}/api/nodes", 
+                                             json=self._local_info, 
+                                             timeout=1.0)
                             except Exception:
                                 pass
 

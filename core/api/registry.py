@@ -19,6 +19,15 @@ class PipelineRegistry:
     def __init__(self):
         self._lock = threading.RLock()
         self._pipeline = None
+        self.discovery = None
+        
+        # Start global cluster discovery immediately so node is discoverable
+        try:
+            from core.network.cluster_discovery import ClusterDiscovery
+            self.discovery = ClusterDiscovery(heartbeat_interval=5)
+            self.discovery.start()
+        except ImportError:
+            pass
 
     # ------------------------------------------------------------------
     # Core lifecycle
@@ -151,11 +160,14 @@ class PipelineRegistry:
 
     def get_nodes(self) -> dict:
         with self._lock:
+            nodes = {}
+            if self.discovery:
+                nodes.update(self.discovery.get_nodes())
             if (self._pipeline
                     and hasattr(self._pipeline, 'discovery')
                     and self._pipeline.discovery):
-                return self._pipeline.get_nodes()
-        return {}
+                nodes.update(self._pipeline.get_nodes())
+            return nodes
 
 
 __all__ = ["PipelineRegistry"]
