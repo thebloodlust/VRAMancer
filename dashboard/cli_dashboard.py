@@ -18,7 +18,8 @@ def launch():
     print("=" * 80)
     print()
     
-    api_url = "http://localhost:5030"
+    port = os.environ.get("VRM_API_PORT", "8000")
+    api_url = f"http://localhost:{port}"
     
     while True:
         try:
