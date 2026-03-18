@@ -432,6 +432,18 @@ class ClusterDiscovery:
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
                 sock.settimeout(2.0)
                 sock.sendto(msg, ("<broadcast>", self.port))
+                
+                # Envoi direct vers IPs spécifiques (contournement blocage réseaux locaux)
+                peer_ips = os.environ.get("VRM_PEER_IPS", "")
+                if peer_ips:
+                    for peer_ip in peer_ips.split(","):
+                        peer_ip = peer_ip.strip()
+                        if peer_ip:
+                            try:
+                                sock.sendto(msg, (peer_ip, self.port))
+                            except Exception:
+                                pass
+
                 sock.close()
                 self._stats["heartbeats_sent"] += 1
             except Exception as exc:
