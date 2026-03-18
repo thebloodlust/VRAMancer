@@ -336,7 +336,8 @@ def _cmd_discover(args):
         nodes = disc.get_nodes()
         disc.stop()
         if nodes:
-            for hostname, info in nodes.items():
+            for node in nodes:
+                print(f"  [{node.get('hostname', '?')}] {node}")
                 print(f"  [{hostname}] {info}")
         else:
             print("  No nodes discovered (try a longer timeout or check network)")
