@@ -30,12 +30,14 @@ def launch():
                 
                 # Infos GPU
                 try:
-                    gpu_response = requests.get(f"{api_url}/api/gpu/info", timeout=5)
+                    gpu_response = requests.get(f"{api_url}/api/gpu", timeout=5)
                     if gpu_response.status_code == 200:
                         gpu_data = gpu_response.json()
-                        print(f"📊 GPUs detectes: {len(gpu_data.get('gpus', []))}")
-                        for gpu in gpu_data.get('gpus', []):
-                            print(f"   - {gpu.get('name', 'GPU')} ({gpu.get('memory_used', 0)}MB/{gpu.get('memory_total', 0)}MB)")
+                        print(f"📊 GPUs detectes: {len(gpu_data.get('devices', []))}")
+                        for gpu in gpu_data.get('devices', []):
+                            used_mb = int(gpu.get('memory_used', 0) / (1024**2))
+                            total_mb = int(gpu.get('memory_total', 0) / (1024**2))
+                            print(f"   - {gpu.get('name', 'GPU')} ({used_mb}MB/{total_mb}MB)")
                 except:
                     print("⚠️  Impossible de recuperer les infos GPU")
                 
