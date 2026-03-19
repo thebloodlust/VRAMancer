@@ -9,14 +9,18 @@ import sys
 import time
 import argparse
 import logging
+import statistics
+import threading
 from typing import List, Dict, Any
 from concurrent.futures import ThreadPoolExecutor
 
+# A-1: Force minimal test stub off BEFORE imports
+os.environ["VRM_MINIMAL_TEST"] = "0"
+os.environ["VRM_TEST_MODE"] = "0"
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from core.inference_pipeline import InferencePipeline, get_pipeline
-from core.backends import select_backend
-from core.config import resolve_config
+from core.inference_pipeline import InferencePipeline
 from core.monitor import GPUMonitor
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -26,8 +30,6 @@ def run_benchmark(model_name: str, num_gpus: int, prompts: List[str], concurrenc
     logger.info(f"Starting benchmark for {model_name} on {num_gpus} GPUs (Concurrency: {concurrency})")
     
     # Initialize pipeline
-    config = resolve_config()
-    os.environ["VRM_MINIMAL_TEST"] = "0" # Disable minimial test stub
     try:
         pipeline = InferencePipeline.load(model_name, num_gpus)
     except Exception as e:
@@ -37,6 +39,23 @@ def run_benchmark(model_name: str, num_gpus: int, prompts: List[str], concurrenc
     monitor = GPUMonitor()
     initial_vram = monitor.vram_usage()
     logger.info(f"Initial VRAM usage: {initial_vram}")
+
+    peak_vram_recorded = [0.0]
+    stop_sampling = threading.Event()
+    
+    def sample_vram():
+        while not stop_sampling.is_set():
+            try:
+                usage = monitor.vram_usage()
+                for gpu_id, mem in usage.items():
+                    if mem.get("used", 0) > peak_vram_recorded[0]:
+                        peak_vram_recorded[0] = mem.get("used", 0)
+            except Exception:
+                pass
+            time.sleep(0.1)
+            
+    vram_thread = threading.Thread(target=sample_vram, daemon=True)
+    vram_thread.start()
 
     results = []
     start_time = time.time()
@@ -59,16 +78,29 @@ def run_benchmark(model_name: str, num_gpus: int, prompts: List[str], concurrenc
         for f in futures:
             results.append(f.result())
 
+    stop_sampling.set()
+    vram_thread.join()
+
     total_time = time.time() - start_time
     total_tokens = sum(r["tokens"] for r in results if r["success"])
-    peak_vram = monitor.vram_usage()
+    peak_vram = peak_vram_recorded[0]
+    
+    latencies = [r["latency"] for r in results if r["success"]]
+    latencies.sort()
+    
+    p50 = statistics.quantiles(latencies, n=100)[49] if len(latencies) >= 2 else (latencies[0] if latencies else 0)
+    p95 = statistics.quantiles(latencies, n=100)[94] if len(latencies) >= 2 else (latencies[-1] if latencies else 0)
+    p99 = statistics.quantiles(latencies, n=100)[98] if len(latencies) >= 2 else (latencies[-1] if latencies else 0)
 
     metrics = {
         "status": "success",
         "total_time_s": total_time,
         "total_tokens_generated": total_tokens,
         "throughput_tokens_per_sec": total_tokens / total_time if total_time > 0 else 0,
-        "avg_latency_s": sum(r["latency"] for r in results) / len(results) if results else 0,
+        "avg_latency_s": sum(latencies) / len(latencies) if latencies else 0,
+        "p50_latency_s": p50,
+        "p95_latency_s": p95,
+        "p99_latency_s": p99,
         "peak_vram": peak_vram,
         "initial_vram": initial_vram
     }
