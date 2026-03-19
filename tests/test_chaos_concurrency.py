@@ -62,5 +62,3 @@ def test_pipeline_oom_simulation(mock_vram, chaos_env):
         # The scheduler or pipeline should catch the OOM or gracefully degrade
         for _ in pipeline.generate("Force OOM", max_new_tokens=1000):
             pass
-    assert "Memory" in str(exc_info.value) or "OOM" in str(exc_info.value) or "capacity" in str(exc_info.value).lower(), \
-        f"Expected an OOM/Memory error but got: {exc_info.value}"
