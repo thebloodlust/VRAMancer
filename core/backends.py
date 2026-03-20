@@ -51,6 +51,10 @@ _LM_HEAD_PATTERNS = [
 _DROP_PATTERNS = [
     ["transformer", "drop"],        # GPT-2 dropout
 ]
+_ROTARY_EMBED_PATTERNS = [
+    ["model", "rotary_emb"],        # Llama, Mistral (transformers >= 4.46)
+    ["rotary_emb"],                 # Some variants
+]
 
 
 def _get_submodule(model: Any, path: list) -> Optional[Any]:
@@ -71,7 +75,7 @@ def _extract_model_components(model: Any) -> dict:
     Values are None if not found.
     """
     components = {"embed": None, "pos_embed": None, "final_norm": None,
-                  "lm_head": None, "drop": None}
+                  "lm_head": None, "drop": None, "rotary_emb": None}
     for path in _EMBED_PATTERNS:
         mod = _get_submodule(model, path)
         if mod is not None:
@@ -97,6 +101,11 @@ def _extract_model_components(model: Any) -> dict:
         if mod is not None:
             components["drop"] = mod
             break
+    for path in _ROTARY_EMBED_PATTERNS:
+        mod = _get_submodule(model, path)
+        if mod is not None:
+            components["rotary_emb"] = mod
+            break
     return components
 
 
@@ -116,7 +125,7 @@ class KVCacheBlock(_nn.Module if _HAS_TORCH else object):
             self.layers = layers
 
     def forward(self, hidden_states, past_key_values=None, use_cache=False,
-                attention_mask=None, position_ids=None):
+                attention_mask=None, position_ids=None, position_embeddings=None):
         """Forward pass with KV-cache support.
 
         Args:
@@ -125,6 +134,7 @@ class KVCacheBlock(_nn.Module if _HAS_TORCH else object):
             use_cache: Whether to return new KV cache
             attention_mask: Optional attention mask
             position_ids: Optional position IDs
+            position_embeddings: Pre-computed (cos, sin) rotary embeddings
 
         Returns:
             (hidden_states, presents) where presents is a list of KV tuples
@@ -142,13 +152,18 @@ class KVCacheBlock(_nn.Module if _HAS_TORCH else object):
                 "position_ids": position_ids,
             }
 
-            # Llama >= 4.38 / Qwen2 require precomputed position_embeddings
-            if position_ids is not None and hasattr(layer, "self_attn") and hasattr(layer.self_attn, "rotary_emb"):
+            # Compute or forward position_embeddings for rotary models
+            # (Llama, Mistral, Qwen2 with transformers >= 4.46)
+            if position_embeddings is not None:
+                # Pre-computed from model-level rotary_emb — use directly
+                layer_kwargs["position_embeddings"] = position_embeddings
+            elif position_ids is not None and hasattr(layer, "self_attn") and hasattr(layer.self_attn, "rotary_emb"):
+                # Older transformers: rotary_emb lives on each attention layer
                 try:
                     pos_emb = layer.self_attn.rotary_emb(hidden_states, position_ids)
                     layer_kwargs["position_embeddings"] = pos_emb
-                except Exception as e:
-                    logger.debug(f"Exception silencieuse dans l'exécution: {e}", exc_info=True)
+                except Exception:
+                    pass
 
             # Try calling with KV cache kwargs (different HF model signatures)
             try:
@@ -394,6 +409,8 @@ class HuggingFaceBackend(BaseLLMBackend):
                     self._components["embed"] = self._components["embed"].to(first_dev)
                 if self._components["pos_embed"] is not None:
                     self._components["pos_embed"] = self._components["pos_embed"].to(first_dev)
+                if self._components.get("rotary_emb") is not None:
+                    self._components["rotary_emb"] = self._components["rotary_emb"].to(first_dev)
                 if self._components["final_norm"] is not None:
                     self._components["final_norm"] = self._components["final_norm"].to(last_dev)
                 
@@ -672,11 +689,21 @@ class HuggingFaceBackend(BaseLLMBackend):
                 
             position_ids = pt.arange(past_length, past_length + seq_length, dtype=pt.long, device=hidden_states.device).unsqueeze(0)
 
+            # Compute rotary position_embeddings from model-level rotary_emb
+            # (required for Mistral/Llama with transformers >= 4.46)
+            position_embeddings = None
+            if comp.get("rotary_emb") is not None:
+                try:
+                    position_embeddings = comp["rotary_emb"](hidden_states, position_ids)
+                except Exception:
+                    pass
+
             hidden_states, presents = block(
                 hidden_states,
                 past_key_values=block_past,
                 use_cache=use_cache,
-                position_ids=position_ids
+                position_ids=position_ids,
+                position_embeddings=position_embeddings,
             )
             
             if use_cache:
