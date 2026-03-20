@@ -325,7 +325,7 @@ class StreamManager:
                             if usage > self.eviction_threshold:
                                 self._evict_lowest_priority(idx)
                         except Exception as e:
-                            logger.debug(f"Exception silencieuse dans l'exécution: {e}", exc_info=True)  # GPU query can fail transiently
+                            _logger.debug(f"Exception silencieuse dans l'exécution: {e}", exc_info=True)  # GPU query can fail transiently
             except Exception as exc:
                 self._stats["errors"] += 1
                 self.logger.debug("Monitor loop error: %s", exc)
@@ -364,7 +364,7 @@ class StreamManager:
                 params = sum(p.numel() * p.element_size() for p in block.parameters())
                 return params / (1024 * 1024)
             except Exception as e:
-                logger.debug(f"Exception silencieuse dans l'exécution: {e}", exc_info=True)
+                _logger.debug(f"Exception silencieuse dans l'exécution: {e}", exc_info=True)
         return 100.0  # default estimate
 
     def _get_block_module(self, layer_idx: int) -> Any:

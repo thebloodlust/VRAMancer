@@ -303,7 +303,7 @@ def detect_gpus() -> List[DetectedGPU]:
     for i in range(torch.cuda.device_count()):
         try:
             props = torch.cuda.get_device_properties(i)
-            total = props.total_mem
+            total = getattr(props, 'total_memory', 0) or getattr(props, 'total_mem', 0)
             try:
                 free = total - torch.cuda.memory_allocated(i)
             except Exception:

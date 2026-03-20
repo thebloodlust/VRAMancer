@@ -187,7 +187,7 @@ class SimpleScheduler:
             if torch.cuda.is_available():
                 count = torch.cuda.device_count()
         except Exception as e:
-            logger.debug(f"Exception silencieuse dans l'exécution: {e}", exc_info=True)
+            _logger.debug(f"Exception silencieuse dans l'exécution: {e}", exc_info=True)
 
         if count == 0:
             # MPS or CPU fallback
@@ -196,7 +196,7 @@ class SimpleScheduler:
                 from core.utils import detect_backend
                 backend = detect_backend()
             except Exception as e:
-                logger.debug(f"Exception silencieuse dans l'exécution: {e}", exc_info=True)
+                _logger.debug(f"Exception silencieuse dans l'exécution: {e}", exc_info=True)
             if backend == "mps":
                 gpus.append({"id": 0, "total_vram_mb": 0, "free_vram_mb": 0, "name": "Apple MPS"})
             else:
@@ -213,9 +213,10 @@ class SimpleScheduler:
             try:
                 props = torch.cuda.get_device_properties(i)
                 name = props.name
-                total_mb = props.total_mem // (1024 * 1024)
+                total_mb = getattr(props, 'total_memory', 0) or getattr(props, 'total_mem', 0)
+                total_mb = total_mb // (1024 * 1024)
             except Exception as e:
-                logger.debug(f"Exception silencieuse dans l'exécution: {e}", exc_info=True)
+                _logger.debug(f"Exception silencieuse dans l'exécution: {e}", exc_info=True)
 
             if nvml_info and i < len(nvml_info):
                 total_mb = nvml_info[i]["total_mb"]
@@ -409,7 +410,7 @@ class SimpleScheduler:
                 try:
                     block.module = block.module.to("cpu")
                 except Exception as e:
-                    logger.debug(f"Exception silencieuse dans l'exécution: {e}", exc_info=True)
+                    _logger.debug(f"Exception silencieuse dans l'exécution: {e}", exc_info=True)
 
         # Update accounting
         with self._lock:

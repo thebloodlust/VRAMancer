@@ -500,7 +500,7 @@ class GPUHotPlugMonitor:
                                 "index": i,
                                 "name": props.name,
                                 "backend": "cuda",
-                                "total_memory": props.total_mem,
+                                "total_memory": getattr(props, 'total_memory', 0) or getattr(props, 'total_mem', 0),
                                 "compute_capability": f"{props.major}.{props.minor}",
                             })
                         except Exception:

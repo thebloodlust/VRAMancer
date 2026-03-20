@@ -60,7 +60,7 @@ def gpu_summary() -> Dict[str, Any]:
             props = torch.cuda.get_device_properties(i)
             allocated = torch.cuda.memory_allocated(i)
             reserved = torch.cuda.memory_reserved(i)
-            total = props.total_mem
+            total = getattr(props, 'total_memory', 0) or getattr(props, 'total_mem', 0)
             devices.append({
                 "index": i,
                 "name": props.name,
@@ -116,7 +116,7 @@ def gpu_detailed_health() -> Dict[str, Any]:
         try:
             props = torch.cuda.get_device_properties(i)
             allocated = torch.cuda.memory_allocated(i)
-            total = props.total_mem
+            total = getattr(props, 'total_memory', 0) or getattr(props, 'total_mem', 0)
 
             gpu_info["name"] = props.name
             gpu_info["vram_total_mb"] = round(total / 1e6)

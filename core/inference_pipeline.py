@@ -886,7 +886,7 @@ class InferencePipeline:
                 for i in range(self.num_gpus):
                     try:
                         props = torch.cuda.get_device_properties(i)
-                        total = props.total_mem
+                        total = getattr(props, 'total_memory', 0) or getattr(props, 'total_mem', 0)
                         allocated = torch.cuda.memory_allocated(i)
                         # Detect PCIe gen from device name heuristic
                         name = props.name
