@@ -30,10 +30,11 @@ def detect_gpus():
         if torch.cuda.is_available():
             for i in range(torch.cuda.device_count()):
                 props = torch.cuda.get_device_properties(i)
+                total = getattr(props, "total_memory", None) or getattr(props, "total_mem", 0)
                 gpus.append({
                     "id": i,
                     "name": props.name,
-                    "vram_mb": props.total_mem // (1024 * 1024),
+                    "vram_mb": total // (1024 * 1024),
                     "arch": f"sm_{props.major}{props.minor}",
                 })
         elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
