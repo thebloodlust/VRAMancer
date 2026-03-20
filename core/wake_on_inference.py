@@ -20,7 +20,7 @@ class WakeOnInferenceManager:
         if not self.known_macs:
             return
             
-        logger.info(f"⚡ [Wake On Inference] Waking up {len(self.known_macs)} sleeping nodes via WoL...")
+        logger.info(f" [Wake On Inference] Waking up {len(self.known_macs)} sleeping nodes via WoL...")
         for mac in self.known_macs:
             self._send_magic_packet(mac)
             

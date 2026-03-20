@@ -83,10 +83,9 @@ def _load_users():
             admin_mfa = admin_mfa or secrets.token_urlsafe(16)  # 128-bit entropy
             user_mfa = user_mfa or secrets.token_urlsafe(16)
             logger.warning(
-                "SECURITY: Using auto-generated dev credentials. "
-                "Admin pass: %s | User pass: %s | Admin MFA: %s | User MFA: %s "
-                "— Set VRM_REMOTE_*_PASS/MFA env vars for persistent credentials.",
-                admin_pass, user_pass, admin_mfa, user_mfa,
+                "SECURITY: Missing VRM_REMOTE_*_PASS/MFA env vars. "
+                "Auto-generated random dev credentials are in use. "
+                "You must set VRM_REMOTE_ADMIN_PASS, VRM_REMOTE_USER_PASS, etc., to log in."
             )
 
     return {

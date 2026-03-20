@@ -3,13 +3,14 @@
 
 import sys
 import os
+import subprocess
 import requests
 import json
 import time
 from datetime import datetime
 
 def clear_console():
-    os.system('cls' if os.name == 'nt' else 'clear')
+    subprocess.run(['cls' if os.name == 'nt' else 'clear'], shell=True)
 
 def launch():
     """Lance le dashboard CLI VRAMancer."""
@@ -26,35 +27,35 @@ def launch():
             # Test connexion API
             response = requests.get(f"{api_url}/health", timeout=5)
             if response.status_code == 200:
-                print(f"✓ API VRAMancer connectee ({datetime.now().strftime('%H:%M:%S')})")
+                print(f" API VRAMancer connectee ({datetime.now().strftime('%H:%M:%S')})")
                 
                 # Infos GPU
                 try:
                     gpu_response = requests.get(f"{api_url}/api/gpu", timeout=5)
                     if gpu_response.status_code == 200:
                         gpu_data = gpu_response.json()
-                        print(f"📊 GPUs detectes: {len(gpu_data.get('devices', []))}")
+                        print(f" GPUs detectes: {len(gpu_data.get('devices', []))}")
                         for gpu in gpu_data.get('devices', []):
                             used_mb = int(gpu.get('memory_used', 0) / (1024**2))
                             total_mb = int(gpu.get('memory_total', 0) / (1024**2))
                             print(f"   - {gpu.get('name', 'GPU')} ({used_mb}MB/{total_mb}MB)")
-                except:
-                    print("⚠️  Impossible de recuperer les infos GPU")
+                except Exception as e:
+                    print("  Impossible de recuperer les infos GPU")
                 
                 # Status systeme
                 try:
                     status_response = requests.get(f"{api_url}/api/status", timeout=5)
                     if status_response.status_code == 200:
                         status_data = status_response.json()
-                        print(f"🔧 Status: {status_data.get('status', 'inconnu')}")
-                        print(f"⏱️  Uptime: {status_data.get('uptime', 0):.1f}s")
-                except:
-                    print("⚠️  Impossible de recuperer le status")
+                        print(f" Status: {status_data.get('status', 'inconnu')}")
+                        print(f"  Uptime: {status_data.get('uptime', 0):.1f}s")
+                except Exception as e:
+                    print("  Impossible de recuperer le status")
                     
             else:
-                print(f"❌ API VRAMancer non accessible (Status: {response.status_code})")
+                print(f" API VRAMancer non accessible (Status: {response.status_code})")
         except requests.exceptions.RequestException as e:
-            print(f"❌ Erreur connexion API: {str(e)}")
+            print(f" Erreur connexion API: {str(e)}")
             print("   Verifiez que l'API VRAMancer fonctionne (option 1 du menu)")
         
         print("\n" + "-" * 80)

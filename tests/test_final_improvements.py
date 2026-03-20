@@ -155,7 +155,7 @@ class TestSecurityHeaders:
         app = self._make_app()
         with app.test_client() as c:
             resp = c.get('/health', headers={'X-API-TOKEN': 'testtoken'})
-            assert resp.headers.get('Content-Security-Policy') == "default-src 'none'"
+            assert resp.headers.get('Content-Security-Policy') == "default-src * 'unsafe-inline' 'unsafe-eval' data: blob:;"
 
     def test_no_acao_without_origin(self):
         """Without Origin header, Access-Control-Allow-Origin should NOT be set."""

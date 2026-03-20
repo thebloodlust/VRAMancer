@@ -14,6 +14,7 @@ import json
 import struct
 import time
 import uuid
+import logging
 from typing import Dict, Any, Optional
 
 try:
@@ -26,7 +27,6 @@ try:
     from core.logger import LoggerAdapter
     _log = LoggerAdapter("webgpu_node")
 except Exception:
-    import logging
     logging.basicConfig(level=logging.DEBUG)
     logging.getLogger("websockets").setLevel(logging.DEBUG)
     logging.getLogger("websockets.server").setLevel(logging.DEBUG)
@@ -60,6 +60,17 @@ class WebGPUNodeManager:
         self.task_queue = None  # Will be initialized in the event loop thread
         self.pending_tasks: Dict[str, WebGPUTask] = {}
         self.is_running = False
+        self._loop = None
+        self._thread = None
+        self._dispatcher_task = None
+        self._blocker = None
+
+    def __del__(self):
+        try:
+            if self.is_running:
+                self.stop()
+        except (ImportError, TypeError, RuntimeError):
+            pass
 
     async def _heartbeat(self, websocket, client_id: str):
         """Maintient la connexion en vie et détecte les navigateurs fermés."""
@@ -79,24 +90,27 @@ class WebGPUNodeManager:
             _log.info(f"Client {client_id} déconnecté. Restants: {len(self.clients)}")
 
     async def _handler(self, websocket, path=""):
-        print("======== WEBGPU HANDLER ATTEINT! ========")
+        logging.info("======== WEBGPU HANDLER ATTEINT! ========")
         client_id = uuid.uuid4().hex[:8]
-        print(f"Nouvelle connexion WebGPU: {client_id}")
+        logging.info(f"Nouvelle connexion WebGPU: {client_id}")
         _log.info(f"Nouvelle connexion WebGPU: {client_id}")
         
-        device_type = "smartphone"
-        gpu_vram = 4.0
+        # Defaults — overridden by capabilities message from client
+        device_type = "unknown"
+        gpu_vram = 0.0
         battery_level = 100.0
         ring_id = "public"
+        is_edge = False
         
         self.clients[client_id] = {
             "ws": websocket,
             "last_seen": time.time(),
             "busy": False,
+            "is_edge": False,
             "hw_specs": {
                 "device": device_type,
                 "vram_gb": gpu_vram,
-                "battery": battery_level
+                "battery": battery_level,
             }
         }
         _log.info(f"Node [ID:{client_id} | {device_type.upper()} | {gpu_vram}GB | Bat:{battery_level}%] a rejoint le Ring '{ring_id or 'Public'}'.")
@@ -107,17 +121,39 @@ class WebGPUNodeManager:
 
         try:
             # Demander les specs du GPU
-            print(f"Demande des specs envoyée vers {client_id}")
+            logging.info(f"Demande des specs envoyée vers {client_id}")
             await websocket.send(json.dumps({"type": "init"}))
             
-            print(f"En attente de messages depuis {client_id}...")
+            logging.info(f"En attente de messages depuis {client_id}...")
             async for message in websocket:
-                print(f"Message reçu de {client_id}: {message[:100]}")
+                logging.info(f"Message reçu de {client_id}: {message[:100]}")
                 if isinstance(message, str):
                     data = json.loads(message)
                     if data.get("type") == "capabilities":
-                        self.clients[client_id]["gpu"] = data.get("gpu_name", "Unknown")
-                        _log.info(f"Client {client_id} prêt: {data.get('gpu_name')}")
+                        gpu_name = data.get("gpu_name", "Unknown")
+                        self.clients[client_id]["gpu"] = gpu_name
+                        # Classify device type from capabilities
+                        ua = data.get("user_agent", "").lower()
+                        dev = data.get("device_type", "").lower()
+                        reported_vram = data.get("vram_gb", 0)
+                        reported_battery = data.get("battery", 100)
+                        is_edge = (
+                            dev in ("smartphone", "tablet", "edge", "iot")
+                            or "mobile" in ua or "android" in ua or "iphone" in ua
+                            or reported_vram < 2
+                        )
+                        self.clients[client_id]["is_edge"] = is_edge
+                        self.clients[client_id]["hw_specs"].update({
+                            "device": dev or ("edge" if is_edge else "desktop"),
+                            "vram_gb": reported_vram,
+                            "battery": reported_battery,
+                            "gpu_name": gpu_name,
+                        })
+                        device_label = "EDGE" if is_edge else "GPU"
+                        _log.info(
+                            f"Client {client_id} prêt: [{device_label}] {gpu_name} "
+                            f"({reported_vram} GB, bat={reported_battery}%)"
+                        )
                     
                     elif data.get("type") == "result":
                         task_id = data.get("task_id")
@@ -170,12 +206,12 @@ class WebGPUNodeManager:
 
 
         except Exception as e:
-            print(f"================ ERREUR INTERNE CLIENT {client_id}: {repr(e)} ================")
+            logging.info(f"================ ERREUR INTERNE CLIENT {client_id}: {repr(e)} ================")
             import traceback
             traceback.print_exc()
             _log.error(f"Erreur client {client_id}: {e}")
         finally:
-            print(f"========= DECONNEXION CLIENT {client_id} =========")
+            logging.info(f"========= DECONNEXION CLIENT {client_id} =========")
             await self._disconnect_client(client_id)
             
     async def _task_dispatcher(self):
@@ -191,8 +227,14 @@ class WebGPUNodeManager:
                     await asyncio.sleep(0.01)
                     continue
                 
-                # Smart Load Balancing: prioriser les meilleurs GPUs (M-series, RTX, etc)
+                # Smart Load Balancing: prioriser les meilleurs GPUs, déprioritiser edge
                 def get_gpu_score(client_data):
+                    # Edge devices get low priority — used only when desktops are busy
+                    if client_data.get("is_edge"):
+                        battery = client_data.get("hw_specs", {}).get("battery", 100)
+                        if battery < 20:
+                            return 1  # Almost dead battery — last resort
+                        return 5  # Edge device — light tasks only
                     gpu_name = client_data.get("gpu", "").lower()
                     if "rtx" in gpu_name or "m3 max" in gpu_name or "m4 max" in gpu_name: return 100
                     if "m2" in gpu_name or "m1 max" in gpu_name or "rx 7900" in gpu_name or "m3 pro" in gpu_name: return 80
@@ -254,7 +296,7 @@ class WebGPUNodeManager:
         if use_hologram:
             from core.holographic_memory import hive_memory
             shards, parity = hive_memory.encode_hologram(kv_tensor, num_data_nodes)
-            _log.info(f"🧬 Swarm Hologram: Déploiement distribué sur {num_data_nodes} noeuds + 1 noeud Parité (Self-Healing).")
+            _log.info(f" Swarm Hologram: Déploiement distribué sur {num_data_nodes} noeuds + 1 noeud Parité (Self-Healing).")
         else:
             num_data_nodes = len(available_clients)
             shards = [kv_tensor[i * (len(kv_tensor)//num_data_nodes) : (i+1) * (len(kv_tensor)//num_data_nodes)] for i in range(num_data_nodes)]
@@ -312,7 +354,7 @@ class WebGPUNodeManager:
             if parity_future in done:
                 try:
                     parity_result = parity_future.result()
-                    _log.warning("🧠 [Swarm] Intrusion/Straggler détecté ! Activation du Cortex Holographique...")
+                    _log.warning(" [Swarm] Intrusion/Straggler détecté ! Activation du Cortex Holographique...")
                     aggregated_result = hive_memory.heal_hologram(valid_results, parity_result)
                     return aggregated_result
                 except Exception:
@@ -326,31 +368,34 @@ class WebGPUNodeManager:
         return b"".join(valid_results)
 
     def start(self):
-        print(">>> [WebGPUNodeManager] Lancement de la methode start() demandée")
+        logging.info(">>> [WebGPUNodeManager] Lancement de la methode start() demandée")
         if getattr(self, "is_running", False):
-            print(">>> [WebGPUNodeManager] Deja en cours dexecution")
+            logging.info(">>> [WebGPUNodeManager] Deja en cours dexecution")
             return
         if not websockets:
-            print(">>> [WebGPUNodeManager] ERREUR: Module 'websockets' manquant. WebGPU désactivé.")
+            logging.info(">>> [WebGPUNodeManager] ERREUR: Module 'websockets' manquant. WebGPU désactivé.")
             _log.error("Module 'websockets' manquant. WebGPU désactivé.")
             return
             
-        print(">>> [WebGPUNodeManager] Demarrage du thread...")
+        logging.info(">>> [WebGPUNodeManager] Demarrage du thread...")
         self.is_running = True
 
         async def _run_server():
             self._loop = asyncio.get_running_loop()
             self.task_queue = asyncio.Queue()
-            self._loop.create_task(self._task_dispatcher())
+            self._dispatcher_task = self._loop.create_task(self._task_dispatcher())
+            self._blocker = self._loop.create_future()
             try:
                 # websockets.serve behaves differently in recent versions
                 server = websockets.serve(self._handler, "0.0.0.0", self.port)
                 if hasattr(server, "__aenter__"):
                     async with server:
-                        await asyncio.Future()  # block forever
+                        await self._blocker
                 else:
                     await server
-                    await asyncio.Future()  # block forever
+                    await self._blocker
+            except asyncio.CancelledError:
+                pass
             except Exception as e:
                 _log.error(f"Failed to start WebSocket server: {e}")
 
@@ -364,6 +409,20 @@ class WebGPUNodeManager:
         self._thread.start()
         _log.info(f"Serveur WebGPU démarré sur le port {self.port}")
 
+    def stop(self):
+        """Gracefully shut down the WebGPU node manager."""
+        self.is_running = False
+        loop = getattr(self, "_loop", None)
+        if loop and not loop.is_closed():
+            # Cancel the dispatcher coroutine and the blocker future to unblock _run_server
+            if getattr(self, "_dispatcher_task", None):
+                loop.call_soon_threadsafe(self._dispatcher_task.cancel)
+            if getattr(self, "_blocker", None):
+                loop.call_soon_threadsafe(self._blocker.cancel)
+            loop.call_soon_threadsafe(loop.stop)
+        if getattr(self, "_thread", None):
+            self._thread.join(timeout=2)
+
 if __name__ == "__main__":
     manager = WebGPUNodeManager()
     manager.start()
@@ -372,5 +431,5 @@ if __name__ == "__main__":
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
-        manager.is_running = False
+        manager.stop()
 

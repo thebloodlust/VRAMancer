@@ -1,0 +1,124 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>VRAMancer - Navigateur de Modèles</title>
+    <style>
+        body { background-color: #0d0d12; color: #eee; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 20px; }
+        input { padding: 10px; width: 400px; font-size: 1.1em; background: #1a1a24; color: #fff; border: 1px solid #444; border-radius: 4px; }
+        button { padding: 10px 20px; font-size: 1.1em; background: #2a2a35; color: #fff; border: 1px solid #333; border-radius: 4px; cursor: pointer; transition: 0.3s; margin-left: 10px; }
+        button:hover { background: #00d2ff; color: #000; }
+        .back-link { display: inline-block; margin-bottom: 20px; color: #00d2ff; text-decoration: none; font-weight: bold; font-size: 1.1em; }
+        .back-link:hover { text-shadow: 0 0 5px #00d2ff; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; background: #1a1a24; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
+        th, td { border: 1px solid #2a2a35; padding: 12px; text-align: left; }
+        th { background: #222230; color: #00d2ff; text-transform: uppercase; letter-spacing: 1px; }
+        .source-hf { color: #ffcc00; font-weight: bold; background: rgba(255,204,0,0.1); padding: 4px 8px; border-radius: 4px; }
+        .source-ollama { color: #00ffcc; font-weight: bold; background: rgba(0,255,204,0.1); padding: 4px 8px; border-radius: 4px; }
+        .loading { font-style: italic; color: #00d2ff; margin-top: 10px; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <a href="/" class="back-link">⬅ Retour au Dashboard</a>
+    <h1> Navigateur Unifié de Modèles</h1>
+    <p>Recherchez et chargez des modèles depuis <span style="color:#ffcc00;"><b>Hugging Face</b></span> et <span style="color:#00ffcc;"><b>Ollama</b></span> pour que VRAMancer les répartisse sur vos GPUs.</p>
+    
+    <div style="margin-top:20px; background: #111118; padding: 20px; border-radius: 8px; border: 1px solid #333;">
+        <input type="text" id="searchInput" placeholder="Ex: llama3, mistral, qwen..." onkeydown="if(event.key==='Enter') searchModels()">
+        <button onclick="searchModels()">Rechercher</button>
+        <div id="status" class="loading"></div>
+    </div>
+
+    <table id="resultsTable">
+        <thead>
+            <tr>
+                <th>Nom du Modèle / ID</th>
+                <th>Dépôt Source</th>
+                <th>Action</th>
+            </tr>
+        </thead>
+        <tbody id="resultsBody">
+            <tr><td colspan="3" style="text-align:center; color:#666; padding: 30px;">Entrez un terme ci-dessus pour lancer la recherche multisource.</td></tr>
+        </tbody>
+    </table>
+
+    <script>
+        async function searchModels() {
+            const q = document.getElementById('searchInput').value;
+            const status = document.getElementById('status');
+            const tbody = document.getElementById('resultsBody');
+            
+            if (!q.trim()) return;
+            
+            status.innerHTML = "Sub-espace réseau actif : Interrogation des registres Hugging Face et Ollama...";
+            tbody.innerHTML = "";
+            
+            try {
+                const r = await fetch('/api/models/search?q=' + encodeURIComponent(q));
+                const data = await r.json();
+                
+                if (data.results && data.results.length > 0) {
+                    tbody.innerHTML = data.results.map(m => {
+                        const sourceClass = m.source === 'Hugging Face' ? 'source-hf' : 'source-ollama';
+                        return `<tr>
+                            <td style="font-weight:bold; font-size:1.1em; color: #fff;">${m.id}</td>
+                            <td><span class="${sourceClass}">${m.source}</span></td>
+                            <td><button onclick="loadModel('${m.id}', '${m.source}')" style="background: #00d2ff; color: #000; font-weight:bold; border:none; border-radius:4px;"> Charger dans VRAMancer</button></td>
+                        </tr>`;
+                    }).join('');
+                } else {
+                    tbody.innerHTML = `<tr><td colspan="3" style="text-align:center; color:#888; padding:30px;">Aucun modèle trouvé.</td></tr>`;
+                }
+                status.innerHTML = "";
+            } catch (err) {
+                status.innerHTML = "Erreur de connexion. Vérifiez si vous êtes en ligne.";
+                console.error(err);
+            }
+        }
+
+        async function loadModel(modelId, source) {
+            let backendToUse = source === 'Ollama' ? 'ollama' : 'huggingface';
+            const status = document.getElementById('status');
+            
+            // Hardcode des variables critiques d'asymétrie P2P 
+            const payload = {
+                model: modelId,
+                backend_type: backendToUse,
+                gpu_memory_utilization: 0.96,
+                max_model_len: 4096,
+                enforce_eager: true
+            };
+            
+            status.innerHTML = `<span class="text-cyber-accent">Initialisation du Cortex Tenseur pour ${modelId} (Zero-Copy P2P)...</span>`;
+            
+            try {
+                // Utilise le header d'authentification Bearer testtoken commun au projet minimal
+                const response = await fetch(`http://${window.location.hostname}:5000/api/models/load`, {
+                    method: 'POST', 
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': 'Bearer testtoken'
+                    },
+                    body: JSON.stringify(payload)
+                });
+                
+                if(response.ok) {
+                    const resData = await response.json();
+                    status.innerHTML = `<span style="color:#00ff87;"> Fusion Neurale établie ! (${resData.num_gpus} GPUs Actifs)</span>`;
+                    alert(`VRAMancer :
+
+Modèle chargé avec succès sur ${resData.num_gpus} GPUs.
+Tensor Parallelism actif.`);
+                } else {
+                    const errText = await response.text();
+                    status.innerHTML = `<span style="color:#fb2c36;"> Crash Mémoire P2P : ${response.status}</span>`;
+                    alert("Erreur de chargement de modèle : " + errText);
+                }
+            } catch(e) {
+                status.innerHTML = `<span style="color:#fb2c36;"> Serveur VRAMancer Hors-Ligne ou Inaccessible.</span>`;
+                console.error(e);
+            }
+        }
+    </script>
+</body>
+</html>

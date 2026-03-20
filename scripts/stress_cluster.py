@@ -35,8 +35,8 @@ async def fetch(session: aiohttp.ClientSession, url: str, payload: dict, token: 
         return {"status": "error", "msg": str(e)}
 
 async def bombard_api(url: str, prompt: str, concurrent_reqs: int, total_reqs: int, token: str):
-    print(f"🚀 Début du Stress Test VRAMancer sur {url}")
-    print(f"🎯 Concurrence: {concurrent_reqs} | Requêtes totales: {total_reqs}")
+    print(f" Début du Stress Test VRAMancer sur {url}")
+    print(f" Concurrence: {concurrent_reqs} | Requêtes totales: {total_reqs}")
     
     payload = {
         "model": "stress-test-model",
@@ -77,14 +77,14 @@ async def bombard_api(url: str, prompt: str, concurrent_reqs: int, total_reqs: i
     avg_latency = sum(latencies) / len(latencies) if latencies else 0.0
     
     print("\n" + "="*50)
-    print("📊 RÉSULTATS DU STRESS TEST")
+    print(" RÉSULTATS DU STRESS TEST")
     print("="*50)
-    print(f"⏱️  Temps total       : {total_time:.2f} secondes")
-    print(f"⚡ Débit (RPS)       : {(len(success)/total_time):.2f} req/s")
-    print(f"✅ Succès            : {len(success)}")
+    print(f"  Temps total       : {total_time:.2f} secondes")
+    print(f" Débit (RPS)       : {(len(success)/total_time):.2f} req/s")
+    print(f" Succès            : {len(success)}")
     print(f"⏳ Timeouts          : {len(timeouts)}")
-    print(f"❌ Erreurs critiques : {len(errors)}")
-    print(f"🐢 Latence moyenne   : {avg_latency:.3f} s")
+    print(f" Erreurs critiques : {len(errors)}")
+    print(f" Latence moyenne   : {avg_latency:.3f} s")
     print("="*50)
     
     if errors:
@@ -93,9 +93,9 @@ async def bombard_api(url: str, prompt: str, concurrent_reqs: int, total_reqs: i
             print(f" - {e}")
             
     if len(success) == total_reqs:
-        print("\n🏆 SUCCÈS TOTAL : L'architecture Zero-Copy et le backend Async tiennent la charge avec succès !")
+        print("\n SUCCÈS TOTAL : L'architecture Zero-Copy et le backend Async tiennent la charge avec succès !")
     else:
-        print("\n⚠️ AVERTISSEMENT : Des goulots d'étranglement ou des plantages ont été identifiés.")
+        print("\n AVERTISSEMENT : Des goulots d'étranglement ou des plantages ont été identifiés.")
 
 
 if __name__ == "__main__":

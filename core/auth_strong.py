@@ -112,12 +112,10 @@ def ensure_default_admin():  # auto bootstrap
                 "Refusing to create default admin in production."
             )
             return
-        # Generate a random password for dev mode
-        dev_password = secrets.token_urlsafe(12)
+        dev_password = os.environ.get("VRM_DEFAULT_ADMIN_PASS") or secrets.token_urlsafe(12)
         _logger.warning(
-            "SECURITY: Creating default admin user for development. "
-            "Username: admin | Password: %s — DO NOT use in production.",
-            dev_password,
+            "SECURITY: No users configured. Creating default admin user for development. "
+            "You must set VRM_DEFAULT_ADMIN_PASS or configure users properly."
         )
         create_user('admin', dev_password, 'admin')
 

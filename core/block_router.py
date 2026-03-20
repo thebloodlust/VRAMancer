@@ -77,17 +77,17 @@ class RemoteExecutor:
         """Execute block remotely. Falls back to passthrough if unavailable."""
         try:
             import socket
-            import pickle
             import hmac
             import hashlib
             import os
+            import torch
+            import io
 
             # ---------------------------------------------------------
-            # ZERO-COPY PATH (Niveau 2) : Bypass Pickle si c'est un Tenseur PyTorch
+            # ZERO-COPY PATH (Niveau 2) : Bypass Pickle
             # ---------------------------------------------------------
             is_safetensor = False
             try:
-                import torch
                 from safetensors.torch import save
                 
                 # Si x est un Tenseur ou un Dict de Tenseurs, on utilise Safetensors (Zero-Copy)
@@ -106,16 +106,28 @@ class RemoteExecutor:
                     data = save(x)
                     is_safetensor = True
                 else:
-                    data = pickle.dumps(x) # Type Python complexe -> Fallback Pickle
-            except ImportError:
-                data = pickle.dumps(x) # torch/safetensors non installés -> Fallback Pickle
+                    import json
+                    data = json.dumps(x).encode("utf-8")
+            except Exception:
+                # Fallback to PyTorch weights_only serialization
+                buffer = io.BytesIO()
+                torch.save(x, buffer)
+                data = buffer.getvalue()
 
             # Prefix de métadonnées rapide (1 octet) pour dire au récepteur comment décoder
-            # 0x01 = Pickle (Legacy), 0x02 = Safetensors (Zero-Copy)
+            # 0x01 = JSON/Torch (Secure), 0x02 = Safetensors (Zero-Copy)
             header_type = b'\x02' if is_safetensor else b'\x01'
             data = header_type + data
 
-            secret = os.environ.get("VRM_API_TOKEN", "default_insecure_token").encode()
+            api_token = os.environ.get("VRM_API_TOKEN")
+            if not api_token:
+                if os.environ.get("VRM_PRODUCTION", "0") == "1":
+                    raise RuntimeError("SECURITY: VRM_API_TOKEN environment variable must be set in production.")
+                if not getattr(self, "_warned_token", False):
+                    _logger.warning("SECURITY: VRM_API_TOKEN not set. Using dev default token. Set VRM_API_TOKEN before production!")
+                    self._warned_token = True
+                api_token = "dev_token_only"
+            secret = api_token.encode()
 
             # 1. Option Tokio (Rust) -> GIL relâché, asynchrone natif
             try:
@@ -186,7 +198,13 @@ class RemoteExecutor:
                     _logger.error(f"Erreur Safetensors au décodage réseau: {e}")
                     raise
             else:
-                return pickle.loads(pure_data)
+                try:
+                    import json
+                    return json.loads(pure_data.decode("utf-8"))
+                except Exception:
+                    import io
+                    import torch
+                    return torch.load(io.BytesIO(pure_data), weights_only=True)
                 
         except socket.timeout:
             _logger.error(f"Timeout réseau ({self.timeout}s) vers {self.host}:{self.port}")

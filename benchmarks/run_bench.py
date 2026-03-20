@@ -20,7 +20,7 @@ os.environ["VRM_TEST_MODE"] = "0"
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from core.inference_pipeline import InferencePipeline
+from core.inference_pipeline import InferencePipeline, get_pipeline
 from core.monitor import GPUMonitor
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -31,7 +31,7 @@ def run_benchmark(model_name: str, num_gpus: int, prompts: List[str], concurrenc
     
     # Initialize pipeline
     try:
-        pipeline = InferencePipeline.load(model_name, num_gpus)
+        pipeline = get_pipeline().load(model_name, num_gpus)
     except Exception as e:
         logger.error(f"Failed to load pipeline: {e}", exc_info=True)
         return {"status": "error", "error": str(e)}

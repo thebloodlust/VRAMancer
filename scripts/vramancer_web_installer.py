@@ -88,7 +88,7 @@ def create_desktop_shortcut(install_dir, env_dir):
             f.write(f"cd /d \"{vrm_dir}\"\n")
             f.write(f"\"{mamba_exe}\" run -p \"{env_dir}\" python -m vramancer.main\n")
             f.write("pause\n")
-        print(f"✅ Raccourci créé sur le Bureau : {shortcut_path}")
+        print(f" Raccourci créé sur le Bureau : {shortcut_path}")
         
     elif sys_os == "darwin" or sys_os == "linux":
         # Create a .command or .desktop file
@@ -102,11 +102,11 @@ def create_desktop_shortcut(install_dir, env_dir):
             f.write(f"\"{mamba_exe}\" run -p \"{env_dir}\" python -m vramancer.main\n")
         
         os.chmod(shortcut_path, 0o755)
-        print(f"✅ Raccourci exécutable créé sur le Bureau : {shortcut_path}")
+        print(f" Raccourci exécutable créé sur le Bureau : {shortcut_path}")
 
 def main():
     print(f"==================================================")
-    print(f"🚀 VRAMancer Smart Installer - Configuration Rapide")
+    print(f" VRAMancer Smart Installer - Configuration Rapide")
     print(f"==================================================")
     
     install_dir = get_install_dir()
@@ -205,7 +205,7 @@ def main():
     print("\n--- Finalisation ---")
     create_desktop_shortcut(install_dir, env_dir)
     
-    print(f"\n✅ INSTALLATION TERMINÉE AVEC SUCCÈS !")
+    print(f"\n INSTALLATION TERMINÉE AVEC SUCCÈS !")
     print("Vous pouvez maintenant lancer VRAMancer depuis le raccourci sur votre Bureau.")
     print("Le Swarm et l'IA sont prêts à être réveillés.")
     

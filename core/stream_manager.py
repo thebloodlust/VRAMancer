@@ -212,7 +212,7 @@ class StreamManager:
 
         self._stats["prefetches"] += prefetched
         if self.verbose and prefetched > 0:
-            self.logger.info("🧠 Anticipatory Brain scheduled %d layers for prefetching (predicted: %s) without blocking.", prefetched, predicted)
+            self.logger.info(" Anticipatory Brain scheduled %d layers for prefetching (predicted: %s) without blocking.", prefetched, predicted)
         return prefetched
 
     def unload_unused(self, active_layer_names: List[str]) -> int:
@@ -306,6 +306,8 @@ class StreamManager:
         self._shutdown.set()
         if self._monitor_thread and self._monitor_thread.is_alive():
             self._monitor_thread.join(timeout=5)
+        if hasattr(self, '_io_executor') and self._io_executor:
+            self._io_executor.shutdown(wait=False, cancel_futures=True)
         self.logger.info("Stream monitoring stopped")
 
     def _monitor_loop(self, interval: float) -> None:
@@ -322,8 +324,8 @@ class StreamManager:
                             usage = self.monitor.vram_usage(idx)
                             if usage > self.eviction_threshold:
                                 self._evict_lowest_priority(idx)
-                        except Exception:
-                            pass  # GPU query can fail transiently
+                        except Exception as e:
+                            logger.debug(f"Exception silencieuse dans l'exécution: {e}", exc_info=True)  # GPU query can fail transiently
             except Exception as exc:
                 self._stats["errors"] += 1
                 self.logger.debug("Monitor loop error: %s", exc)
@@ -361,8 +363,8 @@ class StreamManager:
             try:
                 params = sum(p.numel() * p.element_size() for p in block.parameters())
                 return params / (1024 * 1024)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Exception silencieuse dans l'exécution: {e}", exc_info=True)
         return 100.0  # default estimate
 
     def _get_block_module(self, layer_idx: int) -> Any:

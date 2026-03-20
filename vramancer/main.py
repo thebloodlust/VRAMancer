@@ -185,7 +185,7 @@ def _cmd_serve(args):
             "  GET  [cyan]/api/nodes[/cyan]       - Cluster nodes\n"
         )
         
-        console.print(Panel.fit(table, title="[bold blue]VRAMancer API Server[/bold blue]", subtitle="🚀 En cours de démarrage..."))
+        console.print(Panel.fit(table, title="[bold blue]VRAMancer API Server[/bold blue]", subtitle=" En cours de démarrage..."))
         console.print(endpoints)
     else:
         print("=" * 60)
@@ -430,10 +430,11 @@ def _cmd_health():
     py_ver = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
     checks["python"] = {"status": "ok", "version": py_ver}
 
+    import importlib
     for module_name in ["core.config", "core.monitor", "core.scheduler",
                         "core.block_router", "core.backends", "core.production_api"]:
         try:
-            __import__(module_name)
+            importlib.import_module(module_name)
             checks[module_name] = {"status": "ok"}
         except Exception as e:
             checks[module_name] = {"status": "error", "error": str(e)}

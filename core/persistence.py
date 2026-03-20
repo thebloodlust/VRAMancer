@@ -27,10 +27,8 @@ def _ensure():  # pragma: no cover
     if not _DB_PATH:
         return
     with _lock:
-        c = _conn()
-        cur = c.cursor()
-        cur.execute("CREATE TABLE IF NOT EXISTS workflows(id TEXT PRIMARY KEY, data TEXT)")
-        c.commit(); c.close()
+        with _conn() as c:
+            c.execute("CREATE TABLE IF NOT EXISTS workflows(id TEXT PRIMARY KEY, data TEXT)")
 
 def persistence_enabled() -> bool:
     return bool(_DB_PATH)
@@ -40,23 +38,26 @@ def save_workflow(wf: Dict[str, Any]):  # pragma: no cover
         return
     _ensure()
     with _lock:
-        c = _conn(); cur=c.cursor()
-        cur.execute("REPLACE INTO workflows(id,data) VALUES(?,?)", (wf['id'], json.dumps(wf)))
-        c.commit(); c.close()
+        with _conn() as c:
+            c.execute("REPLACE INTO workflows(id,data) VALUES(?,?)", (wf['id'], json.dumps(wf)))
 
 def load_workflow(wid: str) -> Dict[str, Any] | None:  # pragma: no cover
     if not persistence_enabled(): return None
-    _ensure(); c=_conn(); cur=c.cursor()
-    cur.execute("SELECT data FROM workflows WHERE id=?", (wid,))
-    row = cur.fetchone(); c.close()
+    _ensure()
+    with _conn() as c:
+        cur = c.cursor()
+        cur.execute("SELECT data FROM workflows WHERE id=?", (wid,))
+        row = cur.fetchone()
     if not row: return None
     return json.loads(row[0])
 
 def list_workflows(limit:int=100) -> List[Dict[str,Any]]:  # pragma: no cover
     if not persistence_enabled(): return []
-    _ensure(); c=_conn(); cur=c.cursor()
-    cur.execute("SELECT data FROM workflows ORDER BY rowid DESC LIMIT ?", (limit,))
-    rows = cur.fetchall(); c.close()
+    _ensure()
+    with _conn() as c:
+        cur = c.cursor()
+        cur.execute("SELECT data FROM workflows ORDER BY rowid DESC LIMIT ?", (limit,))
+        rows = cur.fetchall()
     return [json.loads(r[0]) for r in rows]
 
 __all__ = [

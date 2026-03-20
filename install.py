@@ -151,12 +151,17 @@ def detect_gpu() -> dict:
             except (subprocess.TimeoutExpired, FileNotFoundError):
                 pass
 
-    # Apple Silicon
+    # Apple Silicon (MPS requires macOS 12.3+)
     if result["backend"] == "cpu" and platform.system() == "Darwin":
         machine = platform.machine()
         if machine == "arm64":
-            result["backend"] = "mps"
-            # Estimer VRAM (mémoire unifiée)
+            mac_ver = platform.mac_ver()[0]  # e.g. "14.3.1"
+            mac_parts = [int(x) for x in mac_ver.split(".")[:2]] if mac_ver else [0, 0]
+            if mac_parts[0] > 12 or (mac_parts[0] == 12 and mac_parts[1] >= 3):
+                result["backend"] = "mps"
+            else:
+                result["backend"] = "cpu"  # MPS not available on older macOS
+            # Estimate VRAM (unified memory)
             try:
                 out = subprocess.run(["sysctl", "-n", "hw.memsize"],
                                      capture_output=True, text=True, timeout=5)
@@ -424,6 +429,42 @@ def run_smoke_test(python_cmd: str, base_dir: Path) -> bool:
             warn(f"PyTorch non disponible: {result.stderr.strip()[:100]}")
     except Exception:
         warn("Test PyTorch échoué (non fatal)")
+
+    # Test 4: Port availability
+    try:
+        import socket as _sock
+        s = _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM)
+        s.settimeout(1)
+        s.bind(('127.0.0.1', 5030))
+        s.close()
+        info("Port 5030 disponible")
+    except OSError:
+        warn("Port 5030 occupé — changer avec VRM_API_PORT")
+
+    # Test 5: Swarm discovery
+    try:
+        result = subprocess.run(
+            [python_cmd, "-c", textwrap.dedent("""\
+                import sys; sys.path.insert(0, '.')
+                from core.network.cluster_discovery import ClusterDiscovery
+                d = ClusterDiscovery(heartbeat_interval=1)
+                d.start()
+                import time; time.sleep(2)
+                nodes = d.get_nodes()
+                d.stop()
+                print(f'Swarm: {len(nodes)} node(s) détecté(s)')
+                for n in nodes:
+                    print(f'  - {n.get("hostname","?")} ({n.get("ip","?")}) GPUs: {n.get("gpu_count",0)}')
+            """)],
+            capture_output=True, text=True, timeout=10, cwd=str(base_dir)
+        )
+        if result.returncode == 0:
+            for line in result.stdout.strip().split("\n"):
+                info(line)
+        else:
+            warn("Discovery swarm indisponible (non fatal)")
+    except Exception:
+        warn("Test swarm échoué (non fatal)")
 
     return True
 

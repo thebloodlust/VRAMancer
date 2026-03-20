@@ -1,3 +1,4 @@
+import logging
 import json
 from core.network.cluster_discovery import create_local_cluster
 
@@ -15,11 +16,11 @@ def aggregate_resources():
         total_vram += vram
         total_cpu += cpu
         node_caps.append({"host": node["hostname"], "vram": vram, "cpu": cpu})
-    print(f"VRAM totale combinée : {total_vram} MB")
-    print(f"CPU total mutualisé : {total_cpu} cœurs")
-    print("Capacités par nœud :")
+    logging.info(f"VRAM totale combinée : {total_vram} MB")
+    logging.info(f"CPU total mutualisé : {total_cpu} cœurs")
+    logging.info("Capacités par nœud :")
     for cap in node_caps:
-        print(f"- {cap['host']} | VRAM: {cap['vram']} MB | CPU: {cap['cpu']} cœurs")
+        logging.info(f"- {cap['host']} | VRAM: {cap['vram']} MB | CPU: {cap['cpu']} cœurs")
     return node_caps, total_vram, total_cpu, usb4_mounts
 
 # --- Routage intelligent des blocs ---
@@ -30,7 +31,7 @@ def route_block(block, node_caps):
     """
     # Simule le choix du nœud avec le plus de VRAM disponible
     best_node = max(node_caps, key=lambda n: n["vram"])
-    print(f"Bloc routé vers {best_node['host']} (VRAM: {best_node['vram']} MB)")
+    logging.info(f"Bloc routé vers {best_node['host']} (VRAM: {best_node['vram']} MB)")
     # Ici, on pourrait appeler send_block(..., target_device=best_node['host'])
     return best_node
 

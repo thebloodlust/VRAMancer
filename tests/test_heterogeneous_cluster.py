@@ -110,14 +110,14 @@ def simulate_your_cluster():
 
 def test_heterogeneous_workload():
     """Test de répartition de charge hétérogène."""
-    print("🚀 Simulation cluster hétérogène VRAMancer")
+    print(" Simulation cluster hétérogène VRAMancer")
     print("=" * 60)
     
     hetero_mgr = simulate_your_cluster()
     
     # Résumé du cluster
     summary = hetero_mgr.get_cluster_summary()
-    print(f"📊 Résumé Cluster:")
+    print(f" Résumé Cluster:")
     print(f"   • Nœuds: {summary['nodes']}")
     print(f"   • GPUs total: {summary['total_gpus']}")
     print(f"   • RAM totale: {summary['total_ram_gb']:.0f} GB")
@@ -126,7 +126,7 @@ def test_heterogeneous_workload():
     print()
     
     # Détails des nœuds
-    print("🖥️  Détails des Nœuds:")
+    print("️  Détails des Nœuds:")
     for hostname, caps in hetero_mgr.nodes.items():
         print(f"   {hostname}:")
         print(f"      • {caps.architecture} / {caps.platform}")
@@ -168,7 +168,7 @@ def test_heterogeneous_workload():
         }
     ]
     
-    print("⚖️  Répartition des Tâches:")
+    print("Répartition des Tâches:")
     allocation = hetero_mgr.balance_load(tasks)
     
     for hostname, assigned_tasks in allocation.items():
@@ -181,7 +181,7 @@ def test_heterogeneous_workload():
             print(f"   {hostname}: (aucune tâche)")
     
     print()
-    print("✅ Test terminé! Votre configuration est optimale pour:")
+    print(" Test terminé! Votre configuration est optimale pour:")
     print("   • Serveur EPYC: Tâches lourdes (LLM géants, training)")
     print("   • Laptop i5: Inférence rapide, développement")  
     print("   • MacBook M4: Tâches efficaces, mobile, prototypage")

@@ -72,8 +72,9 @@ def metrics_server_start(port: int | None = None):
     if _started:
         return
     p = port or int(os.environ.get("VRM_METRICS_PORT", 9108))
+    bind_addr = os.environ.get("VRM_METRICS_BIND", "127.0.0.1")
     # Démarrage non bloquant
-    t = threading.Thread(target=start_http_server, args=(p,), daemon=True)
+    t = threading.Thread(target=start_http_server, args=(p,), kwargs={'addr': bind_addr}, daemon=True)
     t.start()
     _started = True
 

@@ -89,8 +89,8 @@ class GPUMonitor:
     Usage:
         monitor = GPUMonitor()
         monitor.start_polling(interval=2.0)  # background thread
-        print(monitor.vram_usage(0))          # 0.0 - 1.0
-        print(monitor.detect_overload(0.9))   # returns gpu_index or None
+        logger.info(monitor.vram_usage(0))          # 0.0 - 1.0
+        logger.info(monitor.detect_overload(0.9))   # returns gpu_index or None
         monitor.stop_polling()
     """
 
@@ -98,7 +98,7 @@ class GPUMonitor:
         self.overload_threshold = overload_threshold
         self._backend = detect_backend()
         self._pynvml_ok = False
-        self._polling = False
+        self._stop_event = threading.Event()
         self._poll_thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
         self._snapshots: Dict[Any, Dict[str, int]] = {}   # idx -> {used, reserved, total}
@@ -202,9 +202,9 @@ class GPUMonitor:
 
     def start_polling(self, interval: float = 2.0) -> None:
         """Start background polling thread."""
-        if self._polling:
+        if self._poll_thread and self._poll_thread.is_alive():
             return
-        self._polling = True
+        self._stop_event.clear()
         self._poll_thread = threading.Thread(
             target=self._poll_loop, args=(interval,),
             daemon=True, name="gpu-monitor-poll"
@@ -217,19 +217,19 @@ class GPUMonitor:
         if sys.meta_path is None:
             return
         """Stop background polling."""
-        self._polling = False
+        self._stop_event.set()
         if self._poll_thread and self._poll_thread.is_alive():
             self._poll_thread.join(timeout=5)
         _logger.info("GPU polling stopped")
 
     def _poll_loop(self, interval: float) -> None:
-        while self._polling:
+        while not self._stop_event.is_set():
             try:
                 self._refresh_all()
                 self._publish_prometheus()
             except Exception as exc:
                 _logger.debug("Poll error: %s", exc)
-            time.sleep(interval)
+            self._stop_event.wait(interval)
 
     # ------------------------------------------------------------------
     # Internal: query backends
@@ -369,7 +369,10 @@ class GPUMonitor:
         return self.__repr__()
 
     def __del__(self):
-        self.stop_polling()
+        try:
+            self.stop_polling()
+        except (ImportError, TypeError):
+            pass  # Python interpreter shutting down
         if self._pynvml_ok:
             try:
                 pynvml.nvmlShutdown()

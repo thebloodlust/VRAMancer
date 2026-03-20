@@ -63,7 +63,11 @@ def _api_timer_stop(resp):  # pragma: no cover - mesure
         except Exception:
             pass
     return resp
-socketio = SocketIO(app, cors_allowed_origins="*")
+
+cors_origins = os.environ.get("VRM_CORS_ORIGINS", "http://localhost:*").split(",")
+if len(cors_origins) == 1 and cors_origins[0] == "*":
+    cors_origins = "*"
+socketio = SocketIO(app, cors_allowed_origins=cors_origins)
 install_security(app)
 HMM = HierarchicalMemoryManager()  # instance locale pour exposition API
 
@@ -214,10 +218,22 @@ def tasks_cancel():
 def tasks_submit_batch():
     payload = request.json or {}
     kinds = payload.get('tasks', [])
+    
+    def _warmup():
+        try:
+            import torch
+            return (torch.randn(512,512) @ torch.randn(512,512)).sum().item()
+        except ImportError:
+            return 0.0
+
+    def _compress():
+        import zlib, os as _os
+        return zlib.compress(_os.urandom(500000))
+
     mapping = {
-        'warmup': lambda: (lambda: ( (__import__('torch').randn(512,512) @ __import__('torch').randn(512,512)).sum().item() )),
-        'compress': lambda: (lambda: (__import__('zlib').compress(__import__('os').urandom(500000)))) ,
-        'noop': lambda: (lambda: __import__('time').sleep(0.05)),
+        'warmup': lambda: _warmup,
+        'compress': lambda: _compress,
+        'noop': lambda: lambda: time.sleep(0.05) if 'time' not in globals() else time.sleep(0.05),
     }
     batch = []
     for spec in kinds:
@@ -293,6 +309,15 @@ def fastpath_select():
     name = data.get('interface') or data.get('kind')
     if not name:
         return jsonify({'error': 'missing interface'}), 400
+    # Validate against known interfaces to prevent env injection
+    import re
+    if not re.match(r'^[a-zA-Z0-9_\-\.]+$', name):
+        return jsonify({'error': 'invalid interface name'}), 400
+    known = detect_fast_interfaces()
+    known_names = {i.get('interface') for i in known if i.get('interface')}
+    known_names |= {i.get('kind') for i in known if i.get('kind')}
+    if name not in known_names:
+        return jsonify({'error': 'unknown interface', 'available': list(known_names)}), 400
     os.environ['VRM_FASTPATH_IF'] = name
     interfaces = detect_fast_interfaces()
     # Auto re-benchmark après sélection pour feedback immédiat
@@ -518,4 +543,4 @@ def handle_ping(data):
 
 if __name__ == "__main__":
     port = int(os.environ.get('VRM_API_PORT','5010'))
-    socketio.run(app, port=port, debug=True)
+    socketio.run(app, port=port, debug=(os.environ.get("VRM_DEBUG", "0") == "1" and os.environ.get("VRM_PRODUCTION", "0") != "1"))

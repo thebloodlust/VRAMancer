@@ -20,7 +20,7 @@ Usage:
     from core.inference_pipeline import get_pipeline
     pipe = get_pipeline()
     pipe.load("gpt2")
-    print(pipe.generate("Once upon a time"))
+    logger.info(pipe.generate("Once upon a time"))
 """
 
 from __future__ import annotations
@@ -143,8 +143,8 @@ class InferencePipeline:
         if enable_metrics and _METRICS:
             try:
                 metrics_server_start()
-            except Exception:
-                pass
+            except Exception as e:
+                _logger.debug(f"Exception silencieuse dans l'exécution: {e}", exc_info=True)
 
         # Start cluster discovery in background
         if enable_discovery:
@@ -334,8 +334,8 @@ class InferencePipeline:
         try:
             from core.wake_on_inference import get_woi_manager
             get_woi_manager().wake_all()
-        except Exception:
-            pass
+        except Exception as e:
+            _logger.debug(f"Exception silencieuse dans l'exécution: {e}", exc_info=True)
 
         if _METRICS:
             INFER_REQUESTS.inc()
@@ -410,7 +410,7 @@ class InferencePipeline:
                 if span:
                     span.set_attribute("error", True)
                     span.set_attribute("error.message", str(e))
-                _logger.error("Generation failed: %s", e)
+                _logger.error("Generation failed: %s", e, exc_info=True)
                 raise
 
     def infer(self, input_ids: Any) -> Any:
@@ -983,8 +983,8 @@ class InferencePipeline:
                     GPU_MEMORY_USED.labels(gpu=str(i)).set(
                         torch.cuda.memory_allocated(i)
                     )
-        except Exception:
-            pass
+        except Exception as e:
+            _logger.debug(f"Exception silencieuse dans l'exécution: {e}", exc_info=True)
 
     # ------------------------------------------------------------------
     # Shutdown
@@ -998,43 +998,57 @@ class InferencePipeline:
         if self.fault_manager and hasattr(self.fault_manager, 'stop'):
             try:
                 self.fault_manager.stop()
-            except Exception:
-                pass
+            except Exception as e:
+                _logger.debug(f"Exception silencieuse dans l'exécution: {e}", exc_info=True)
 
         # Stop continuous batcher
         if self.continuous_batcher:
             try:
                 self.continuous_batcher.stop()
-            except Exception:
-                pass
+            except Exception as e:
+                _logger.debug(f"Exception silencieuse dans l'exécution: {e}", exc_info=True)
 
         # Stop rebalancing
         self.stop_rebalancing()
+
+        if hasattr(self, 'monitor') and self.monitor:
+            try:
+                self.monitor.stop_polling()
+            except Exception as e:
+                _logger.debug(f"Exception silencieuse dans l'exécution: {e}", exc_info=True)
+
+        if hasattr(self, 'stream_manager') and self.stream_manager:
+            try:
+                self.stream_manager.stop_monitoring()
+            except Exception as e:
+                _logger.debug(f"Exception silencieuse dans l'exécution: {e}", exc_info=True)
+
+        if hasattr(self, 'webgpu_manager') and self.webgpu_manager:
+            try:
+                if hasattr(self.webgpu_manager, 'stop'):
+                    self.webgpu_manager.stop()
+            except Exception as e:
+                _logger.debug(f"Exception silencieuse dans l'exécution: {e}", exc_info=True)
 
         # Stop GPU hot-plug
         if self.gpu_hotplug:
             try:
                 self.gpu_hotplug.stop()
-            except Exception:
-                pass
+            except Exception as e:
+                _logger.debug(f"Exception silencieuse dans l'exécution: {e}", exc_info=True)
 
         if self.discovery:
             try:
                 self.discovery.stop()
-            except Exception:
-                pass
+            except Exception as e:
+                _logger.debug(f"Exception silencieuse dans l'exécution: {e}", exc_info=True)
 
         if self.transfer_manager:
             try:
                 self.transfer_manager.shutdown()
-            except Exception:
-                pass
+            except Exception as e:
+                _logger.debug(f"Exception silencieuse dans l'exécution: {e}", exc_info=True)
 
-        if self.stream_manager:
-            try:
-                self.stream_manager.stop_monitoring()
-            except Exception:
-                pass
 
         self._loaded = False
         _logger.info("Pipeline shutdown complete")
@@ -1042,8 +1056,8 @@ class InferencePipeline:
     def __del__(self):
         try:
             self.shutdown()
-        except Exception:
-            pass
+        except Exception as e:
+            _logger.debug(f"Exception silencieuse dans l'exécution: {e}", exc_info=True)
 
 
 # ---------------------------------------------------------------------------

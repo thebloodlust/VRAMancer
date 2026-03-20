@@ -2,7 +2,7 @@ import struct
 import json
 
 # ------------------------------------------------------------------
-# 1️⃣  Format de base des paquets (sans TCP/IP)
+# 1⃣  Format de base des paquets (sans TCP/IP)
 # ------------------------------------------------------------------
 class Packet:
     """

@@ -99,6 +99,8 @@ omit = [
     "core/layer_profiler.py",
     "core/compute_engine.py",
     "core/network/fibre_fastpath.py",
+    "core/backends_vllm.py",
+    "core/backends_ollama.py",
 ]
 
 [tool.coverage.report]

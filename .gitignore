@@ -49,3 +49,12 @@ keys/
 # Archives et packaging
 vramancer_deb/
 *.pdf
+
+# V8 Cleanups
+htmlcov/
+vramancer_ledger.db
+validation_report.json
+.hm_state.json
+.pytest_cache/
+.coverage.*
+membership.jsonl

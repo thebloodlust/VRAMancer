@@ -30,14 +30,14 @@ class HolographicKVManager:
         try:
             import vramancer_rust as swarm_core
             self.native_core = swarm_core
-            self.log.info("⚡ [Brain] Rust Swarm Core engaged. Python GIL bypassed for Holographic Processing.")
+            self.log.info(" [Brain] Rust Swarm Core engaged. Python GIL bypassed for Holographic Processing.")
         except ImportError:
             try:
                 import swarm_core
                 self.native_core = swarm_core
-                self.log.info("⚡ [Brain] C++ Swarm Core engaged. Python GIL bypassed for Holographic Processing.")
+                self.log.info(" [Brain] C++ Swarm Core engaged. Python GIL bypassed for Holographic Processing.")
             except ImportError:
-                self.log.warning("🐢 [Brain] Native Swarm Core not found. Falling back to slow Python loops.")
+                self.log.warning(" [Brain] Native Swarm Core not found. Falling back to slow Python loops.")
         
     def _xor_bytes(self, b1: bytes, b2: bytes) -> bytes:
         """Fast low-level XOR for parity generation/reconstruction."""
@@ -64,7 +64,7 @@ class HolographicKVManager:
         
         # Geberate the Parity Shard
         if self.native_core:
-            # ⚡ Execute in multi-threaded C++ without locking Python!
+            #  Execute in multi-threaded C++ without locking Python!
             parity = self.native_core.generate_holographic_parity(padded_shards)
         else:
             parity = bytearray(max_len)
@@ -83,7 +83,7 @@ class HolographicKVManager:
         for i, shard in enumerate(shards):
             if shard is None:
                 if missing_index != -1:
-                    self.log.error("🧠 [Hologram] Catastrophic failure: Multiple nodes died. Cannot heal.")
+                    self.log.error(" [Hologram] Catastrophic failure: Multiple nodes died. Cannot heal.")
                     return b"" # Cannot recover from >1 failure with simple parity
                 missing_index = i
                 
@@ -91,10 +91,10 @@ class HolographicKVManager:
             # Brain is entirely healthy, just concatenate
             return b"".join(shards)
             
-        self.log.warning(f"🧬 [Hologram] Node death detected at index {missing_index}. Initiating Cellular Regeneration from Parity...")
+        self.log.warning(f" [Hologram] Node death detected at index {missing_index}. Initiating Cellular Regeneration from Parity...")
         
         if self.native_core:
-            # ⚡ Instantly calculate the missing tensor wedge in native C++
+            #  Instantly calculate the missing tensor wedge in native C++
             valid_shards = [s for i, s in enumerate(shards) if i != missing_index and s is not None]
             reconstructed_shard = self.native_core.heal_holograph(valid_shards, parity)
         else:
@@ -111,7 +111,7 @@ class HolographicKVManager:
         # Insert the healed tissue back and combine
         shards[missing_index] = reconstructed_shard
         
-        self.log.info("✨ [Hologram] Neural Pathway restored perfectly in 0-shot.")
+        self.log.info(" [Hologram] Neural Pathway restored perfectly in 0-shot.")
         return b"".join(shards)
 
 # Singleton instance

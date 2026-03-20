@@ -14,6 +14,7 @@ Exécution :
     python -m core.health --json      # JSON output
 """
 from __future__ import annotations
+import logging
 
 import importlib
 import json
@@ -318,9 +319,9 @@ def main():
         report = quick_check()
 
     if as_json or full:
-        print(json.dumps(report, indent=2, ensure_ascii=False))
+        logging.info(json.dumps(report, indent=2, ensure_ascii=False))
     else:
-        print(json.dumps(report, indent=2, ensure_ascii=False))
+        logging.info(json.dumps(report, indent=2, ensure_ascii=False))
 
 
 if __name__ == "__main__":

@@ -19,7 +19,7 @@ def test_scheduler_routing():
     input_tensor = torch.zeros(1, 10)
     output = scheduler.forward(input_tensor)
     assert output.shape == input_tensor.shape
-    print("✅ Routage dynamique exécuté avec succès")
+    print(" Routage dynamique exécuté avec succès")
 
 if __name__ == "__main__":
     test_scheduler_routing()

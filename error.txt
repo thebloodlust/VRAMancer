@@ -1,1 +1,0 @@
-%LOCALAPPDATA%\VRAMancer\python_sys\python.exe -m vramancer.main serve --host 0.0.0.0 --port 5031

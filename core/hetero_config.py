@@ -12,7 +12,7 @@ Usage:
     from core.hetero_config import auto_configure, HeteroConfig
 
     config = auto_configure()
-    print(config.summary())
+    logging.info(config.summary())
 
     # Apply to pipeline
     config.apply_to_pipeline(pipeline)

@@ -1,59 +1,313 @@
+
 <!DOCTYPE html>
-<html lang="fr">
+<html lang="fr" class="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VRAMancer Supervision</title>
+    <title>VRAMancer Orbital Supervision</title>
+    <!-- Tailwind CSS Engine -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Icons (Phosphor) -->
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+    <!-- AlpineJS for reactivity (lightweight) -->
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <!-- 3D Force Graph for Interactive Network Map -->
+    <script src="https://unpkg.com/3d-force-graph"></script>
+
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        cyber: { 
+                            dark: '#030712', medium: '#111827', light: '#1f2937',
+                            accent: '#00f2fe', neon: '#4facfe', danger: '#fb2c36', success: '#00ff87' 
+                        }
+                    },
+                    animation: {
+                        'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+                    }
+                }
+            }
+        }
+    </script>
     <style>
-        body { font-family: Arial, sans-serif; margin: 0; padding: 0; }
-        .cluster { display: flex; flex-wrap: wrap; gap: 1em; }
-        .node { border: 1px solid #ccc; border-radius: 8px; padding: 1em; min-width: 180px; background: #f9f9f9; }
-        .heatmap { margin-top: 2em; }
-        .mobile { max-width: 480px; margin: auto; }
-        .actions { margin-top: 1em; }
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;700;800&display=swap');
+        body { font-family: 'JetBrains Mono', monospace; background-color: #030712; color: #e5e7eb; overflow-x: hidden; }
+        .glass-panel { background: rgba(17, 24, 39, 0.7); backdrop-filter: blur(12px); border: 1px solid rgba(255,255,255,0.05); }
+        .neon-text { text-shadow: 0 0 10px rgba(0, 242, 254, 0.5); }
+        .vram-bar { background: linear-gradient(90deg, #4facfe 0%, #00f2fe 100%); transition: width 0.5s ease; }
+        .vram-danger { background: linear-gradient(90deg, #f5576c 0%, #f093fb 100%); }
+        
+        /* Particles for background */
+        #particles { position: fixed; top:0; left:0; width:100vw; height:100vh; z-index:-1; pointer-events:none; opacity: 0.3;}
     </style>
 </head>
-<body>
-    <div class="mobile">
-        <h2>Supervision VRAMancer (Mobile)</h2>
-        <div id="cluster" class="cluster"></div>
-        <div class="heatmap" id="heatmap"></div>
-        <div class="actions">
-            <button onclick="refreshCluster()">Rafraîchir</button>
-        </div>
-        <div id="logs"></div>
+<body class="antialiased min-h-screen selection:bg-cyber-accent selection:text-black" x-data="dashboardData()">
+    <!-- Background Canvas -->
+    <canvas id="particles"></canvas>
+
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 relative z-10">
+        
+        <!-- Header -->
+        <header class="flex flex-col md:flex-row justify-between items-center mb-10 gap-6 glass-panel rounded-2xl p-6 shadow-2xl">
+            <div class="flex items-center gap-4">
+                <div class="relative">
+                    <i class="ph-fill ph-cpu text-6xl text-cyber-accent animate-pulse-slow"></i>
+                    <div class="absolute -bottom-2 -right-2 text-xs font-bold bg-cyber-accent text-black px-2 py-0.5 rounded shadow-[0_0_10px_#00f2fe]">LIVE</div>
+                </div>
+                <div>
+                    <h1 class="text-3xl font-extrabold tracking-tight text-white mb-1"><span class="neon-text">VRAMancer</span> Nexus</h1>
+                    <p class="text-cyber-neon text-sm uppercase tracking-widest font-semibold flex items-center gap-2">
+                        <span class="w-2 h-2 rounded-full bg-cyber-success animate-ping"></span> 
+                        Swarm Orchestrator Active
+                    </p>
+                </div>
+            </div>
+            <div class="flex gap-4">
+                <a href="/chat" class="group relative px-6 py-3 font-semibold text-white bg-cyber-dark border border-cyber-accent/50 rounded-lg overflow-hidden transition-all hover:border-cyber-neon hover:shadow-[0_0_15px_rgba(78,205,196,0.4)]">
+                    <div class="absolute inset-0 w-0 bg-cyber-neon/10 transition-all duration-[250ms] ease-out group-hover:w-full"></div>
+                    <span class="relative flex items-center gap-2"><i class="ph ph-chat-centered-text"></i> Chat UI</span>
+                </a>
+                <a href="/browser" class="group relative px-6 py-3 font-semibold text-white bg-cyber-dark border border-cyber-accent/50 rounded-lg overflow-hidden transition-all hover:border-cyber-accent hover:shadow-[0_0_15px_rgba(0,242,254,0.4)]">
+                    <div class="absolute inset-0 w-0 bg-cyber-accent/10 transition-all duration-[250ms] ease-out group-hover:w-full"></div>
+                    <span class="relative flex items-center gap-2"><i class="ph ph-magnifying-glass"></i> Model Browser</span>
+                </a>
+            </div>
+        </header>
+
+        <!-- Main Dashboard Grid -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+
+            <!-- Col 1: Hardware & GPUs -->
+            <div class="lg:col-span-2 space-y-6">
+                <!-- Swarm Attention Widget -->
+                <div class="glass-panel p-0 rounded-2xl relative overflow-hidden flex flex-col justify-between" style="min-height: 320px; border: 1px solid rgba(0, 242, 254, 0.2);">
+                    <div class="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-cyber-accent to-transparent opacity-80 z-20"></div>
+                    
+                    <!-- Graph 3D Container -->
+                    <div id="3d-graph" class="absolute inset-0 w-full h-full z-0 cursor-move"></div>
+
+                    <!-- Overlay UI Elements -->
+                    <div class="relative z-10 p-6 flex justify-between items-start pointer-events-none">
+                        <div>
+                            <h2 class="text-xl font-bold text-white flex items-center gap-2 drop-shadow-md"><i class="ph ph-share-network"></i> Tokio Network Data Plane</h2>
+                            <p class="text-xs text-cyber-success mt-1 font-mono drop-shadow-md">Rust / Zero-Copy Safetensors Active <i class="ph-fill ph-check-circle"></i></p>
+                        </div>
+                        <div class="bg-cyber-dark/80 backdrop-blur px-3 py-1 pb-1.5 rounded-full border border-cyber-accent/50 text-xs font-bold text-cyber-neon flex items-center gap-2">
+                            <span class="w-2 h-2 rounded-full bg-cyber-success animate-ping"></span>
+                            <span>Swarm Linked</span>
+                        </div>
+                    </div>
+
+                    <div class="relative z-10 p-6 grid grid-cols-2 gap-4 mt-auto pointer-events-none">
+                        <div class="bg-black/70 backdrop-blur rounded-xl p-4 border border-gray-800">
+                            <div class="text-[0.65rem] text-gray-500 uppercase tracking-widest mb-1">Tier Actif</div>
+                            <div class="text-lg font-bold text-white">Tier 2: <span class="text-cyber-accent">Zero-Copy TCP</span></div>
+                            <div class="text-xs text-gray-400 mt-1">Latence Bypass CPU</div>
+                        </div>
+                        <div class="bg-black/70 backdrop-blur rounded-xl p-4 border border-gray-800">
+                            <div class="text-[0.65rem] text-gray-500 uppercase tracking-widest mb-1">Tenseurs Routés (P2P)</div>
+                            <div class="text-lg font-bold text-cyber-success font-mono" x-text="metrics.tensorsProcessed">0</div>
+                            <div class="text-xs text-gray-400 mt-1">Via HMAC Zero-Trust</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Local Hardware Pool -->
+                <h2 class="text-xl font-bold text-white mt-8 mb-4 border-b border-gray-800 pb-2"><i class="ph ph-graphics-card"></i> Local Hardware Pool</h2>
+                
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4" id="gpu-container">
+                    <!-- Dynamic GPUs from Flask injection -->
+                    {% for gpu in gpus %}
+                    <div class="glass-panel p-5 rounded-xl border-l-4 border-l-cyber-neon transition flex flex-col justify-between hover:bg-gray-800/50">
+                        <div class="flex justify-between items-start mb-4">
+                            <div class="flex items-center gap-3">
+                                <i class="ph ph-hard-drives text-3xl text-gray-300"></i>
+                                <div>
+                                    <h3 class="font-bold text-white leading-tight">{{ gpu.name }}</h3>
+                                    <p class="text-xs text-cyber-success font-semibold mt-0.5">{{ "Online" if gpu.is_available else "Offline" }}</p>
+                                </div>
+                            </div>
+                            <div class="text-right">
+                                <p class="text-[0.65rem] text-gray-500 uppercase">Usage</p>
+                                <p class="font-bold text-white font-mono">{{ gpu.used_vram_mb }}<span class="text-gray-400 text-sm">/{{ gpu.total_vram_mb }}</span> <span class="text-xs text-cyber-neon">MB</span></p>
+                            </div>
+                        </div>
+                        
+                        <div class="w-full bg-gray-900 rounded-full h-2.5 mb-1 overflow-hidden shadow-inner">
+                            {% set pct = (gpu.used_vram_mb / gpu.total_vram_mb * 100) if gpu.total_vram_mb else 0 %}
+                            <div class="h-full rounded-full transition-all duration-1000 {% if pct > 85 %} vram-danger {% else %} vram-bar {% endif %}" 
+                                 style="width: {{ pct }}%"></div>
+                        </div>
+                        <div class="text-right text-xs text-gray-400">{{ "%.1f"|format(pct) }}% Utilisée</div>
+                    </div>
+                    {% endfor %}
+                    
+                    {% if not gpus %}
+                        <div class="col-span-2 glass-panel p-8 text-center text-gray-500 rounded-xl border border-dashed border-gray-700">
+                            <i class="ph ph-warning-circle text-4xl mb-2"></i>
+                            <p>Aucun accélérateur matériel détecté sur ce nœud.</p>
+                        </div>
+                    {% endif %}
+                </div>
+            </div> <!-- End Col 1 -->
+
+            <!-- Col 2: Memory & Activity -->
+            <div class="space-y-6">
+                <!-- Memory Hierarchy Map -->
+                <div class="glass-panel p-6 rounded-2xl border border-gray-800/60">
+                    <h2 class="text-lg font-bold text-white mb-4 flex items-center gap-2"><i class="ph ph-stack"></i> Hierarchical Memory</h2>
+                    
+                    <div class="space-y-4">
+                        {% if memory %}
+                            {% for tier, count in memory.tiers.items() %}
+                            <div>
+                                <div class="flex justify-between text-xs mb-1">
+                                    <span class="uppercase tracking-wider text-gray-400 font-bold">{{ tier }}</span>
+                                    <span class="text-cyber-accent font-mono">{{ count }} blocks</span>
+                                </div>
+                                <div class="w-full bg-black rounded-full h-1.5 border border-gray-800">
+                                    <div class="bg-gray-600 h-1.5 rounded-full" style="width: min(100%, {{ count * 10 }}%)"></div>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        {% else %}
+                            <div class="text-sm text-gray-500 italic text-center py-4">Pas de pagination active</div>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <!-- Live Task Feed (Console) -->
+                <div class="glass-panel rounded-2xl border border-gray-800/60 flex flex-col h-[400px]">
+                    <div class="p-4 border-b border-gray-800 flex justify-between items-center bg-black/20 rounded-t-2xl">
+                        <h2 class="text-sm font-bold text-white flex items-center gap-2"><i class="ph ph-terminal-window"></i> Orchestrator Logs</h2>
+                        <span class="flex h-2 w-2 relative">
+                            <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyber-success opacity-75"></span>
+                            <span class="relative inline-flex rounded-full h-2 w-2 bg-cyber-success"></span>
+                        </span>
+                    </div>
+                    
+                    <div class="p-4 flex-1 overflow-y-auto font-mono text-[0.65rem] space-y-2" id="live-logs">
+                        <!-- Filled by JS -->
+                        <div class="text-gray-500">[SYSTEM] Initialization sequence started...</div>
+                        <div class="text-cyber-neon">[INFO] Cluster L1 connected successfully.</div>
+                    </div>
+                </div>
+            </div>
+
+        </div> <!-- End Grid -->
     </div>
+
+
     <script>
-        async function refreshCluster() {
-            const res = await fetch('/api/cluster');
-            const nodes = await res.json();
-            let html = '';
-            nodes.forEach(n => {
-                html += `<div class='node'><b>${n.id}</b><br>Type: ${n.type}<br>Statut: ${n.status}<br>CPU: ${n.cpu}<br>RAM: ${n.ram}<br>GPU: ${n.gpu}<br>OS: ${n.os}<br>Conn: ${n.conn}<br><button onclick=\"sendAction('${n.id}')\">Ping</button></div>`;
+        // Alpine Data Store
+        function dashboardData() {
+            return {
+                metrics: {
+                    activeNodes: 0,
+                    bandwidth: 0,
+                    tensorsProcessed: 0
+                },
+                logs: [],
+                init() {
+                    this.fetchLiveTasks();
+                    setInterval(() => this.updateMockMetrics(), 2000);
+                },
+                async updateMockMetrics() {
+                    try {
+                        const r = await fetch('/api/swarm/status');
+                        if (r.ok) {
+                            const data = await r.json();
+                            // Real metrics
+                            this.metrics.activeNodes = data.activeNodes;
+                            this.metrics.bandwidth = data.bandwidth;
+                            this.metrics.tensorsProcessed = data.tensorsProcessed;
+                            
+                            // Let's update the 3D Graph dynamically!
+                            if (window.update3DGraph) {
+                                window.update3DGraph(data.activeNodes);
+                            }
+                        }
+                    } catch(e) {}
+                },
+                async fetchLiveTasks() {
+                    const logContainer = document.getElementById('live-logs');
+                    
+                    try {
+                        const r = await fetch('/api/tasks/status');
+                        if (r.ok) {
+                            const js = await r.json();
+                            let html = '';
+                            Object.entries(js.active || {}).forEach(([res, info]) => {
+                                const id = info.id || info.task_id || 'n/a';
+                                html += `<div class="text-cyber-accent"><span class="text-white">[TASK]</span> Routage Tenseur via Rust/Tokio: ${id}</div>`;
+                            });
+                            if (html === "") {
+                                html = `<div class="text-gray-600">[IDLE] Attente des requêtes /v1/chat/completions...</div>`;
+                                html += `<div class="text-cyber-success mt-2">[WOI] Écoute Magic Packets Wake-on-Inference activée.</div>`;
+                            }
+                            logContainer.innerHTML = html;
+                        }
+                    } catch(e) {}
+                    
+                    setTimeout(() => this.fetchLiveTasks(), 3000);
+                }
+            }
+        }
+
+        // --- 3D INTERACTIVE NETWORK MAP (Tokio Cluster) ---
+        // Dynamically generating cluster nodes
+        const Graph = ForceGraph3D()(document.getElementById('3d-graph'))
+            .backgroundColor('rgba(0,0,0,0)')
+            .nodeRelSize(8)
+            .nodeAutoColorBy('group')
+            .nodeColor(node => node.group === 1 ? '#00f2fe' : (node.group === 2 ? '#4facfe' : '#fb2c36'))
+            .linkColor(() => 'rgba(0, 242, 254, 0.4)')
+            .linkWidth(2)
+            .linkDirectionalParticles(4)
+            .linkDirectionalParticleWidth(3)
+            .linkDirectionalParticleSpeed(d => d.value * 0.005)
+            .cameraPosition({ x: 0, y: 0, z: 250 });
+
+        // Simulate a cluster of exactly 1 Orchestrator, 4 Worker GPUs, 2 NVMe Nodes
+        const gData = {
+            nodes: [
+                { id: 'Orchestrator (Rust/Python)', group: 1, val: 20 },
+                { id: 'Worker GPU 1 (RTX 4090)', group: 2, val: 15 },
+                { id: 'Worker GPU 2 (RTX 3090)', group: 2, val: 15 },
+                { id: 'Worker GPU 3 (Apple M3)', group: 2, val: 10 },
+                { id: 'Worker GPU 4 (WebGPU Edge)', group: 2, val: 8 },
+                { id: 'NVMe Swap Node A', group: 3, val: 5 },
+            ],
+            links: [
+                { source: 'Worker GPU 1 (RTX 4090)', target: 'Orchestrator (Rust/Python)', value: 8 },
+                { source: 'Worker GPU 2 (RTX 3090)', target: 'Orchestrator (Rust/Python)', value: 6 },
+                { source: 'Worker GPU 3 (Apple M3)', target: 'Orchestrator (Rust/Python)', value: 4 },
+                { source: 'Worker GPU 4 (WebGPU Edge)', target: 'Orchestrator (Rust/Python)', value: 2 },
+                { source: 'NVMe Swap Node A', target: 'Orchestrator (Rust/Python)', value: 1 },
+                { source: 'Worker GPU 1 (RTX 4090)', target: 'Worker GPU 2 (RTX 3090)', value: 3 }, // P2P Tokio Link
+            ]
+        };
+
+        Graph.graphData(gData);
+
+        // Make the graph spin slowly for the WOW factor
+        let angle = 0;
+        setInterval(() => {
+            angle += Math.PI / 800;
+            Graph.cameraPosition({
+                x: 250 * Math.sin(angle),
+                z: 250 * Math.cos(angle)
             });
-            document.getElementById('cluster').innerHTML = html;
-        }
-        async function refreshHeatmap() {
-            const res = await fetch('/api/heatmap');
-            const heatmap = await res.json();
-            let html = '<h3>Heatmap VRAM/CPU</h3>';
-            heatmap.forEach(h => {
-                html += `<div>${h.id}: VRAM ${h.vram}% | CPU ${h.cpu}%</div>`;
-            });
-            document.getElementById('heatmap').innerHTML = html;
-        }
-        async function refreshLogs() {
-            const res = await fetch('/api/logs');
-            const logs = await res.json();
-            let html = '<h3>Logs</h3>';
-            logs.forEach(l => { html += `<div>${l.node}: ${l.action} (${new Date(l.timestamp*1000).toLocaleString()})</div>`; });
-            document.getElementById('logs').innerHTML = html;
-        }
-        async function sendAction(node_id) {
-            await fetch('/api/action', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({node_id, action:'ping'})});
-            refreshLogs();
-        }
-        refreshCluster(); refreshHeatmap(); refreshLogs();
+        }, 30);
+        
+        // Handle Resize to keep Graph responsive
+        window.addEventListener('resize', () => {
+            const container = document.getElementById('3d-graph');
+            Graph.width(container.clientWidth).height(container.clientHeight);
+        });
     </script>
 </body>
 </html>

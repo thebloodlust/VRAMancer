@@ -102,8 +102,8 @@ class TestHierarchicalMemory:
         hmem.register_block(block, "L3")
         hmem.spill_to_nvme(block, {"weights": [1, 2, 3]})
         assert hmem.get_tier(block.id) == "L5"
-        # Verify file exists
-        nvme_file = tmp_path / "nvme" / f"{block.id}.pkl"
+        # Verify file exists (JSON format)
+        nvme_file = tmp_path / "nvme" / f"{block.id}.json"
         assert nvme_file.exists()
 
     def test_load_from_nvme(self, hmem, block, tmp_path):
@@ -390,10 +390,10 @@ class TestGPUMonitorFull:
         from core.monitor import GPUMonitor
         m = GPUMonitor()
         m.start_polling(interval=0.1)
-        assert m._polling is True
+        assert m._poll_thread is not None and m._poll_thread.is_alive()
         time.sleep(0.15)
         m.stop_polling()
-        assert m._polling is False
+        assert not m._poll_thread.is_alive()
 
     def test_repr(self):
         from core.monitor import GPUMonitor
@@ -480,7 +480,7 @@ class TestDashboardClients:
         assert os.path.exists(os.path.join(self.ROOT, "dashboard", "dashboard_web.py"))
 
     def test_dashboard_cli_exists(self):
-        assert os.path.exists(os.path.join(self.ROOT, "dashboard", "dashboard_cli.py"))
+        assert os.path.exists(os.path.join(self.ROOT, "dashboard", "cli_dashboard.py"))
 
 
 # =====================================================================

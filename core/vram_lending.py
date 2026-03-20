@@ -227,7 +227,7 @@ class VRAMLendingPool:
         pool.reclaim(owner_gpu=1, urgency=ReclaimUrgency.HIGH)
 
         # Check pool status
-        print(pool.stats())
+        logging.info(pool.stats())
     """
 
     def __init__(
@@ -858,7 +858,7 @@ class VRAMLendingPool:
             self._shutdown.wait(timeout=interval)
 
     def _check_and_reclaim(self) -> None:
-        """Check all GPUs and reclaim if any owner is under pressure."""
+        """Check all GPUs and reclaim if any owner is under pressure or thermal limit."""
         for gpu_id, budget in self._budgets.items():
             if budget.lent_bytes <= 0:
                 continue
@@ -867,6 +867,14 @@ class VRAMLendingPool:
             if utilization is None:
                 utilization = budget.utilization
 
+            # Thermal-aware: reclaim if GPU is too hot
+            temp = self._get_gpu_temperature(gpu_id)
+            if temp is not None and temp >= self.policy.thermal_limit_c:
+                log.warning("GPU %d thermal limit (%.0f°C >= %.0f°C) — reclaiming",
+                            gpu_id, temp, self.policy.thermal_limit_c)
+                self.reclaim(gpu_id, ReclaimUrgency.HIGH)
+                continue
+
             if utilization >= self.policy.critical_threshold:
                 self.reclaim(gpu_id, ReclaimUrgency.CRITICAL)
             elif utilization >= self.policy.reclaim_threshold:
@@ -874,6 +882,37 @@ class VRAMLendingPool:
             elif utilization >= self.policy.stop_lending_threshold:
                 # Stop new lending but don't reclaim yet
                 pass
+
+    def _get_gpu_temperature(self, gpu_id: int) -> Optional[float]:
+        """Read GPU temperature (°C) via pynvml or torch, None if unavailable."""
+        if _MINIMAL:
+            return None
+        try:
+            import pynvml  # type: ignore
+            pynvml.nvmlInit()
+            handle = pynvml.nvmlDeviceGetHandleByIndex(gpu_id)
+            temp = pynvml.nvmlDeviceGetTemperature(handle, pynvml.NVML_TEMPERATURE_GPU)
+            return float(temp)
+        except Exception:
+            pass
+        # ROCm fallback
+        try:
+            import subprocess
+            out = subprocess.run(
+                ["rocm-smi", "--showtemp", "--json"],
+                capture_output=True, text=True, timeout=3
+            )
+            if out.returncode == 0:
+                import json
+                data = json.loads(out.stdout)
+                for k, v in data.items():
+                    if str(gpu_id) in k:
+                        temp_val = v.get("Temperature (Sensor edge) (C)")
+                        if temp_val is not None:
+                            return float(temp_val)
+        except Exception:
+            pass
+        return None
 
     def _get_real_utilization(self, gpu_id: int) -> Optional[float]:
         """Get real GPU utilization from monitor (if available)."""

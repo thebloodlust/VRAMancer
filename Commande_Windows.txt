@@ -1,8 +1,0 @@
-$DIR = "$env:LOCALAPPDATA\VRAMancer"
-$PYEXE = "$DIR\python_sys\python.exe"
-curl.exe -sL -o "$DIR\get-pip.py" "https://bootstrap.pypa.io/get-pip.py"
-& $PYEXE "$DIR\get-pip.py"
-cd "$DIR\app\VRAMancer-main"
-& $PYEXE -m pip install -r requirements.txt
-& $PYEXE -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121 --upgrade
-& $PYEXE -m vramancer.main serve --host 0.0.0.0 --port 5031

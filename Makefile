@@ -72,3 +72,7 @@ archive:
 		utils/ \
 		tests/ \
 	
+
+coverage:
+	@echo "📊 Exécution de la suite de tests pour la couverture de code..."
+	pytest tests/ --cov=core --cov-report=html --cov-report=term-missing -m "not (chaos or slow or integration)"

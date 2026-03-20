@@ -105,6 +105,37 @@ class SimpleScheduler:
     # Forward / predict
     # ------------------------------------------------------------------
 
+    def weighted_forward(self, x: Any, profiler_data: dict = None) -> Any:
+        """
+        Exécute le forward en pondérant les latences ou FLOPS connus.
+        Si la GPU cible est asymétrique (ex: RTX 5070 Ti vs RTX 3090), 
+        utilise profiler_data pour anticiper et ajuster le dispatch.
+        """
+        if "on_start" in self.callbacks:
+            self.callbacks["on_start"](0, x)
+
+        for idx, block in enumerate(self.blocks):
+            if "on_step" in self.callbacks:
+                self.callbacks["on_step"](idx, x)
+                
+            meta = get_block_metadata(idx)
+            if profiler_data and idx in profiler_data:
+                meta['weight'] = profiler_data[idx].get('weight', 1.0)
+                
+            if self.router:
+                if "index" in meta: del meta["index"]
+                out = self.router.route(block, x, index=idx, **meta)
+            else:
+                out = block(x) if callable(block) else x
+            
+            if hasattr(out, "logits"):
+                out = out.logits
+            x = out
+
+        if "on_end" in self.callbacks:
+            self.callbacks["on_end"](len(self.blocks), x)
+        return x
+
     def forward(self, x: Any) -> Any:
         """Run input through all blocks sequentially."""
         if "on_start" in self.callbacks:
@@ -116,6 +147,7 @@ class SimpleScheduler:
 
             meta = get_block_metadata(idx)
             if self.router:
+                if "index" in meta: del meta["index"]
                 out = self.router.route(block, x, index=idx, **meta)
             else:
                 out = block(x) if callable(block) else x
@@ -154,8 +186,8 @@ class SimpleScheduler:
         try:
             if torch.cuda.is_available():
                 count = torch.cuda.device_count()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Exception silencieuse dans l'exécution: {e}", exc_info=True)
 
         if count == 0:
             # MPS or CPU fallback
@@ -163,8 +195,8 @@ class SimpleScheduler:
             try:
                 from core.utils import detect_backend
                 backend = detect_backend()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Exception silencieuse dans l'exécution: {e}", exc_info=True)
             if backend == "mps":
                 gpus.append({"id": 0, "total_vram_mb": 0, "free_vram_mb": 0, "name": "Apple MPS"})
             else:
@@ -182,8 +214,8 @@ class SimpleScheduler:
                 props = torch.cuda.get_device_properties(i)
                 name = props.name
                 total_mb = props.total_mem // (1024 * 1024)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Exception silencieuse dans l'exécution: {e}", exc_info=True)
 
             if nvml_info and i < len(nvml_info):
                 total_mb = nvml_info[i]["total_mb"]
@@ -326,7 +358,7 @@ class SimpleScheduler:
                 predicted.append(next_idx)
                 
         if predicted:
-            _logger.debug(f"🔮 [Swarm Synapse] Anticipating execution flow... Prefetching layers {predicted} ahead of current max layer {max_idx}.")
+            _logger.debug(f" [Swarm Synapse] Anticipating execution flow... Prefetching layers {predicted} ahead of current max layer {max_idx}.")
             
         return predicted
 
@@ -376,8 +408,8 @@ class SimpleScheduler:
                 _logger.warning("Module migration failed: %s (CPU fallback)", exc)
                 try:
                     block.module = block.module.to("cpu")
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Exception silencieuse dans l'exécution: {e}", exc_info=True)
 
         # Update accounting
         with self._lock:

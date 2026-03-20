@@ -111,9 +111,11 @@ def verify_request(secret: Optional[str], method: str, path: str,
     """Verify token + optional HMAC signature.
 
     Returns (message, http_code) on error, None on success.
-    Only protects endpoints starting with /api/.
+    Protects all paths except public health checks.
     """
-    if not path.startswith("/api/"):
+    public_paths = {'/health', '/ready', '/live', '/api/health', '/'}
+    # Also ignore standard browser favicon requests and dashboard static files if needed
+    if path in public_paths or path.startswith('/static/') or path == '/favicon.ico':
         return None
 
     is_production = os.environ.get('VRM_PRODUCTION') == '1'
@@ -135,9 +137,34 @@ def verify_request(secret: Optional[str], method: str, path: str,
 
     if token and secret:
         eff_secret = _maybe_rotate(secret)
-        if not hmac.compare_digest(token, eff_secret):
-            if not hmac.compare_digest(token, secret):
-                return ("invalid token", 401)
+        is_valid = False
+        
+        # 1. Check exact API token match (Primary / Admin)
+        if hmac.compare_digest(token, eff_secret) or hmac.compare_digest(token, secret):
+            is_valid = True
+            
+        # 2. Check if it's a Swarm Token
+        elif token.startswith("sk-VRAM-"):
+            try:
+                from core.swarm_ledger import ledger
+                user_info = ledger.verify_and_get_user(token)
+                if user_info and user_info.get("vram_credits", 0) > 0:
+                    is_valid = True
+            except Exception:
+                pass
+                
+        # 3. Check if it's a JWT access token
+        elif token.count('.') == 2:
+            try:
+                from core.auth_strong import decode_access
+                payload = decode_access(token)
+                if payload and "role" in payload:
+                    is_valid = True
+            except Exception:
+                pass
+                
+        if not is_valid:
+            return ("invalid token", 401)
 
     # --- HMAC signature verification (when provided) ---
     eff_secret = _maybe_rotate(secret)
@@ -310,6 +337,14 @@ def install_security(app):
         "/api/memory/evict": "ops",
         "/api/memory/summary": "ops",
         "/api/models/load": "ops",
+        "/api/nodes": "ops",
+        "/api/nodes/<node_id>/action": "admin",
+        "/api/edge/report": "ops",
+        "/api/tasks/submit": "ops",
+        "/api/tasks/cancel": "ops",
+        "/api/tasks/submit_batch": "ops",
+        "/api/ha/apply": "admin",
+        "/api/fastpath/select": "admin",
     }
 
     # CORS origins (comma-separated)

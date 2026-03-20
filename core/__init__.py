@@ -20,6 +20,7 @@ class _StubGPUMonitor:
 class _StubScheduler:
     def __init__(self, *a, **k): pass
     def forward(self, x): return x
+    def predict(self, x): return x
 
 
 # -- Resolve real implementations or fall back to stubs --------------------

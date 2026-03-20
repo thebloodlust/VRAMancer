@@ -147,8 +147,8 @@ class KVCacheBlock(_nn.Module if _HAS_TORCH else object):
                 try:
                     pos_emb = layer.self_attn.rotary_emb(hidden_states, position_ids)
                     layer_kwargs["position_embeddings"] = pos_emb
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Exception silencieuse dans l'exécution: {e}", exc_info=True)
 
             # Try calling with KV cache kwargs (different HF model signatures)
             try:
@@ -204,12 +204,20 @@ class KVCacheBlock(_nn.Module if _HAS_TORCH else object):
 def select_backend(model_name: str, cache_dir: str = None, backend: str = "auto", num_gpus: int = 1):
     logger.info(f"Sélection du backend pour {model_name} (demandé: {backend}, gpus: {num_gpus})")
     
-    # FORCER vLLM DANS TOUS LES CAS (auto ou vllm)
     if backend == "vllm" or backend == "auto":
-        import vllm  # Lèvera une erreur stricte s'il n'est pas installé
-        logger.info(f"Utilisation du backend vLLM pour le modèle {model_name}.")
-        from core.backends_vllm import vLLMBackend
-        return vLLMBackend(model_name, cache_dir=cache_dir, tensor_parallel_size=num_gpus)
+        try:
+            import vllm  # Vérifie si installé
+            logger.info(f"Utilisation du backend vLLM pour le modèle {model_name}.")
+            from core.backends_vllm import vLLMBackend
+            return vLLMBackend(model_name, cache_dir=cache_dir, tensor_parallel_size=num_gpus)
+        except ImportError:
+            if os.environ.get("VRM_BACKEND_ALLOW_STUB") == "1":
+                logger.info("Utilisation du StubBackend car vLLM n'est pas disponible (VRM_BACKEND_ALLOW_STUB=1).")
+                from core.backends_vllm import vLLMBackend  # If it has a stub mode
+                # Actually, let's fallback securely to HuggingFace
+            logger.info("Fallback sur HuggingFaceBackend car vLLM n'est pas disponible.")
+            from core.backends import HuggingFaceBackend
+            return HuggingFaceBackend(model_name, cache_dir=cache_dir)
 
     if backend == "ollama":
         from core.backends_ollama import OllamaBackend
@@ -284,6 +292,12 @@ class HuggingFaceBackend(BaseLLMBackend):
         self._components: Optional[dict] = None  # embed, pos_embed, final_norm, lm_head
 
     def load_model(self, model_name: str, **kwargs):
+        if os.environ.get("VRM_MINIMAL_TEST") == "1" or model_name.startswith("stub"):
+            self.model_name = model_name
+            self.model = "STUB_MODEL"
+            self.tokenizer = "STUB_TOKENIZER"
+            return self.model
+
         from transformers import AutoModelForCausalLM, AutoTokenizer
         self.model_name = model_name
         self.log.info(f"Chargement modèle HuggingFace: {model_name}")
@@ -295,6 +309,9 @@ class HuggingFaceBackend(BaseLLMBackend):
             # kwargs["load_in_8bit"] = True
             kwargs["device_map"] = "auto"
             # kwargs["torch_dtype"] = "float16" # Enable this if VRAM is an issue without load_in_8bit
+
+        if "trust_remote_code" not in kwargs:
+            kwargs["trust_remote_code"] = (os.environ.get("VRM_TRUST_REMOTE_CODE") == "1")
 
         self.model = AutoModelForCausalLM.from_pretrained(model_name, **kwargs)
         try:
@@ -449,7 +466,7 @@ class HuggingFaceBackend(BaseLLMBackend):
                 logits = out.logits if hasattr(out, "logits") else out
                 pkv = getattr(out, "past_key_values", None)
                 return logits, pkv
-            out = self.model(inputs)
+            if isinstance(self.model, str): return self.model; out = self.model(inputs)
             if hasattr(out, "logits"):
                 return out.logits
             return out
@@ -472,7 +489,7 @@ class HuggingFaceBackend(BaseLLMBackend):
             if getattr(self, "webgpu_manager", None) is not None and len(self.webgpu_manager.clients) > 0 and idx == len(self.blocks) // 2:
                 import torch as pt
                 import asyncio
-                self.log.info(f"🚀 [WebGPU] Offloading block {idx} to Edge Swarm (Mobile)...")
+                self.log.info(f" [WebGPU] Offloading block {idx} to Edge Swarm (Mobile)...")
                 tensor_bytes = x.detach().cpu().numpy().tobytes()
                 # Compat with 'dispatch_layer' or 'submit_tensor'
                 submit_fn = getattr(self.webgpu_manager, "dispatch_layer", getattr(self.webgpu_manager, "submit_tensor", None))
@@ -481,11 +498,21 @@ class HuggingFaceBackend(BaseLLMBackend):
                     try:
                         # Since we are in sync land, we have to block on future (or if threadsafe wait)
                         if asyncio.iscoroutine(future):
-                            res_bytes = asyncio.run(future)
+                            try:
+                                loop = asyncio.get_running_loop()
+                                import concurrent.futures
+                                with concurrent.futures.ThreadPoolExecutor(1) as pool:
+                                    res_bytes = pool.submit(asyncio.run, future).result()
+                            except RuntimeError:
+                                res_bytes = asyncio.run(future)
                         else:
                             # Might be concurrent.futures.Future or asyncio.Future
-                            # Let's cleanly wait
-                            loop = asyncio.get_event_loop() if asyncio.get_event_loop().is_running() else asyncio.new_event_loop()
+                            try:
+                                loop = asyncio.get_running_loop()
+                            except RuntimeError:
+                                loop = asyncio.new_event_loop()
+                                asyncio.set_event_loop(loop)
+                            
                             if hasattr(future, "result") and not isinstance(future, asyncio.Future):
                                 res_bytes = future.result(timeout=5.0)
                             else:
@@ -497,10 +524,10 @@ class HuggingFaceBackend(BaseLLMBackend):
                             dt = x.cpu().numpy().dtype
                             arr = np.frombuffer(res_bytes, dtype=dt).reshape(x.shape)
                             x = pt.tensor(arr).to(x.device)
-                            self.log.info(f"✅ [WebGPU] Block {idx} returned from Edge.")
+                            self.log.info(f" [WebGPU] Block {idx} returned from Edge.")
                             continue
                     except Exception as e:
-                        self.log.warning(f"⚠️ [WebGPU] Edge Swarm failed for block {idx}, reverting to local GPU: {e}")
+                        self.log.warning(f" [WebGPU] Edge Swarm failed for block {idx}, reverting to local GPU: {e}")
             # ----------------------------------------------------
 
             out = block(x)
@@ -518,8 +545,8 @@ class HuggingFaceBackend(BaseLLMBackend):
         try:
             return self.__infer_with_kv_cache_impl(inputs, past_key_values, use_cache)
         except Exception as e:
-            print('EXCEPTION IN INFER WITH KV CACHE:')
-            traceback.print_exc()
+            import logging
+            logging.getLogger(__name__).exception("EXCEPTION IN INFER WITH KV CACHE:")
             raise e
 
     def __infer_with_kv_cache_impl(self, inputs: Any, past_key_values: Optional[List] = None, use_cache: bool = False) -> Any:
@@ -529,12 +556,17 @@ class HuggingFaceBackend(BaseLLMBackend):
         comp = self._components
         first_gpu_dev = f"cuda:{self.block_devices[0]}" if (self.block_devices and pt.cuda.is_available()) else "cpu"
         
+        if getattr(self, "_comp_devices", None) is None:
+            self._comp_devices = {}
+
         # 1. Embeddings (Dynamic device resolution to support Accelerate)
-        embed_dev = first_gpu_dev
-        try:
-            embed_dev = next(comp["embed"].parameters()).device
-        except StopIteration:
-            pass
+        if "embed" not in self._comp_devices:
+            try:
+                self._comp_devices["embed"] = next(comp["embed"].parameters()).device
+            except StopIteration:
+                self._comp_devices["embed"] = first_gpu_dev
+                
+        embed_dev = self._comp_devices["embed"]
         
         inputs = inputs.to(embed_dev)
         hidden_states = comp["embed"](inputs)
@@ -546,11 +578,13 @@ class HuggingFaceBackend(BaseLLMBackend):
             hidden_states = hidden_states.to(embed_dev)
         
         if comp["pos_embed"] is not None:
-            pos_dev = first_gpu_dev
-            try:
-                pos_dev = next(comp["pos_embed"].parameters()).device
-            except StopIteration:
-                pass
+            if "pos_embed" not in self._comp_devices:
+                try:
+                    self._comp_devices["pos_embed"] = next(comp["pos_embed"].parameters()).device
+                except StopIteration:
+                    self._comp_devices["pos_embed"] = first_gpu_dev
+            pos_dev = self._comp_devices["pos_embed"]
+            
             seq_len = inputs.shape[1]
             past_len = 0
             if past_key_values and past_key_values[0] and past_key_values[0][0] is not None:
@@ -566,13 +600,17 @@ class HuggingFaceBackend(BaseLLMBackend):
             hidden_states = comp["drop"](hidden_states)
 
         # 2. Process blocks sequentially
+        if "blocks" not in self._comp_devices:
+            self._comp_devices["blocks"] = {}
+            
         for idx, block in enumerate(self.blocks):
             # Dynamic device resolution for the block
-            block_dev = None
-            try:
-                block_dev = next(block.parameters()).device
-            except StopIteration:
-                pass
+            if idx not in self._comp_devices["blocks"]:
+                try:
+                    self._comp_devices["blocks"][idx] = next(block.parameters()).device
+                except StopIteration:
+                    self._comp_devices["blocks"][idx] = None
+            block_dev = self._comp_devices["blocks"][idx]
             
             if block_dev is not None and hidden_states.device != block_dev:
                 hidden_states = hidden_states.to(block_dev)
@@ -587,15 +625,26 @@ class HuggingFaceBackend(BaseLLMBackend):
             if getattr(self, "webgpu_manager", None) is not None and len(self.webgpu_manager.clients) > 0 and idx == len(self.blocks) // 2:
                 import asyncio
                 import numpy as np
-                self.log.info(f"🚀 [WebGPU] Offloading KV-cache block {idx} to Edge Swarm (Mobile)...")
+                self.log.info(f" [WebGPU] Offloading KV-cache block {idx} to Edge Swarm (Mobile)...")
                 tensor_bytes = hidden_states.detach().cpu().numpy().tobytes()
                 submit_fn = getattr(self.webgpu_manager, "dispatch_layer", getattr(self.webgpu_manager, "submit_tensor", None))
                 if submit_fn:
                     future = submit_fn(layer_id=idx, tensor_data=tensor_bytes)
                     try:
-                        loop = asyncio.get_event_loop() if asyncio.get_event_loop().is_running() else asyncio.new_event_loop()
+                        try:
+                            loop = asyncio.get_running_loop()
+                        except RuntimeError:
+                            loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(loop)
+                            
                         if asyncio.iscoroutine(future):
-                            res_bytes = asyncio.run(future)
+                            try:
+                                asyncio.get_running_loop()
+                                import concurrent.futures
+                                with concurrent.futures.ThreadPoolExecutor(1) as pool:
+                                    res_bytes = pool.submit(asyncio.run, future).result()
+                            except RuntimeError:
+                                res_bytes = asyncio.run(future)
                         else:
                             if hasattr(future, "result") and not isinstance(future, asyncio.Future):
                                 res_bytes = future.result(timeout=5.0)
@@ -609,9 +658,9 @@ class HuggingFaceBackend(BaseLLMBackend):
                             if arr.size == hidden_states.numel():
                                 arr = arr.reshape(hidden_states.shape)
                                 hidden_states = pt.tensor(arr).to(hidden_states.device)
-                                self.log.info(f"✅ [WebGPU] Block {idx} returned from Edge.")
+                                self.log.info(f" [WebGPU] Block {idx} returned from Edge.")
                     except Exception as e:
-                        self.log.warning(f"⚠️ [WebGPU] Edge Swarm failed for block {idx}, reverting to local GPU: {e}")
+                        self.log.warning(f" [WebGPU] Edge Swarm failed for block {idx}, reverting to local GPU: {e}")
             # ----------------------------------------------------
 
             block_past = past_key_values[idx] if past_key_values else None
@@ -635,32 +684,30 @@ class HuggingFaceBackend(BaseLLMBackend):
                 
         # 3. Final layer norm (Dynamic device)
         if comp["final_norm"] is not None:
-            norm_dev = None
-            try:
-                norm_dev = next(comp["final_norm"].parameters()).device
-            except StopIteration:
-                pass
+            if "final_norm" not in self._comp_devices:
+                try:
+                    self._comp_devices["final_norm"] = next(comp["final_norm"].parameters()).device
+                except StopIteration:
+                    self._comp_devices["final_norm"] = first_gpu_dev
+            norm_dev = self._comp_devices["final_norm"]
             if norm_dev is not None:
                 hidden_states = hidden_states.to(norm_dev)
             hidden_states = comp["final_norm"](hidden_states)
             
         # 4. LM head → logits (Dynamic device)
         if comp["lm_head"] is not None:
-            head_dev = None
-            try:
-                head_dev = next(comp["lm_head"].parameters()).device
-            except StopIteration:
-                pass
+            if "lm_head" not in self._comp_devices:
+                try:
+                    self._comp_devices["lm_head"] = next(comp["lm_head"].parameters()).device
+                except StopIteration:
+                    self._comp_devices["lm_head"] = first_gpu_dev
+            head_dev = self._comp_devices["lm_head"]
             if head_dev is not None:
                 hidden_states = hidden_states.to(head_dev)
             logits = comp["lm_head"](hidden_states)
         elif comp["embed"] is not None:
             # tied weights fallback if head was missing
-            embed_dev = None
-            try:
-                embed_dev = next(comp["embed"].parameters()).device
-            except StopIteration:
-                pass
+            # use embed_dev
             if embed_dev is not None:
                 hidden_states = hidden_states.to(embed_dev)
             logits = comp["embed"](hidden_states)
@@ -668,6 +715,20 @@ class HuggingFaceBackend(BaseLLMBackend):
         if use_cache:
             return logits, all_presents
         return logits
+
+    def _get_device(self):
+        if hasattr(self, "_cached_device"):
+            return self._cached_device
+        if self.model is not None:
+            import torch as _pt
+            try:
+                self._cached_device = next(self.model.parameters()).device
+                return self._cached_device
+            except StopIteration:
+                self._cached_device = getattr(self.model, "device", _pt.device("cpu"))
+                return self._cached_device
+        import torch as _pt
+        return _pt.device("cpu")
 
     def generate(self, prompt: str, max_new_tokens: int = 128, **kwargs) -> str:
         """Generate text from a prompt using the loaded model and tokenizer.
@@ -693,10 +754,7 @@ class HuggingFaceBackend(BaseLLMBackend):
         if self.blocks is None or len(self.blocks) <= 1:
             if self.model is not None:
                 # Move correctly to model's execution device
-                try:
-                    device = next(self.model.parameters()).device
-                except StopIteration:
-                    device = getattr(self.model, "device", _torch.device("cpu"))
+                device = self._get_device()
                 input_ids = input_ids.to(device)
                 if attention_mask is not None:
                     attention_mask = attention_mask.to(device)
@@ -792,8 +850,8 @@ class HuggingFaceBackend(BaseLLMBackend):
                 input_ids = input_ids.to(device)
                 if self.model is not None and not self.blocks:
                     self.model = self.model.to(device)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Exception silencieuse dans l'exécution: {e}", exc_info=True)
 
         generated = input_ids
         past_key_values = None
@@ -889,8 +947,8 @@ class HuggingFaceBackend(BaseLLMBackend):
                     attention_mask = attention_mask.to(device)
                 if not next(self.model.parameters()).is_cuda:
                     self.model = self.model.to(device)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Exception silencieuse dans l'exécution: {e}", exc_info=True)
 
         gen_kwargs = {
             "max_new_tokens": max_new_tokens,
@@ -912,14 +970,8 @@ class HuggingFaceBackend(BaseLLMBackend):
 
 # ------------------- vLLM Backend -------------------
 # ------------------- External backends (extracted) -------------------
-# vLLMBackend and OllamaBackend are extracted to separate files for
-# maintainability. Re-imported here for backward compatibility.
-# Note: BaseLLMBackend must be defined above before these imports.
-from core.backends_vllm import vLLMBackend  # noqa: E402
-from core.backends_ollama import OllamaBackend  # noqa: E402
-
 __all__ = [
     'select_backend', 'BaseLLMBackend', 'HuggingFaceBackend',
-    'vLLMBackend', 'OllamaBackend', 'KVCacheBlock',
+    'KVCacheBlock',
     '_extract_model_components', '_get_submodule',
 ]

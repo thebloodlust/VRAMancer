@@ -1,3 +1,4 @@
+import logging
 import os
 import hashlib
 import hmac
@@ -31,16 +32,16 @@ if __name__ == "__main__":
     # Require secret from environment — never use a hardcoded default
     secret = os.environ.get("VRM_API_TOKEN")
     if not secret:
-        print("ERROR: Set VRM_API_TOKEN environment variable before running.", file=sys.stderr)
+        logging.info("ERROR: Set VRM_API_TOKEN environment variable before running.", file=sys.stderr)
         sys.exit(1)
     node_key = generate_node_key(secret)
     known_keys = [node_key]
-    print("Authentifié :", authenticate_node(node_key, known_keys))
+    logging.info("Authentifié :", authenticate_node(node_key, known_keys))
 
     # Chiffrement d’un socket (exemple)
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         ssock = secure_socket(s)
-        print("Socket sécurisé (TLS)")
+        logging.info("Socket sécurisé (TLS)")
     except Exception as e:
-        print("Erreur SSL :", e)
+        logging.info("Erreur SSL :", e)

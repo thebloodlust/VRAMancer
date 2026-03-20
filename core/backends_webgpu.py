@@ -21,12 +21,15 @@ from core.logger import LoggerAdapter
 from core.network.webgpu_node import WebGPUNodeManager
 
 class WebGPUBackend(BaseLLMBackend):
+    # Number of tokens to speculate ahead (draft-verify pattern)
+    SPECULATION_WINDOW = 4
+
     def __init__(self):
         self.log = LoggerAdapter("backend.webgpu")
         self.model_name = None
         self.tokenizer = None
         
-        self.log.info("🌐 Initializing WebGPU Orchestrator (Production Mode)...")
+        self.log.info(" Initializing WebGPU Orchestrator (Production Mode)...")
         self.node_manager = WebGPUNodeManager(port=8081)
         self.node_manager.start = self._start_node_manager
         
@@ -127,6 +130,38 @@ class WebGPUBackend(BaseLLMBackend):
         self.log.error("WebGPU inference failed after maximum retries.")
         return "[WebGPU Timeout/Crash Prevention]"
 
+    def _submit_speculative_batch(self, inputs_list, layer_ids):
+        """Submit multiple speculative tokens in parallel via asyncio.gather.
+
+        Returns list of (res_bytes | None) in order.
+        """
+        futures = []
+        for inp, lid in zip(inputs_list, layer_ids):
+            tensor_bytes, quant_scale = self._serialize_tensor(inp) if torch else (json.dumps(inp).encode(), 1.0)
+            fut = self.node_manager.submit_tensor(layer_id=lid, tensor_data=tensor_bytes, quant_scale=quant_scale)
+            futures.append(asyncio.wait_for(fut, timeout=10.0))
+
+        async def _gather():
+            return await asyncio.gather(*futures, return_exceptions=True)
+
+        results = asyncio.run_coroutine_threadsafe(_gather(), self._loop).result()
+        out = []
+        for r in results:
+            if isinstance(r, Exception):
+                out.append(None)
+            else:
+                out.append(r)
+        return out
+
+    def _decode_token(self, res_bytes):
+        """Extract token id from worker response bytes."""
+        if res_bytes and len(res_bytes) >= 4:
+            try:
+                return struct.unpack("<I", res_bytes[:4])[0]
+            except Exception:
+                pass
+        return 32  # fallback space
+
     def generate(self, prompt: str, max_new_tokens: int = 128, **kwargs) -> Any:
         if kwargs.get("stream", False):
             return self.generate_stream(prompt, max_new_tokens, **kwargs)
@@ -142,37 +177,61 @@ class WebGPUBackend(BaseLLMBackend):
             
         output_tokens = []
         current_input = input_ids
+        step = 0
+        K = min(self.SPECULATION_WINDOW, max(1, clients_count))  # adapt to worker count
         
-        for step in range(max_new_tokens):
-            tensor_bytes, quant_scale = self._serialize_tensor(current_input) if torch else (json.dumps(current_input).encode(), 1.0)
-            # Redundancy: Retries across multiple dynamic clients if node disconnected
-            max_retries = 3
-            res_bytes = None
-            for attempt in range(max_retries):
-                fut = self.node_manager.submit_tensor(layer_id=step % 12, tensor_data=tensor_bytes, quant_scale=quant_scale)
-                try:
-                    res_bytes = asyncio.run_coroutine_threadsafe(asyncio.wait_for(fut, timeout=10.0), self._loop).result()
-                    break
-                except Exception as e:
-                    self.log.warning(f"WebGPU node disconnected/failed at step {step}, attempt {attempt+1}: {e}")
-                    time.sleep(0.1)
-                    
-            if res_bytes is None:
-                self.log.error(f"Swarm failure: All redundant attempts exhausted at step {step}")
-                break
-                
-            next_token = 32
-            if res_bytes and len(res_bytes) >= 4:
-                try:
-                    next_token = struct.unpack("<I", res_bytes[:4])[0]
-                except Exception:
-                    pass
-            output_tokens.append(next_token)
-            
-            if torch:
-                current_input = torch.tensor([[next_token]])
+        while step < max_new_tokens:
+            if K > 1 and step + K <= max_new_tokens:
+                # --- Speculative Decoding: submit K tokens in parallel ---
+                # Use last known token as seed for all K drafts
+                spec_inputs = [current_input] * K
+                spec_layers = [(step + i) % 12 for i in range(K)]
+                results = self._submit_speculative_batch(spec_inputs, spec_layers)
+
+                # Verify: accept the first contiguous run that returned valid data
+                accepted = 0
+                for res_bytes in results:
+                    if res_bytes is None:
+                        break
+                    token = self._decode_token(res_bytes)
+                    output_tokens.append(token)
+                    if torch:
+                        current_input = torch.tensor([[token]])
+                    else:
+                        current_input = [token]
+                    accepted += 1
+
+                if accepted == 0:
+                    # Fallback to sequential single-token
+                    K = 1
+                    continue
+                step += accepted
             else:
-                current_input = [next_token]
+                # --- Sequential fallback (single token or final tokens) ---
+                tensor_bytes, quant_scale = self._serialize_tensor(current_input) if torch else (json.dumps(current_input).encode(), 1.0)
+                max_retries = 3
+                res_bytes = None
+                for attempt in range(max_retries):
+                    fut = self.node_manager.submit_tensor(layer_id=step % 12, tensor_data=tensor_bytes, quant_scale=quant_scale)
+                    try:
+                        res_bytes = asyncio.run_coroutine_threadsafe(asyncio.wait_for(fut, timeout=10.0), self._loop).result()
+                        break
+                    except Exception as e:
+                        self.log.warning(f"WebGPU node failed at step {step}, attempt {attempt+1}: {e}")
+                        time.sleep(0.1)
+                        
+                if res_bytes is None:
+                    self.log.error(f"Swarm failure: All attempts exhausted at step {step}")
+                    break
+                    
+                next_token = self._decode_token(res_bytes)
+                output_tokens.append(next_token)
+            
+                if torch:
+                    current_input = torch.tensor([[next_token]])
+                else:
+                    current_input = [next_token]
+                step += 1
                 
         if self.tokenizer:
             return self.tokenizer.decode(output_tokens, skip_special_tokens=True)

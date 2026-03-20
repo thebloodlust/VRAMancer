@@ -28,7 +28,7 @@ from typing import Dict, List, Optional, Callable, Any
 try:
     from core.logger import LoggerAdapter
     _logger = LoggerAdapter("discovery")
-except Exception:  # pragma: no cover
+except Exception as e:  # pragma: no cover
     import logging
     _logger = logging.getLogger("vramancer.discovery")
 
@@ -36,7 +36,7 @@ try:
     from core.metrics import (
         ORCH_PLACEMENTS as _ORCH_PLACEMENTS,
     )
-except Exception:  # pragma: no cover
+except Exception as e:  # pragma: no cover
     _ORCH_PLACEMENTS = None
 
 _MINIMAL = os.environ.get("VRM_MINIMAL_TEST", "")
@@ -63,8 +63,17 @@ def _get_mac_address() -> str:
         mac_hex = ':'.join(['{:02x}'.format((mac >> elements) & 0xff) 
                            for elements in range(0, 8*6, 8)][::-1])
         return mac_hex
-    except Exception:
+    except Exception as e:
         return "00:00:00:00:00:00"
+
+def _is_edge_device(gpu_list: list, ram_bytes: int) -> bool:
+    """Heuristic: classify as edge if ARM with low RAM and no discrete GPU."""
+    arch = platform.machine().lower()
+    is_arm = "arm" in arch or "aarch64" in arch
+    has_gpu = any(g.get("backend") in ("cuda", "rocm") for g in gpu_list)
+    low_ram = ram_bytes < 8 * 1024 ** 3  # < 8 GB
+    return is_arm and not has_gpu and low_ram
+
 
 def get_local_info() -> Dict[str, Any]:
     """Gather comprehensive local node information."""
@@ -78,7 +87,7 @@ def get_local_info() -> Dict[str, Any]:
                     "name": d.get("name", "unknown"),
                     "total_memory": d.get("total_memory"),
                 })
-        except Exception:
+        except Exception as e:
             pass
 
     ram_bytes = _get_total_ram()
@@ -95,6 +104,7 @@ def get_local_info() -> Dict[str, Any]:
         "gpus": gpu_list,
         "gpu_count": len(gpu_list),
         "ram_bytes": ram_bytes,
+        "is_edge": _is_edge_device(gpu_list, ram_bytes),
         "vramancer_port": int(os.environ.get("VRM_API_PORT", 5000)),
         "timestamp": time.time(),
     }
@@ -116,7 +126,7 @@ def detect_platform_type() -> str:
         backend = "cpu"
         try:
             backend = detect_backend()
-        except Exception:
+        except Exception as e:
             pass
         if backend == "rocm":
             return "Linux AMD ROCm"
@@ -147,10 +157,10 @@ def _get_local_ip() -> str:
         ip = s.getsockname()[0]
         s.close()
         return ip
-    except Exception:
+    except Exception as e:
         try:
             return socket.gethostbyname(socket.gethostname())
-        except Exception:
+        except Exception as e:
             return "127.0.0.1"
 
 
@@ -167,7 +177,7 @@ def _get_total_ram() -> int:
             for line in f:
                 if line.startswith("MemTotal"):
                     return int(line.split()[1]) * 1024
-    except Exception:
+    except Exception as e:
         pass
     # macOS fallback
     try:
@@ -176,7 +186,7 @@ def _get_total_ram() -> int:
                                 capture_output=True, text=True, timeout=3)
         if result.returncode == 0:
             return int(result.stdout.strip())
-    except Exception:
+    except Exception as e:
         pass
     return 0
 
@@ -219,6 +229,16 @@ class ClusterDiscovery:
         self._local_info = get_local_info()
         self._mdns_browser = None
 
+        # Leader election (Bully algorithm: highest gpu_count wins, hostname tiebreaker)
+        self._leader: Optional[str] = None
+        self._leader_lock = threading.Lock()
+
+        # Persistent membership journal (JSON-lines)
+        self._membership_log_path = os.environ.get(
+            "VRM_MEMBERSHIP_LOG",
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "membership.jsonl"),
+        )
+
         # Stats
         self._stats = {
             "nodes_joined": 0,
@@ -241,6 +261,29 @@ class ClusterDiscovery:
 
         # Register self
         self._register_node(self._local_info)
+        self._elect_leader()
+
+        # Auto-wire connectome: register new nodes as synapses
+        try:
+            from core.network.connectome import global_connectome
+            self._connectome = global_connectome
+
+            def _wire_synapse(info):
+                hostname = info.get("hostname", "")
+                ip = info.get("ip", "")
+                port = info.get("vramancer_port", 5000)
+                if ip and hostname != self._local_info.get("hostname"):
+                    self._connectome.add_node(hostname, ip, port)
+
+            def _unwire_synapse(info):
+                hostname = info.get("hostname", "")
+                self._connectome.remove_node(hostname)
+
+            self.on_join(_wire_synapse)
+            self.on_leave(_unwire_synapse)
+            _logger.info("Connectome wired to cluster discovery")
+        except Exception:
+            self._connectome = None
 
         # Try mDNS first
         if self._start_mdns():
@@ -310,6 +353,71 @@ class ClusterDiscovery:
             return len(self._nodes)
 
     # ------------------------------------------------------------------
+    # Leader election (Bully algorithm)
+    # ------------------------------------------------------------------
+
+    def get_leader(self) -> Optional[str]:
+        """Return the current cluster leader hostname (or None)."""
+        with self._leader_lock:
+            return self._leader
+
+    def _elect_leader(self) -> None:
+        """Bully election: node with most GPUs wins, hostname tiebreaker."""
+        with self._lock:
+            candidates = list(self._nodes.values())
+        if not candidates:
+            with self._leader_lock:
+                self._leader = None
+            return
+        # Sort by (-gpu_count, hostname) — most GPUs first, then alphabetical
+        best = max(candidates, key=lambda n: (n.get("gpu_count", 0), n.get("hostname", "")))
+        new_leader = best.get("hostname")
+        with self._leader_lock:
+            old = self._leader
+            self._leader = new_leader
+        if old != new_leader:
+            _logger.info("Leader elected: %s (gpus=%d)", new_leader, best.get("gpu_count", 0))
+
+    def is_leader(self) -> bool:
+        """Return True if this node is the current cluster leader."""
+        with self._leader_lock:
+            return self._leader == self._local_info.get("hostname")
+
+    # ------------------------------------------------------------------
+    # Persistent membership journal
+    # ------------------------------------------------------------------
+
+    def _log_membership_event(self, event_type: str, info: Dict[str, Any]) -> None:
+        """Append a join/leave event to the JSONL membership log."""
+        entry = {
+            "ts": time.time(),
+            "event": event_type,
+            "hostname": info.get("hostname", "?"),
+            "ip": info.get("ip", "?"),
+            "gpu_count": info.get("gpu_count", 0),
+        }
+        try:
+            with open(self._membership_log_path, "a") as f:
+                f.write(json.dumps(entry) + "\n")
+        except Exception as exc:
+            _logger.debug("Membership log write failed: %s", exc)
+
+    def load_membership_log(self) -> List[Dict[str, Any]]:
+        """Read back all membership events from the persistent log."""
+        entries: List[Dict[str, Any]] = []
+        try:
+            with open(self._membership_log_path, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        entries.append(json.loads(line))
+        except FileNotFoundError:
+            pass
+        except Exception as exc:
+            _logger.debug("Membership log read failed: %s", exc)
+        return entries
+
+    # ------------------------------------------------------------------
     # mDNS / ZeroConf (preferred discovery method)
     # ------------------------------------------------------------------
 
@@ -367,7 +475,7 @@ class ClusterDiscovery:
                 if hasattr(self, "_mdns_info"):
                     self._zeroconf.unregister_service(self._mdns_info)
                 self._zeroconf.close()
-        except Exception:
+        except Exception as e:
             pass
 
     def _handle_mdns_service(self, info: Any) -> None:
@@ -411,7 +519,10 @@ class ClusterDiscovery:
         while self._running:
             try:
                 data, addr = sock.recvfrom(8192)
-                node = json.loads(data.decode("utf-8"))
+                try:
+                    node = json.loads(data.decode("utf-8"))
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    continue
                 node["timestamp"] = time.time()
                 node["discovery"] = "udp"
                 self._register_node(node)
@@ -442,7 +553,7 @@ class ClusterDiscovery:
                             # 1. UDP Unicast
                             try:
                                 sock.sendto(msg, (peer_ip, self.port))
-                            except Exception:
+                            except Exception as e:
                                 pass
                                 
                             # 2. HTTP POST fallback (si UDP est bloqué au niveau firewall)
@@ -452,7 +563,7 @@ class ClusterDiscovery:
                                 requests.post(f"http://{peer_ip}:{target_port}/api/nodes", 
                                              json=self._local_info, 
                                              timeout=1.0)
-                            except Exception:
+                            except Exception as e:
                                 pass
 
                 sock.close()
@@ -471,13 +582,17 @@ class ClusterDiscovery:
         hostname = info.get("hostname", "unknown")
         with self._lock:
             is_new = hostname not in self._nodes
+            prev = self._nodes.get(hostname, {})
+            info["_state"] = "ACTIVE"
+            info["_missed_heartbeats"] = 0
             self._nodes[hostname] = info
         if is_new:
             self._stats["nodes_joined"] += 1
+            self._log_membership_event("join", info)
             if _ORCH_PLACEMENTS is not None:
                 try:
                     _ORCH_PLACEMENTS.labels(level="node_join").inc()
-                except Exception:
+                except Exception as e:
                     pass
             _logger.info("Node joined: %s (%s) at %s [GPUs: %d]",
                          hostname, info.get("platform_type", "?"),
@@ -485,31 +600,79 @@ class ClusterDiscovery:
             for cb in self._on_join_callbacks:
                 try:
                     cb(info)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _logger.debug("Join callback error: %s", exc)
+            self._elect_leader()
+        elif prev.get("_state") == "STALE":
+            _logger.info("Node recovered: %s", hostname)
+
+    def _probe_node(self, info: Dict[str, Any]) -> bool:
+        """Send a TCP probe to confirm if a node is truly unreachable."""
+        ip = info.get("ip", "")
+        port = info.get("vramancer_port", 5000)
+        if not ip or ip == "127.0.0.1":
+            return False
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(2.0)
+            sock.connect((ip, port))
+            sock.close()
+            return True
+        except Exception:
+            return False
 
     def _cleanup_loop(self) -> None:
-        """Remove nodes that haven't sent a heartbeat within timeout."""
+        """Remove stale nodes with confirmation probes before declaring dead.
+
+        State transitions: ACTIVE → STALE (missed heartbeat) → LEFT (3 missed + probe fails)
+        """
         while self._running:
             now = time.time()
-            stale = []
+            to_probe: List[tuple] = []
+            to_remove: List[str] = []
+
             with self._lock:
                 for hostname, info in list(self._nodes.items()):
-                    # Don't remove self
                     if hostname == self._local_info.get("hostname"):
                         continue
                     age = now - info.get("timestamp", 0)
                     if age > self.node_timeout:
-                        stale.append(hostname)
-                for hostname in stale:
-                    info = self._nodes.pop(hostname, {})
-                    self._stats["nodes_left"] += 1
-                    _logger.info("Node left (timeout): %s", hostname)
-                    for cb in self._on_leave_callbacks:
-                        try:
-                            cb(info)
-                        except Exception:
-                            pass
+                        missed = info.get("_missed_heartbeats", 0) + 1
+                        info["_missed_heartbeats"] = missed
+                        if missed == 1:
+                            info["_state"] = "STALE"
+                            _logger.debug("Node stale: %s (missed 1)", hostname)
+                        elif missed >= 3:
+                            to_probe.append((hostname, dict(info)))
+
+            # Probe outside the lock to avoid blocking
+            for hostname, info in to_probe:
+                if self._probe_node(info):
+                    _logger.info("Node %s responded to probe, keeping", hostname)
+                    with self._lock:
+                        if hostname in self._nodes:
+                            self._nodes[hostname]["_missed_heartbeats"] = 0
+                            self._nodes[hostname]["_state"] = "ACTIVE"
+                else:
+                    to_remove.append(hostname)
+
+            # Remove confirmed dead nodes
+            if to_remove:
+                with self._lock:
+                    for hostname in to_remove:
+                        info = self._nodes.pop(hostname, {})
+                        if info:
+                            self._stats["nodes_left"] += 1
+                            self._log_membership_event("leave", info)
+                            _logger.info("Node left (confirmed dead): %s", hostname)
+                            for cb in self._on_leave_callbacks:
+                                try:
+                                    cb(info)
+                                except Exception as exc:
+                                    _logger.debug("Leave callback error: %s", exc)
+                if to_remove:
+                    self._elect_leader()
+
             self._shutdown.wait(timeout=self.node_timeout / 3)
 
 
@@ -611,7 +774,7 @@ class USB4HotPlug:
                     if self.on_disconnect:
                         self.on_disconnect({"device_path": dev, "action": "remove"})
                 known = current
-            except Exception:
+            except Exception as e:
                 pass
             time.sleep(3)
 
@@ -643,7 +806,7 @@ class USB4HotPlug:
                         if self.on_disconnect:
                             self.on_disconnect({"device": s, "action": "remove"})
                     known_serials = current_serials
-            except Exception:
+            except Exception as e:
                 pass
             time.sleep(5)
 
@@ -680,12 +843,15 @@ def discover_nodes(port: int = 55555, timeout: float = 2.0) -> List[Dict[str, An
         try:
             while True:
                 data, addr = sock.recvfrom(8192)
-                node = json.loads(data.decode("utf-8"))
+                try:
+                    node = json.loads(data.decode("utf-8"))
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    continue
                 if node.get("hostname") != info["hostname"]:
                     nodes.append(node)
         except socket.timeout:
             pass
-        except Exception:
+        except Exception as e:
             pass
 
     t = threading.Thread(target=listen)

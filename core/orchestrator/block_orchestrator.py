@@ -25,8 +25,30 @@ except ImportError:
         def labels(self, *a, **k): return self
     ORCH_PLACEMENTS = ORCH_MIGRATIONS = ORCH_REBALANCE = ORCH_HIERARCHY_MOVE = _Counter()
 
-def load_block_from_disk(path): raise RuntimeError("storage_manager unavailable")
-def save_block_to_disk(block, path): raise RuntimeError("storage_manager unavailable")
+def load_block_from_disk(path):
+    """Load a block from disk. Supports torch.load and JSON fallback."""
+    try:
+        import torch
+        return torch.load(path, map_location="cpu", weights_only=True)
+    except Exception:
+        pass
+    import json
+    with open(path, "r") as f:
+        return json.load(f)
+
+def save_block_to_disk(block, path):
+    """Save a block to disk. Supports torch.save and JSON fallback."""
+    os.makedirs(os.path.dirname(path) if os.path.dirname(path) else ".", exist_ok=True)
+    try:
+        import torch
+        if hasattr(block, 'cpu'):
+            torch.save(block.cpu(), path)
+            return
+    except Exception:
+        pass
+    import json
+    with open(path, "w") as f:
+        json.dump({"data": str(block)}, f)
 
 try:
     from core.network.vramancer_link import send_block, start_client
@@ -76,20 +98,20 @@ class BlockOrchestrator:
         best_gpu = min(candidates, key=lambda g: float(usage[str(g)].replace('% VRAM','').replace('%','')))
         res = self.balancer.allocate_block(block, int(best_gpu))
         try: ORCH_PLACEMENTS.labels("vram").inc()
-        except Exception: pass
+        except Exception as e: logging.debug(f"Ignore err: {e}")
         return res
     def release_block(self, block, gpu_id):
         self.balancer.release_block(block, gpu_id)
     def migrate_block(self, block, src_gpu, dst_gpu):
         res = self.balancer.migrate_block(block, src_gpu, dst_gpu)
         try: ORCH_MIGRATIONS.inc()
-        except Exception: pass
+        except Exception as e: logging.debug(f"Ignore err: {e}")
         return res
     def rebalance(self, blocks, threshold=90.0, dram_limit=10):
         usage = {int(k): float(v.replace('% VRAM','').replace('%','')) for k,v in self.monitor.status().items()}
         self.balancer.balance(blocks, usage, threshold=threshold)
         try: ORCH_REBALANCE.inc()
-        except Exception: pass
+        except Exception as e: logging.debug(f"Ignore err: {e}")
         if any(u > threshold for u in usage.values()):
             sorted_blocks = sorted(blocks, key=lambda b: getattr(b, 'last_access', 0))
             for block in sorted_blocks:
@@ -99,20 +121,20 @@ class BlockOrchestrator:
                     self.logger.info(f"[Orchestrator] Bloc {block.id} -> DRAM")
                     self.dram_cache[block.id] = block.cpu();
                     try: ORCH_HIERARCHY_MOVE.labels("dram").inc()
-                    except Exception: pass
+                    except Exception as e: logging.debug(f"Ignore err: {e}")
                 elif fastest == 'nvme':
                     path = os.path.join(self.nvme_dir, f"{block.id}.pt")
                     save_block_to_disk(block.cpu(), path)
                     self.logger.info(f"[Orchestrator] Bloc {block.id} -> NVMe {path}")
                     try: ORCH_HIERARCHY_MOVE.labels("nvme").inc()
-                    except Exception: pass
+                    except Exception as e: logging.debug(f"Ignore err: {e}")
                 elif fastest == 'network':
                     for node in self.remote_nodes:
                         try:
                             send_block(block, target_device=node)
                             self.logger.info(f"[Orchestrator] Bloc {block.id} -> réseau {node}")
                             try: ORCH_HIERARCHY_MOVE.labels("network").inc()
-                            except Exception: pass
+                            except Exception as e: logging.debug(f"Ignore err: {e}")
                             break
                         except Exception as e:
                             self.logger.warning(f"Erreur migration réseau {node}: {e}")

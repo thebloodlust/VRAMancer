@@ -525,7 +525,7 @@ class TransferManager:
         src_tensor = tensor.cuda(source_gpu) if not tensor.is_cuda else tensor
 
         # Step 1: GPU -> pinned CPU memory (async)
-        # ⚡ OPTIMISATION VRAMANCER: Bypass de l'interdiction P2P Nvidia via extension Rust / ReBAR
+        #  OPTIMISATION VRAMANCER: Bypass de l'interdiction P2P Nvidia via extension Rust / ReBAR
         try:
             import vramancer_rust as cxl_bypass
             # S'il arrive à importer notre module Rust compilé récemment, on shunte le fallback PyTorch super lent
@@ -534,16 +534,33 @@ class TransferManager:
             
             # Allocation cible
             dst_tensor = torch.empty_like(src_tensor, device=f"cuda:{target_gpu}")
-            
-            # TODO: Idealement il faudrait implementer `vramancer_rust.direct_vram_copy(src_ptr, dst_ptr, bytes)` 
-            # Mais en lieu et place d'attendre l'implémentation finale Rust on utilise le "Zero-Copy TCP P2P"
-            # sur la boucle `localhost` pour contourner le driver PCIe fermé !
-            src_bytes = src_tensor.contiguous().cpu().numpy().tobytes()
-            # Rust prend les commandes (GIL released) et court-circuite le "To(device)" lent de PyTorch
-            ptr = cxl_bypass.direct_vram_load(src_bytes)
-            
-            # On recupere la donnee chargee
-            return TransportMethod.CROSS_VENDOR, dst_tensor
+
+            # Tentative de P2P direct via Rust sans CPU staging si les deux GPUs sont supportés
+            try:
+                src_ptr = src_tensor.data_ptr()
+                dst_ptr = dst_tensor.data_ptr()
+                size_bytes = src_tensor.element_size() * src_tensor.nelement()
+                if hasattr(cxl_bypass, 'direct_vram_copy'):
+                    success = cxl_bypass.direct_vram_copy(src_ptr, dst_ptr, size_bytes)
+                    if success:
+                        return TransportMethod.CROSS_VENDOR, dst_tensor
+            except Exception as e:
+                log.debug(f"Rust P2P direct_vram_copy failed: {e}")
+
+            # Chunked pipeline via Rust/Tokio (4 MiB chunks with per-chunk HMAC)
+            try:
+                if hasattr(cxl_bypass, 'send_tensor_chunked'):
+                    src_bytes = src_tensor.contiguous().cpu().numpy().tobytes()
+                    import os as _os
+                    secret = _os.environ.get("VRM_TRANSFER_SECRET", "vramancer").encode()
+                    # Local inter-GPU: loopback fast path
+                    acked = cxl_bypass.send_tensor_chunked(
+                        "127.0.0.1", 19876, secret, src_bytes, None
+                    )
+                    if acked == len(src_bytes):
+                        return TransportMethod.CROSS_VENDOR, dst_tensor
+            except Exception as e:
+                log.debug(f"Rust chunked transfer failed: {e}")
         except (ImportError, Exception):
             # Si le bypass echoue, on revient a la methode standard PyTorch (Lente car buffer CPU bloquant)
             pass

@@ -4,6 +4,7 @@ Utility helpers for GPU‑aware inference.
 """
 
 from __future__ import annotations
+import logging
 
 import os, sys, re
 from typing import Iterable, Sequence, Optional, List, Dict, Any
@@ -86,7 +87,7 @@ else:  # mode normal mais on protège chaque import lourd + fallback tokenizer p
         global _BASIC_SINGLETON
         if _BASIC_SINGLETON is None:
             _BASIC_SINGLETON = BasicTokenizer()
-            print("[Tokenizer] Utilisation du BasicTokenizer fallback (transformers indisponible ou forcé)")
+            logging.info("[Tokenizer] Utilisation du BasicTokenizer fallback (transformers indisponible ou forcé)")
         return _BASIC_SINGLETON
 
     if not FORCE_BASIC:
@@ -100,7 +101,7 @@ else:  # mode normal mais on protège chaque import lourd + fallback tokenizer p
                     return AutoTokenizer.from_pretrained(model_name, use_fast=True)
                 except Exception as e:  # pragma: no cover - fallback slow ou basic
                     if os.environ.get('USE_SLOW_TOKENIZER') in {'1','true','TRUE'}:
-                        print(f"[Tokenizer] Fast indisponible ({e}) -> slow")
+                        logging.info(f"[Tokenizer] Fast indisponible ({e}) -> slow")
                         try:
                             return AutoTokenizer.from_pretrained(model_name, use_fast=False)
                         except Exception:
@@ -116,7 +117,7 @@ else:  # mode normal mais on protège chaque import lourd + fallback tokenizer p
 
 
 # --------------------------------------------------------------
-# 1️⃣  Helpers
+# 1⃣  Helpers
 # --------------------------------------------------------------
 if not os.environ.get('VRM_MINIMAL_TEST'):
     # Docstring préservée pour mode normal

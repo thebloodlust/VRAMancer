@@ -95,7 +95,7 @@ class BenchmarkResult:
         if path:
             with open(path, "w") as f:
                 f.write(j)
-            _logger.info("Benchmark results saved to %s", path)
+            __logger.info("Benchmark results saved to %s", path)
         return j
 
 
@@ -201,7 +201,7 @@ class BenchmarkRunner:
             result.peak_vram_mb = torch.cuda.max_memory_allocated() / 1e6
 
         if self.verbose:
-            _logger.info(
+            __logger.info(
                 "Synthetic: %.0f tok/s, ITL P50=%.2fms P95=%.2fms (device=%s)",
                 result.tokens_per_second, result.itl_p50_ms, result.itl_p95_ms, device,
             )
@@ -468,7 +468,7 @@ class BenchmarkRunner:
 
         if self.verbose:
             self.print_report(result)
-            _logger.info("Batcher stats: %s", batcher_stats)
+            __logger.info("Batcher stats: %s", batcher_stats)
 
         return result
 
@@ -504,7 +504,7 @@ class BenchmarkRunner:
             "",
         ]
         report = "\n".join(lines)
-        print(report)
+        _logger.info(report)
         return report
 
 

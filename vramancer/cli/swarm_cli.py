@@ -18,7 +18,7 @@ def ui_auth_generate():
         console.print(f"\n[green]Identité créée pour {alias} ![/green]")
         console.print(f"Votre ID public : [yellow]{user_id}[/yellow]")
         console.print(f"Votre Clé Secrète : [red bold]{api_key}[/red bold]")
-        console.print("\n[bold]⚠️ GARDEZ CETTE CLÉ UNIQUE PRÉCIEUSEMENT. ELLE NE SERA PLUS AFFICHÉE.[/bold]")
+        console.print("\n[bold] GARDEZ CETTE CLÉ UNIQUE PRÉCIEUSEMENT. ELLE NE SERA PLUS AFFICHÉE.[/bold]")
         console.print("Utilisez-la comme --token lors du lancement de votre node.")
     except Exception as e:
         print(f"Erreur d'initialisation du ledger: {e}")

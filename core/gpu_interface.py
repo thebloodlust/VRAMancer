@@ -1,3 +1,4 @@
+import logging
 def get_unused_gpus(used_gpu_ids=None):
     """
     Retourne la liste des GPU non utilisés (par défaut, tous sauf GPU0).
@@ -40,10 +41,10 @@ def print_gpu_summary():
     Affiche un résumé des GPU détectés.
     """
     gpus = get_available_gpus()
-    print("🔍 GPU Summary:")
+    logging.info(" GPU Summary:")
     for gpu in gpus:
-        status = "✅" if gpu["is_available"] else "❌"
-        print(f"{status} GPU {gpu['id']} — {gpu['name']} — {gpu['total_vram_mb']} MB VRAM")
+        status = "" if gpu["is_available"] else ""
+        logging.info(f"{status} GPU {gpu['id']} — {gpu['name']} — {gpu['total_vram_mb']} MB VRAM")
 
 def use_secondary_gpus(task_fn, exclude_gpu0=True):
     """
@@ -57,11 +58,11 @@ def use_secondary_gpus(task_fn, exclude_gpu0=True):
             continue
         if exclude_gpu0 and gpu["id"] == 0:
             continue
-        print(f"[Secondary GPU] Exécution sur GPU{gpu['id']} ({gpu['name']})")
+        logging.info(f"[Secondary GPU] Exécution sur GPU{gpu['id']} ({gpu['name']})")
         try:
             task_fn(gpu["id"])
         except Exception as e:
-            print(f"Erreur sur GPU{gpu['id']}: {e}")
+            logging.info(f"Erreur sur GPU{gpu['id']}: {e}")
 
 # Exemple d’utilisation : monitoring VRAM
 if __name__ == "__main__":
@@ -70,5 +71,5 @@ if __name__ == "__main__":
         import torch
         torch.cuda.set_device(gpu_id)
         vram = torch.cuda.memory_allocated(gpu_id) / (1024 ** 2)
-        print(f"GPU{gpu_id} VRAM utilisée : {vram:.2f} MB")
+        logging.info(f"GPU{gpu_id} VRAM utilisée : {vram:.2f} MB")
     use_secondary_gpus(monitor_vram)

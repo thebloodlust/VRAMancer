@@ -24,8 +24,8 @@ Usage:
     fut2 = batcher.submit("Once upon a time", max_new_tokens=100)
 
     # Collect results
-    print(fut1.result())  # blocks until done
-    print(fut2.result())
+    logger.info(fut1.result())  # blocks until done
+    logger.info(fut2.result())
 
     batcher.stop()
 """

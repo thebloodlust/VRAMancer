@@ -58,6 +58,7 @@ Integration:
   transparent to the rest of the pipeline.
 """
 from __future__ import annotations
+import logging
 
 import os
 import sys
@@ -904,7 +905,7 @@ class CrossVendorBridge:
         # bridge.available tells you if cross-vendor transfer is possible
 
         output, result = bridge.transfer(src_gpu=0, dst_gpu=1, tensor=my_tensor)
-        print(f"Transferred via {result.method.name}: {result.bandwidth_gbps:.1f} Gbps")
+        logging.info(f"Transferred via {result.method.name}: {result.bandwidth_gbps:.1f} Gbps")
     """
 
     def __init__(self, chunk_bytes: int = DEFAULT_CHUNK_BYTES):
@@ -1130,6 +1131,26 @@ class CrossVendorBridge:
         if self._shm:
             self._shm.close()
         log.debug("CrossVendorBridge closed")
+
+    def validate_strategy(self, src_gpu: int, dst_gpu: int, probe_bytes: int = 1024 * 1024) -> Dict[str, Any]:
+        """Run a small test transfer to validate the selected strategy works.
+
+        Returns dict with 'ok', 'method', 'bandwidth_gbps', 'error' (if failed).
+        """
+        if _STUB or not _TORCH:
+            return {"ok": True, "method": "STUB", "bandwidth_gbps": 0.0}
+        try:
+            test_tensor = torch.randn(probe_bytes // 4, device=f"cuda:{src_gpu}")
+            output, result = self.transfer(src_gpu, dst_gpu, test_tensor)
+            del test_tensor, output
+            return {
+                "ok": True,
+                "method": result.method.name,
+                "bandwidth_gbps": result.bandwidth_gbps,
+                "duration_ms": round(result.duration_s * 1000, 2),
+            }
+        except Exception as exc:
+            return {"ok": False, "method": "FAILED", "error": str(exc)}
 
 
 # ═══════════════════════════════════════════════════════════════════════════

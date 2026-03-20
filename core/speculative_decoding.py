@@ -58,7 +58,7 @@ class SwarmSpeculativeDecoder:
         generated_ids = input_ids.clone()
         tokens_yielded = 0
         
-        self.log.info(f"🧠 [Swarm Brain] Awakening... Speculating {self.gamma} tokens per step.")
+        self.log.info(f" [Swarm Brain] Awakening... Speculating {self.gamma} tokens per step.")
         
         while tokens_yielded < max_new_tokens:
             # 1. THE DRAFT (Subconscious Instinct)
@@ -109,10 +109,10 @@ class SwarmSpeculativeDecoder:
             actual_time = (time.time() - start_time)
             self.latency_saved_ms += max(0, naive_time - actual_time) * 1000
 
-            self.log.debug(f"🔮 [Speculation] Drafted {self.gamma} | Accepted {accepted_count} | Corrected 1. " 
+            self.log.debug(f" [Speculation] Drafted {self.gamma} | Accepted {accepted_count} | Corrected 1. " 
                            f"(Acceptance Rate: {accepted_count/self.gamma*100:.1f}%)")
 
-        self.log.info(f"🧠 [Swarm Brain] Generation complete. "
+        self.log.info(f" [Swarm Brain] Generation complete. "
                       f"Accepted {self.total_accepted}/{self.total_drafted} tokens "
                       f"({(self.total_accepted/max(1, self.total_drafted))*100:.1f}% accuracy). "
                       f"Time Saved: {self.latency_saved_ms:.0f}ms.")

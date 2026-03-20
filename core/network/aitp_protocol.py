@@ -3,6 +3,9 @@ import struct
 import logging
 import uuid
 import json
+import os
+import hmac
+import hashlib
 
 logger = logging.getLogger(__name__)
 
@@ -11,6 +14,9 @@ logger = logging.getLogger(__name__)
 AITP_HEADER_FORMAT = "!2sBBQI"
 AITP_MAGIC = b"VT"
 AITP_VERSION = 1
+
+def _get_cluster_secret() -> bytes:
+    return os.environ.get("VRM_CLUSTER_SECRET", os.environ.get("VRM_API_TOKEN", "default_secret")).encode("utf-8")
 
 class AITPProtocol:
     """
@@ -43,22 +49,32 @@ class AITPProtocol:
             size,
             layer_id
         )
-        # Tout en un seul paquet (idéal avec un MTU Jumbo Frames 9000 bytes)
-        return header + tensor_bytes
+        packet_body = header + tensor_bytes
+        # Signature
+        sig = hmac.new(_get_cluster_secret(), packet_body, hashlib.sha256).digest()
+        # Tout en un seul paquet (idéal avec un MTU Jumbo Frames 9000 bytes) + 32 bytes signature
+        return packet_body + sig
 
     def parse_packet(self, packet: bytes):
         """Parse un paquet AITP entrant à la vitesse de l'éclair"""
         header_size = struct.calcsize(AITP_HEADER_FORMAT)
-        if len(packet) < header_size:
-            raise ValueError("AITP Packet trop petit")
+        if len(packet) < header_size + 32:
+            raise ValueError("AITP Packet trop petit (signature manquante)")
             
-        header = packet[:header_size]
+        # Verify HMCA
+        packet_body = packet[:-32]
+        received_sig = packet[-32:]
+        expected_sig = hmac.new(_get_cluster_secret(), packet_body, hashlib.sha256).digest()
+        if not hmac.compare_digest(received_sig, expected_sig):
+            raise ValueError("Signature AITP invalide")
+
+        header = packet_body[:header_size]
         magic, version, flags, size, layer_id = struct.unpack(AITP_HEADER_FORMAT, header)
         
         if magic != AITP_MAGIC:
             raise ValueError("Magic Number AITP invalide")
             
-        tensor_data = packet[header_size:header_size+size]
+        tensor_data = packet_body[header_size:header_size+size]
         return {
             "version": version,
             "layer_id": layer_id,
@@ -74,6 +90,33 @@ class AITPProtocol:
         packet = self.create_packet(layer_id, tensor_bytes)
         self.sock.sendto(packet, (routing_address, self.port))
         logger.debug(f"AITP Packet envoyé vers {routing_address} (Layer {layer_id})")
+
+    def recv_loop(self, callback=None, timeout: float = 1.0):
+        """Blocking receive loop — dispatches parsed tensors to callback.
+
+        Args:
+            callback: ``(layer_id, tensor_data, flags, addr) -> None``
+            timeout:  socket timeout in seconds for graceful shutdown check.
+        """
+        self.sock.settimeout(timeout)
+        self._recv_running = True
+        logger.info(f"AITP recv_loop started on [::]:{self.port}")
+        while self._recv_running:
+            try:
+                data, addr = self.sock.recvfrom(65535)
+                parsed = self.parse_packet(data)
+                if callback:
+                    callback(parsed["layer_id"], parsed["tensor_data"], parsed["flags"], addr)
+            except socket.timeout:
+                continue
+            except ValueError as e:
+                logger.debug(f"AITP recv bad packet from {addr}: {e}")
+            except Exception as e:
+                logger.debug(f"AITP recv error: {e}")
+
+    def stop_recv(self):
+        """Signal the recv_loop to stop."""
+        self._recv_running = False
 
 # Singleton pour le noeud
 _global_aitp = None

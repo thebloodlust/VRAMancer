@@ -98,16 +98,22 @@ def create_app(model_name: Optional[str] = None,
         except ImportError:
             pass
     except ImportError:
-        if is_production:
-            raise RuntimeError(
-                "SECURITY: core.security module failed to load in production mode. "
-                "Cannot start without authentication. Fix the import or set "
-                "VRM_PRODUCTION=0 to run in dev mode."
-            )
-        logger.warning("Security module not available — running without auth (dev mode)")
+        raise RuntimeError(
+            "SECURITY: core.security module failed to load. "
+            "Cannot start without authentication. Fix the import."
+        )
 
     # Register ops/health/system blueprint (extracted routes)
     register_ops_blueprint(application, _registry)
+
+    # Register edge device API blueprint
+    try:
+        from core.network.edge_api import create_edge_app
+        edge_bp = create_edge_app()
+        if edge_bp is not None:
+            application.register_blueprint(edge_bp)
+    except Exception:
+        pass  # Edge API is optional
 
     # Circuit-breaker for inference protection
     try:
@@ -325,17 +331,12 @@ def _register_routes(application: Flask, _run_with_timeout, queue_depth, queue_l
     @application.route('/v1/completions', methods=['POST'])
     @application.route('/api/generate', methods=['POST'])
     def generate():
-        """OpenAI-compatible completion endpoint.
-
-        Request body (JSON):
-            prompt: str — input text
-            model: str — model name (optional if already loaded)
-            max_tokens: int — max tokens to generate (default 128, 1-4096)
-            temperature: float — sampling temperature (default 1.0, 0.0-2.0)
-            top_p: float — nucleus sampling (default 1.0, 0.0-1.0)
-            stream: bool — SSE streaming (default false)
-        """
+        """OpenAI-compatible completion endpoint."""
         data = request.get_json(silent=True) or {}
+        prompt = data.get('prompt', '')
+        if len(prompt) > 32768:
+            return jsonify({"error": "prompt exceeds 32KB limit"}), 400
+        data['max_tokens'] = min(data.get('max_tokens', 128), 8192)
         prompt = data.get('prompt', '')
         model_name = data.get('model')
         stream = data.get('stream', False)
@@ -494,6 +495,12 @@ def _register_routes(application: Flask, _run_with_timeout, queue_depth, queue_l
 
         data = request.get_json(silent=True) or {}
         messages = data.get('messages', [])
+        
+        full_len = sum(len(str(m.get('content', ''))) for m in messages)
+        if full_len > 65536:
+            return jsonify({"error": "messages exceed 64KB limit"}), 400
+        data['max_tokens'] = min(data.get('max_tokens', 128), 8192)
+
         model_name = data.get('model')
         stream = data.get('stream', False)
 
@@ -644,6 +651,9 @@ def _register_routes(application: Flask, _run_with_timeout, queue_depth, queue_l
         """
         data = request.get_json(silent=True) or {}
         input_ids_raw = data.get('input_ids', [])
+        if len(input_ids_raw) > 32768:
+            return jsonify({"error": "input_ids exceed 32K limit"}), 400
+        
         model_name = data.get('model')
 
         if not input_ids_raw:
@@ -913,6 +923,9 @@ def _register_routes(application: Flask, _run_with_timeout, queue_depth, queue_l
         model_name = data.get('model')
         if not model_name:
             return jsonify({'error': 'Missing "model" field'}), 400
+        import re
+        if not re.match(r'^[a-zA-Z0-9_\-\./]+$', str(model_name)):
+            return jsonify({"error": "Invalid model name"}), 400
 
         num_gpus = data.get('num_gpus')
         backend = data.get('backend', 'auto')
@@ -1016,7 +1029,7 @@ def main():
         try:
             if hasattr(app, 'vrm_executor') and app.vrm_executor:
                 logger.info("Draining inference executor...")
-                app.vrm_executor.shutdown(wait=True, cancel_futures=True)
+                app.vrm_executor.shutdown(wait=True, cancel_futures=False)
                 logger.info("Executor drained")
         except Exception as e:
             logger.warning("Executor shutdown error: %s", e)

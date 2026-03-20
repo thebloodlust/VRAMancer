@@ -34,13 +34,25 @@ try:
 except ImportError:
     def serialize_tensors(tensors):
         """Fallback serializer when utils.helpers is unavailable."""
-        import pickle
-        return pickle.dumps(tensors)
+        try:
+            import torch
+            import io
+            buffer = io.BytesIO()
+            torch.save(tensors, buffer)
+            return buffer.getvalue()
+        except ImportError:
+            import json
+            return json.dumps(tensors).encode('utf-8')
 
     def deserialize_tensors(data):
         """Fallback deserializer when utils.helpers is unavailable."""
-        import pickle
-        return pickle.loads(data)
+        try:
+            import torch
+            import io
+            return torch.load(io.BytesIO(data), weights_only=True)
+        except ImportError:
+            import json
+            return json.loads(data.decode('utf-8'))
 
 sio = socketio.Client() if socketio else None
 

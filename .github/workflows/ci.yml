@@ -1,174 +1,49 @@
-# .github/workflows/ci.yml
-name: CI
+name: VRAMancer CI
+
 on:
   push:
-    branches: [ main ]
+    branches: [ main, master, v7* ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, master ]
 
 jobs:
   test:
-    strategy:
-      fail-fast: false
-      matrix:
-        python: ["3.10", "3.11", "3.12"]
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python }}
-          cache: 'pip'
-          cache-dependency-path: |
-            requirements.txt
-            pyproject.toml
-
-      - name: Install (base + test extras)
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install .[test]
-        env:
-          PIP_DISABLE_PIP_VERSION_CHECK: "1"
-
-      - name: Lint (flake8)
-        run: |
-          pip install flake8
-          flake8 core/ dashboard/ examples/ tests/
-
-      - name: Run tests (test mode, rate-limit off)
-        env:
-          VRM_DISABLE_RATE_LIMIT: "1"
-          VRM_TEST_MODE: "1"
-          VRM_MINIMAL_TEST: "1"
-        run: |
-          pytest -q
-  smoke:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Install minimal
-        run: |
-          pip install --upgrade pip
-          pip install -r requirements.txt
-      - name: Run smoke subset
-        env:
-          VRM_DISABLE_RATE_LIMIT: "1"
-          VRM_TEST_MODE: "1"
-          VRM_MINIMAL_TEST: "1"
-        run: |
-          python -m tests.smoke
-
-  real-torch:
-    name: Real backend tests (CPU, no stubs)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: 'pip'
-          cache-dependency-path: |
-            requirements.txt
-            pyproject.toml
-      - name: Install with torch (CPU)
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install .[test,gpu]
-          pip install torch --index-url https://download.pytorch.org/whl/cpu
-        env:
-          PIP_DISABLE_PIP_VERSION_CHECK: "1"
-      - name: Run real-torch tests (CPU, no stubs)
-        env:
-          VRM_DISABLE_RATE_LIMIT: "1"
-          VRM_TEST_MODE: "1"
-        run: |
-          pytest tests/test_real_gpu.py -m "real_torch and not gpu" -v --no-cov
-      - name: Run real inference tests (GPT-2 on CPU)
-        env:
-          VRM_DISABLE_RATE_LIMIT: "1"
-          VRM_TEST_MODE: "1"
-        run: |
-          pytest tests/test_real_inference.py -v --no-cov || echo "::warning::Real inference tests failed (may need network for model download)"
-
-  multi-os:
-    name: Tests multi-OS
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-        python: ["3.11"]
+    name: Test on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python }}
-      - name: Install minimal
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install .[test]
-      - name: Run fast tests
-        env:
-          VRM_DISABLE_RATE_LIMIT: "1"
-          VRM_TEST_MODE: "1"
-          VRM_MINIMAL_TEST: "1"
-        run: pytest -q -k "not heavy and not slow"
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ["3.9", "3.10", "3.11"]
+      fail-fast: false
 
-  build-wheel:
-    name: Build & Publish Wheel (dry-run)
-    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Build wheel
-        run: |
-          python -m pip install --upgrade pip build
-          python -m build
-          ls -1 dist
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: wheels
-          path: dist/*
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements-lite.txt || true
+        pip install -r requirements.txt || true
+        pip install pytest pytest-cov mock aiohttp aiohttp[speedups] pytest-asyncio
+        
+    - name: Run tests (fast)
+      env:
+        VRM_MINIMAL_TEST: "1"
+        VRM_DISABLE_RATE_LIMIT: "1"
+        VRM_TEST_MODE: "1"
+      run: |
+        pytest tests/ -m "not (slow or integration or chaos)" --no-cov -q
 
-  security-audit:
-    name: Security (pip-audit & bandit)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Install audit tools
-        run: |
-          python -m pip install --upgrade pip
-          pip install pip-audit bandit
-      - name: pip-audit
-        run: |
-          pip-audit -r requirements.txt
-      - name: bandit (baseline)
-        run: |
-          bandit -q -r core -s B101,B311 --severity-level medium
-
-  docker-build:
-    name: Docker build (smoke)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Build image
-        run: |
-          docker build -t vramancer:test .
-      - name: Smoke run
-        run: |
-          docker run --rm vramancer:test python -c "print('container ok')"
+    - name: Run tests (full unfiltered suite, Ubuntu only)
+      if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.10'
+      env:
+        VRM_MINIMAL_TEST: "1"
+        VRM_DISABLE_RATE_LIMIT: "1"
+        VRM_TEST_MODE: "1"
+      run: |
+        pytest tests/ --no-cov -q

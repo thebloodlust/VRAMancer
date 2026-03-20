@@ -19,7 +19,7 @@ print("-> Cette fonction va attaquer le driver NVIDIA et copier le payload dans 
 try:
     # Récupère le pointeur mémoire brut de la carte graphique
     cuda_ptr = vramancer_rust.direct_vram_load(payload)
-    print(f"\n[SUCCÈS] MAGIC HAPPENED ! 🚀")
+    print(f"\n[SUCCÈS] MAGIC HAPPENED ! ")
     print(f"[SUCCÈS] Adresse du pointeur VRAM Brut 64-bits : {hex(cuda_ptr)}")
     
     print("\n[PyTorch] Si PyTorch était actif, nous ferions maintenant :")
