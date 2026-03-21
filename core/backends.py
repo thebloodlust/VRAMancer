@@ -540,6 +540,58 @@ class HuggingFaceBackend(BaseLLMBackend):
         except Exception:
             return None
 
+    def _ensure_gptq_imports(self):
+        """Ensure auto_gptq.QuantizeConfig is importable.
+
+        When auto_gptq is installed with BUILD_CUDA_EXT=0 (no compiled CUDA
+        kernels), internal import chains can break, causing NameError:
+        'QuantizeConfig is not defined' during model loading.
+
+        We test the import and, if broken, inject a minimal dataclass stub
+        into auto_gptq's namespace so transformers can proceed.
+        """
+        try:
+            from auto_gptq import QuantizeConfig  # noqa: F401
+            self.log.info("GPTQ: auto_gptq.QuantizeConfig OK")
+        except Exception as e:
+            self.log.warning(f"auto_gptq.QuantizeConfig broken ({e}), injecting stub")
+            try:
+                import auto_gptq
+                from dataclasses import dataclass, field
+
+                @dataclass
+                class QuantizeConfig:
+                    bits: int = 4
+                    group_size: int = 128
+                    damp_percent: float = 0.01
+                    desc_act: bool = False
+                    static_groups: bool = False
+                    sym: bool = True
+                    true_sequential: bool = True
+                    model_name_or_path: str = None
+                    model_file_base_name: str = None
+                    is_marlin_format: bool = False
+
+                    def to_dict(self):
+                        from dataclasses import asdict
+                        return asdict(self)
+
+                auto_gptq.QuantizeConfig = QuantizeConfig
+                # Patch into submodules that transformers may import from
+                for attr in ("quantize_config", "utils"):
+                    mod = getattr(auto_gptq, attr, None)
+                    if mod is not None and not hasattr(mod, "QuantizeConfig"):
+                        mod.QuantizeConfig = QuantizeConfig
+                # Also inject into the global auto_gptq module namespace
+                import sys
+                sys.modules["auto_gptq"].QuantizeConfig = QuantizeConfig
+                self.log.info("GPTQ: stub QuantizeConfig injected into auto_gptq")
+            except ImportError:
+                self.log.error(
+                    "auto_gptq not installed — install with: "
+                    "BUILD_CUDA_EXT=0 pip install auto-gptq --no-build-isolation"
+                )
+
     def _should_use_nvfp4(self) -> bool:
         """Check if NVFP4 quantization should be used.
 
@@ -617,6 +669,7 @@ class HuggingFaceBackend(BaseLLMBackend):
             self.log.info("GPTQ model detected — loading pre-quantized (no BnB needed)")
             os.environ["DISABLE_EXLLAMA"] = "1"
             os.environ["DISABLE_EXLLAMAV2"] = "1"
+            self._ensure_gptq_imports()
             kwargs["low_cpu_mem_usage"] = True
             kwargs["device_map"] = "auto"
             num_gpus = _torch.cuda.device_count() if _HAS_TORCH and _torch.cuda.is_available() else 1
