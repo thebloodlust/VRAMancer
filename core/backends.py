@@ -228,23 +228,81 @@ class KVCacheBlock(_nn.Module if _HAS_TORCH else object):
         return hidden_states, presents
 
 
+def _vllm_available() -> bool:
+    """Check if vLLM can actually run (installed + CUDA present)."""
+    if _MINIMAL:
+        return False
+    if not _HAS_TORCH or not getattr(_torch, 'cuda', None) or not _torch.cuda.is_available():
+        return False
+    try:
+        import vllm  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def _compute_vllm_config(num_gpus: int) -> dict:
+    """Build vLLM engine kwargs from hetero_config (compute-aware).
+
+    Returns dict with keys: tensor_parallel_size, gpu_memory_utilization,
+    dtype_str, and optionally max_model_len.
+    """
+    result = {"tensor_parallel_size": num_gpus, "gpu_memory_utilization": 0.90}
+    try:
+        from core.hetero_config import auto_configure
+        config = auto_configure(strategy="balanced")
+        if config.gpus:
+            # Use the max VRAM fraction that hetero_config recommends
+            min_vram_gb = min(g.total_vram_gb for g in config.gpus)
+            # Utilisation: leave 1.5 GB headroom on the smallest GPU
+            headroom_gb = 1.5
+            if min_vram_gb > headroom_gb:
+                result["gpu_memory_utilization"] = round(
+                    (min_vram_gb - headroom_gb) / min_vram_gb, 2
+                )
+            # Optimal dtype string for vLLM
+            best_cc = max((g.compute_capability for g in config.gpus), default=(0, 0))
+            if best_cc >= (8, 0):
+                result["dtype_str"] = "bfloat16"
+            else:
+                result["dtype_str"] = "float16"
+            # Log tier info
+            primary = max(config.gpus, key=lambda g: g.effective_compute)
+            arch = primary.profile.architecture if primary.profile else "unknown"
+            logger.info(
+                f"vLLM compute-aware: primary GPU {primary.index} "
+                f"({primary.name}, {arch}), TP={num_gpus}, "
+                f"gpu_util={result['gpu_memory_utilization']}"
+            )
+    except Exception as e:
+        logger.debug(f"hetero_config unavailable for vLLM config: {e}")
+    return result
+
+
 def select_backend(model_name: str, cache_dir: str = None, backend: str = "auto", num_gpus: int = 1):
     logger.info(f"Sélection du backend pour {model_name} (demandé: {backend}, gpus: {num_gpus})")
-    
-    if backend == "vllm" or backend == "auto":
+
+    # vLLM: preferred when explicitly requested or auto + CUDA available
+    if backend == "vllm" or (backend == "auto" and _vllm_available()):
         try:
-            import vllm  # Vérifie si installé
-            logger.info(f"Utilisation du backend vLLM pour le modèle {model_name}.")
             from core.backends_vllm import vLLMBackend
-            return vLLMBackend(model_name, cache_dir=cache_dir, tensor_parallel_size=num_gpus)
+            vllm_cfg = _compute_vllm_config(num_gpus)
+            logger.info(f"Utilisation du backend vLLM pour {model_name} (TP={vllm_cfg['tensor_parallel_size']})")
+            return vLLMBackend(
+                model_name,
+                cache_dir=cache_dir,
+                tensor_parallel_size=vllm_cfg["tensor_parallel_size"],
+                gpu_memory_utilization=vllm_cfg.get("gpu_memory_utilization", 0.90),
+                dtype_str=vllm_cfg.get("dtype_str"),
+            )
         except ImportError:
-            if os.environ.get("VRM_BACKEND_ALLOW_STUB") == "1":
-                logger.info("Utilisation du StubBackend car vLLM n'est pas disponible (VRM_BACKEND_ALLOW_STUB=1).")
-                from core.backends_vllm import vLLMBackend  # If it has a stub mode
-                # Actually, let's fallback securely to HuggingFace
             logger.info("Fallback sur HuggingFaceBackend car vLLM n'est pas disponible.")
-            from core.backends import HuggingFaceBackend
             return HuggingFaceBackend(model_name, cache_dir=cache_dir)
+
+    # auto without vLLM → HuggingFace (accelerate)
+    if backend == "auto":
+        logger.info(f"Utilisation du backend HuggingFace pour {model_name}")
+        return HuggingFaceBackend(model_name, cache_dir=cache_dir)
 
     if backend == "ollama":
         from core.backends_ollama import OllamaBackend
@@ -259,7 +317,6 @@ def select_backend(model_name: str, cache_dir: str = None, backend: str = "auto"
             raise ValueError("WebGPU support requires extra dependencies. Ensure they are installed.")
         
     if backend == "huggingface":
-        from core.backends import HuggingFaceBackend
         return HuggingFaceBackend(model_name, cache_dir=cache_dir)
         
     raise ValueError(f"Backend inconnu ou non supporté : {backend}")

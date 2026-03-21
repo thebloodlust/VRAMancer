@@ -7,11 +7,14 @@ logger = logging.getLogger(__name__)
 
 class vLLMBackend(BaseLLMBackend):
     def __init__(self, model_name: str, cache_dir: str = None, 
-                 tensor_parallel_size: int = 1, pipeline_parallel_size: int = 1):
+                 tensor_parallel_size: int = 1, pipeline_parallel_size: int = 1,
+                 gpu_memory_utilization: float = 0.90, dtype_str: str = None):
         self.model_name = model_name
         self.cache_dir = cache_dir
         self.tensor_parallel_size = tensor_parallel_size
         self.pipeline_parallel_size = pipeline_parallel_size
+        self.gpu_memory_utilization = gpu_memory_utilization
+        self.dtype_str = dtype_str  # "bfloat16", "float16", or None (auto)
         self.engine = None
         self.backend_type = "vllm"
         self.is_loaded = False
@@ -30,12 +33,13 @@ class vLLMBackend(BaseLLMBackend):
 
         logger.info(f"Initialisation de vLLM (TP={self.tensor_parallel_size}, PP={self.pipeline_parallel_size}) pour {self.model_name}")
         
-        gpu_utilization = float(kwargs.get("gpu_memory_utilization", 0.90))
-        max_model_len = int(kwargs.get("max_model_len", 8192)) # Force a smaller context length to save KV cache (default would try 32k for Qwen)
+        gpu_utilization = float(kwargs.get("gpu_memory_utilization", self.gpu_memory_utilization))
+        max_model_len = int(kwargs.get("max_model_len", 8192))
+        dtype = kwargs.get("dtype", self.dtype_str)
         
-        logger.info(f"Paramètres vLLM: gpu_memory_utilization={gpu_utilization}, max_model_len={max_model_len}")
+        logger.info(f"Paramètres vLLM: gpu_memory_utilization={gpu_utilization}, max_model_len={max_model_len}, dtype={dtype}")
         
-        engine_args = EngineArgs(
+        engine_kwargs = dict(
             model=self.model_name,
             download_dir=self.cache_dir,
             tensor_parallel_size=self.tensor_parallel_size,
@@ -43,8 +47,12 @@ class vLLMBackend(BaseLLMBackend):
             trust_remote_code=True,
             gpu_memory_utilization=gpu_utilization,
             max_model_len=max_model_len,
-            enforce_eager=kwargs.get("enforce_eager", False)
+            enforce_eager=kwargs.get("enforce_eager", False),
         )
+        if dtype:
+            engine_kwargs["dtype"] = dtype
+        
+        engine_args = EngineArgs(**engine_kwargs)
         self.engine = LLMEngine.from_engine_args(engine_args)
         logger.info("vLLM Engine prêt.")
         self.is_loaded = True
