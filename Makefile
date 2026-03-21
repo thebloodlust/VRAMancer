@@ -51,6 +51,26 @@ clean:
 	rm -f vramancer_1.0.deb
 	rm -f vramancer.tar.gz
 
+rust-build:
+	@echo "🦀 Building Rust native extensions..."
+	cd rust_core && cargo build --release
+	@echo "🐍 Building Python wheel (maturin)..."
+	cd rust_core && maturin build --release
+	@echo "📦 Installing vramancer_rust into current venv..."
+	pip install rust_core/target/wheels/vramancer_rust-*.whl --force-reinstall
+	@echo "✅ Rust extensions built and installed"
+
+rust-build-cuda:
+	@echo "🦀 Building Rust extensions with CUDA support..."
+	cd rust_core && cargo build --release --features cuda
+	cd rust_core && maturin build --release --features cuda
+	pip install rust_core/target/wheels/vramancer_rust-*.whl --force-reinstall
+	@echo "✅ Rust + CUDA extensions built and installed"
+
+rust-test:
+	@echo "🧪 Testing Rust extensions..."
+	python scripts/test_rust_integration.py
+
 deb:
 	@echo "📦 Construction du paquet .deb..."
 	chmod +x Debian/postinst

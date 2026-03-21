@@ -112,12 +112,17 @@ def ensure_default_admin():  # auto bootstrap
                 "Refusing to create default admin in production."
             )
             return
-        dev_password = os.environ.get("VRM_DEFAULT_ADMIN_PASS") or secrets.token_urlsafe(12)
-        _logger.warning(
-            "SECURITY: No users configured. Creating default admin user for development. "
-            "You must set VRM_DEFAULT_ADMIN_PASS or configure users properly."
-        )
+        dev_password = os.environ.get("VRM_DEFAULT_ADMIN_PASS")
+        if not dev_password:
+            dev_password = secrets.token_urlsafe(16)
+            _logger.warning(
+                "SECURITY: No VRM_DEFAULT_ADMIN_PASS set. "
+                "Generated random admin password: %s  "
+                "Set VRM_DEFAULT_ADMIN_PASS env var to use a fixed password.",
+                dev_password,
+            )
         create_user('admin', dev_password, 'admin')
+        _logger.info("Dev admin user created (username=admin).")
 
 __all__ = [
     'create_user','verify_user','issue_tokens','refresh_token','decode_access','ensure_default_admin'

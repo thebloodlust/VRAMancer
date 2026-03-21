@@ -242,9 +242,10 @@ def _cmd_serve(args):
             print(f"\n  WARNING: Model pre-load failed: {e}")
             print("  Send POST /api/models/load to load later.\n")
 
+    # Start server (gunicorn in production, Werkzeug fallback in dev)
+    from core.production_api import run_server
     try:
-        app.run(host=args.host, port=args.port, debug=False,
-                use_reloader=False, threaded=True)
+        run_server(host=args.host, port=args.port)
     except KeyboardInterrupt:
         print("\nShutdown requested.")
 

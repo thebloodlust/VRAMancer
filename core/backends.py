@@ -528,6 +528,57 @@ class HuggingFaceBackend(BaseLLMBackend):
         except Exception:
             return None
 
+    def _should_use_nvfp4(self) -> bool:
+        """Check if NVFP4 quantization should be used.
+
+        Conditions:
+          - VRM_QUANTIZATION=nvfp4 env var set (explicit opt-in)
+          - At least one Blackwell GPU (CC >= 12.0)
+          - bitsandbytes is installed
+        """
+        quant = os.environ.get("VRM_QUANTIZATION", "").lower()
+        if quant != "nvfp4":
+            return False
+        if not _HAS_TORCH or not _torch.cuda.is_available():
+            return False
+        has_blackwell = False
+        for i in range(_torch.cuda.device_count()):
+            props = _torch.cuda.get_device_properties(i)
+            if props.major >= 12:
+                has_blackwell = True
+                break
+        if not has_blackwell:
+            self.log.warning("VRM_QUANTIZATION=nvfp4 requested but no Blackwell GPU (CC>=12) found")
+            return False
+        try:
+            import bitsandbytes  # noqa: F401
+            return True
+        except ImportError:
+            self.log.warning(
+                "VRM_QUANTIZATION=nvfp4 requested but bitsandbytes not installed. "
+                "Install with: pip install bitsandbytes>=0.43.0"
+            )
+            return False
+
+    def _build_bnb_nvfp4_config(self):
+        """Build BitsAndBytesConfig for NVFP4 (4-bit NormalFloat) quantization.
+
+        Uses NF4 quantization with bfloat16 compute dtype — the Blackwell
+        native FP4 format. A 7B model goes from ~14 GB (BF16) to ~4 GB (NF4).
+        """
+        from transformers import BitsAndBytesConfig
+        bnb_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=_torch.bfloat16,
+            bnb_4bit_use_double_quant=True,
+        )
+        self.log.info(
+            "NVFP4 quantization enabled (NF4 + double quant + bfloat16 compute) — "
+            "model size reduced ~75%%"
+        )
+        return bnb_config
+
     def load_model(self, model_name: str, **kwargs):
         if os.environ.get("VRM_MINIMAL_TEST") == "1" or model_name.startswith("stub"):
             self.model_name = model_name
@@ -549,8 +600,11 @@ class HuggingFaceBackend(BaseLLMBackend):
             if max_memory:
                 kwargs["max_memory"] = max_memory
 
+            # NVFP4 quantization: 4-bit NormalFloat for Blackwell GPUs
+            if self._should_use_nvfp4() and "quantization_config" not in kwargs:
+                kwargs["quantization_config"] = self._build_bnb_nvfp4_config()
             # Auto-select optimal dtype based on best available GPU
-            if "torch_dtype" not in kwargs and "dtype" not in kwargs:
+            elif "torch_dtype" not in kwargs and "dtype" not in kwargs:
                 best_dtype = self._detect_optimal_dtype()
                 if best_dtype is not None:
                     # Newer transformers (>= 4.46) use 'dtype', older use 'torch_dtype'

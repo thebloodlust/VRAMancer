@@ -401,8 +401,9 @@ class TransferManager:
         Tries in order:
           0. Cross-vendor bridge (AMD ↔ NVIDIA: DMA-BUF / ReBAR / pipelined)
           1. P2P direct copy (same vendor, NVLink/PCIe)
-          2. NCCL send/recv (distributed mode)
-          3. CPU-staged copy (universal fallback)
+          2. ReBAR-accelerated pipelined transfer (if ReBAR detected, no P2P)
+          3. NCCL send/recv (distributed mode)
+          4. CPU-staged copy (universal fallback)
 
         Returns (method_used, output_tensor_on_target).
         """
@@ -430,14 +431,40 @@ class TransferManager:
             except Exception as e:
                 log.warning(f"P2P transfer failed ({e}), falling back")
 
-        # --- Strategy 2: NCCL send/recv ---
+        # --- Strategy 2: ReBAR-accelerated pipelined transfer ---
+        # When P2P is blocked (consumer GPUs, mixed architectures) but ReBAR
+        # is enabled, use larger chunk sizes for double-buffered pinned transfer
+        # to maximize PCIe bandwidth (~80% of raw vs ~60% for small chunks).
+        if not self._can_p2p(source_gpu, target_gpu):
+            try:
+                from core.cross_vendor_bridge import detect_rebar, PipelinedTransport
+                src_rebar, src_bar = detect_rebar(source_gpu)
+                dst_rebar, dst_bar = detect_rebar(target_gpu)
+                if src_rebar or dst_rebar:
+                    bar_size = max(src_bar, dst_bar)
+                    chunk = min(bar_size // 64, 64 * 1024 * 1024)
+                    chunk = max(chunk, 2 * 1024 * 1024)
+                    pipeline = PipelinedTransport(chunk_bytes=chunk)
+                    output, xv_result = pipeline.transfer(
+                        source_gpu, target_gpu, tensor)
+                    log.info(
+                        f"ReBAR-accelerated GPU {source_gpu} → GPU {target_gpu}: "
+                        f"{xv_result.bytes_transferred / 1e6:.1f} MB, "
+                        f"{xv_result.bandwidth_gbps:.1f} Gbps, "
+                        f"chunk={chunk // (1024*1024)} MB"
+                    )
+                    return TransportMethod.CPU_STAGED, output
+            except Exception as e:
+                log.debug(f"ReBAR pipelined transfer failed: {e}")
+
+        # --- Strategy 3: NCCL send/recv ---
         if _DIST_AVAILABLE and self._nccl_initialized:
             try:
                 return self._transfer_nccl(source_gpu, target_gpu, tensor)
             except Exception as e:
                 log.warning(f"NCCL transfer failed ({e}), falling back to CPU staging")
 
-        # --- Strategy 3: CPU-staged copy (always works) ---
+        # --- Strategy 4: CPU-staged copy (always works) ---
         return self._transfer_cpu_staged(source_gpu, target_gpu, tensor, stream)
 
     def _transfer_p2p(

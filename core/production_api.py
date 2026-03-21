@@ -1078,6 +1078,16 @@ def main():
     logger.info("=" * 60)
 
     # Production: use gunicorn if available, fallback to Werkzeug
+    run_server(host=host, port=port)
+
+
+def run_server(host: str = None, port: int = None):
+    """Start the API server with gunicorn (production) or Werkzeug (fallback).
+
+    Called from main() and from vramancer CLI 'serve' command.
+    """
+    host = host or API_HOST
+    port = port or API_PORT
     try:
         from gunicorn.app.base import BaseApplication
 
