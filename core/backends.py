@@ -351,8 +351,30 @@ class HuggingFaceBackend(BaseLLMBackend):
 
     def split_model(self, num_gpus: int, vram_per_gpu: Optional[List[int]] = None):
         from core.model_splitter import split_model_into_blocks, assign_blocks_to_gpus
-        
-        # Strip all HuggingFace accelerate hooks because VRAMancer manages devices manually!
+
+        if self.model is None:
+            raise RuntimeError("Modèle non chargé — appeler load_model() d'abord")
+
+        # If accelerate already distributed the model via device_map="auto",
+        # keep its dispatch hooks and use native model.generate() for inference.
+        # This is the most reliable multi-GPU path: accelerate + transformers
+        # handle attention masks, rotary embeddings, KV cache, and device
+        # transfers internally.
+        if hasattr(self.model, 'hf_device_map') and self.model.hf_device_map:
+            dev_map = self.model.hf_device_map
+            devices_used = sorted(set(str(v) for v in dev_map.values()))
+            layers_per_dev = {}
+            for _k, _v in dev_map.items():
+                d = str(_v)
+                layers_per_dev[d] = layers_per_dev.get(d, 0) + 1
+            self.log.info(f"Model distributed by accelerate across {len(devices_used)} device(s): {layers_per_dev}")
+            self.log.info("Using native accelerate inference (reliable multi-GPU)")
+            self.blocks = None
+            self._components = None
+            self.block_devices = None
+            return []
+
+        # No accelerate device_map — use manual VRAMancer split
         if self.model is not None:
             try:
                 import accelerate
@@ -361,8 +383,6 @@ class HuggingFaceBackend(BaseLLMBackend):
             except Exception as e:
                 self.log.debug(f"Impossible de retirer les hooks Accelerate: {e}")
 
-        if self.model is None:
-            raise RuntimeError("Modèle non chargé — appeler load_model() d'abord")
         self.log.debug(f"Découpage en blocs sur {num_gpus} GPUs")
 
         from core.model_splitter import _extract_layers, _split_by_vram, _get_free_vram_per_gpu
@@ -960,9 +980,16 @@ class HuggingFaceBackend(BaseLLMBackend):
                 device = f"cuda:{self.block_devices[0]}"
                 input_ids = input_ids.to(device)
                 if self.model is not None and not self.blocks:
-                    self.model = self.model.to(device)
+                    if not (hasattr(self.model, 'hf_device_map') and self.model.hf_device_map):
+                        self.model = self.model.to(device)
             except Exception as e:
                 logger.debug(f"Exception silencieuse dans l'exécution: {e}", exc_info=True)
+        elif _HAS_TORCH and self.model is not None:
+            try:
+                device = self._get_device()
+                input_ids = input_ids.to(device)
+            except Exception:
+                pass
 
         generated = input_ids
         past_key_values = None
