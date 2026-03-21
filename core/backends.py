@@ -611,27 +611,37 @@ class HuggingFaceBackend(BaseLLMBackend):
             is_quantized = self._should_use_nvfp4()
             num_gpus = _torch.cuda.device_count() if _HAS_TORCH and _torch.cuda.is_available() else 1
 
+            kwargs["device_map"] = "auto"
+
             if is_quantized and num_gpus >= 2:
-                # BnB 4-bit multi-GPU: use "balanced" to FORCE an equal split.
-                # With "auto", accelerate's infer_auto_device_map uses NF4
-                # sizes — if the whole model fits on one GPU, it puts
-                # everything there.  During loading, fp16 weight transients
-                # accumulate on that GPU and cause OOM.  "balanced" distributes
-                # modules equally so no single GPU bears the full load.
-                kwargs["device_map"] = "balanced"
-                # Reduce fragmentation during fp16→NF4 conversion
-                os.environ.setdefault(
-                    "PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True"
-                )
+                # BnB 4-bit multi-GPU: during from_pretrained, weights are
+                # loaded in fp16 onto each GPU BEFORE being quantized to NF4.
+                # infer_auto_device_map plans using NF4 sizes (~0.56 B/param)
+                # but loading uses fp16 (2 B/param) — a ~3.6x mismatch.
+                # If max_memory is too generous, one GPU gets assigned the
+                # entire model in NF4 but can't hold it in fp16 during loading.
+                #
+                # Fix: set max_memory to ~25% of free VRAM.  This ensures the
+                # fp16 equivalent of assigned NF4 modules fits during loading.
+                # Overflow modules go to CPU in fp32, kept functional via
+                # llm_int8_enable_fp32_cpu_offload=True in the BnB config.
+                max_memory = {}
+                for i in range(num_gpus):
+                    free_bytes = _torch.cuda.mem_get_info(i)[0]
+                    free_gb = free_bytes / (1024 ** 3)
+                    # 25% of free: NF4 planned → fp16 actual ≈ 4x → fits in free
+                    budget = max(2.0, free_gb * 0.25)
+                    max_memory[i] = f"{budget:.1f}GiB"
+                max_memory["cpu"] = "48GiB"
+                kwargs["max_memory"] = max_memory
+                kwargs["low_cpu_mem_usage"] = True
                 self.log.info(
-                    "BnB 4-bit multi-GPU: using device_map='balanced' to "
-                    "spread model across %d GPUs (avoids fp16 loading OOM)",
-                    num_gpus,
+                    "BnB 4-bit multi-GPU: max_memory=%s "
+                    "(conservative for fp16 loading transient)",
+                    {k: v for k, v in max_memory.items() if k != "cpu"},
                 )
             else:
-                kwargs["device_map"] = "auto"
-                # Compute-aware GPU placement: build max_memory so accelerate
-                # places more layers on the fastest GPU (e.g. Blackwell > Ampere).
+                # Non-quantized: compute-aware placement with generous budgets
                 max_memory = self._build_compute_aware_memory_map()
                 if max_memory:
                     kwargs["max_memory"] = max_memory
