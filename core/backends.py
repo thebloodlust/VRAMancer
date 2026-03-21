@@ -318,6 +318,103 @@ class HuggingFaceBackend(BaseLLMBackend):
         # Model components for multi-GPU KV-cache forward
         self._components: Optional[dict] = None  # embed, pos_embed, final_norm, lm_head
 
+    def _build_compute_aware_memory_map(self) -> Optional[dict]:
+        """Build a max_memory dict for accelerate that favors faster GPUs.
+
+        Uses hetero_config to detect GPU compute capabilities and assigns
+        more VRAM budget to higher-compute GPUs. This causes accelerate
+        to place more model layers on the best GPU (e.g. Blackwell 5070 Ti
+        gets priority over Ampere 3090).
+
+        Returns None if detection fails or only 1 GPU (let accelerate decide).
+        """
+        if not _HAS_TORCH or not _torch.cuda.is_available():
+            return None
+        num_gpus = _torch.cuda.device_count()
+        if num_gpus < 2:
+            return None
+
+        try:
+            from core.hetero_config import auto_configure
+            config = auto_configure(strategy="balanced")
+            if len(config.gpus) < 2:
+                return None
+
+            max_memory = {}
+            for gpu in config.gpus:
+                # Fraction of VRAM to allocate = split_ratio adjusted to total pool
+                # Use 90% of total VRAM as budget (leave room for KV cache + overhead)
+                budget_gb = gpu.total_vram_gb * 0.90 * (gpu.split_ratio * len(config.gpus))
+                # Clamp: at least 2 GB, at most 95% of total
+                budget_gb = max(2.0, min(budget_gb, gpu.total_vram_gb * 0.95))
+                max_memory[gpu.index] = f"{budget_gb:.1f}GiB"
+
+            # Log the decision
+            primary = max(config.gpus, key=lambda g: g.effective_compute)
+            arch = primary.profile.architecture if primary.profile else "unknown"
+            self.log.info(
+                f"Compute-aware placement: primary GPU {primary.index} "
+                f"({primary.name}, {arch}, "
+                f"{primary.profile.fp16_tflops if primary.profile else '?'} TFLOPS)"
+            )
+            for gpu in config.gpus:
+                cap_str = ""
+                if gpu.profile and gpu.profile.architecture in ("Blackwell",):
+                    cap_str = " [NVFP4, FP8, MicroTensor]"
+                elif gpu.profile and gpu.profile.architecture in ("Ada",):
+                    cap_str = " [FP8]"
+                self.log.info(
+                    f"  GPU {gpu.index}: {gpu.name} — {max_memory[gpu.index]} budget, "
+                    f"tier {gpu.tier}, ratio {gpu.split_ratio:.1%}{cap_str}"
+                )
+
+            return max_memory
+        except Exception as e:
+            self.log.debug(f"Compute-aware memory map failed, using default: {e}")
+            return None
+
+    def _detect_optimal_dtype(self):
+        """Detect the best torch dtype based on GPU capabilities.
+
+        - Blackwell (CC >= 12.0): bfloat16 natively, NVFP4 via quantization
+        - Ada (CC >= 8.9): bfloat16
+        - Ampere (CC >= 8.0): bfloat16
+        - Older: float16
+        """
+        if not _HAS_TORCH or not _torch.cuda.is_available():
+            return None
+        try:
+            best_cc = (0, 0)
+            best_arch = ""
+            for i in range(_torch.cuda.device_count()):
+                props = _torch.cuda.get_device_properties(i)
+                cc = (props.major, props.minor)
+                if cc > best_cc:
+                    best_cc = cc
+                    try:
+                        from core.hetero_config import lookup_gpu_profile
+                        profile = lookup_gpu_profile(props.name)
+                        best_arch = profile.architecture if profile else ""
+                    except Exception:
+                        pass
+
+            if best_cc >= (12, 0):
+                self.log.info(
+                    f"Blackwell GPU detected (CC {best_cc[0]}.{best_cc[1]}) — "
+                    f"using bfloat16 (NVFP4 quantization available via BitsAndBytes)"
+                )
+                return _torch.bfloat16
+            elif best_cc >= (8, 0):
+                self.log.info(
+                    f"Ampere+ GPU detected (CC {best_cc[0]}.{best_cc[1]}) — using bfloat16"
+                )
+                return _torch.bfloat16
+            else:
+                self.log.info(f"GPU CC {best_cc[0]}.{best_cc[1]} — using float16")
+                return _torch.float16
+        except Exception:
+            return None
+
     def load_model(self, model_name: str, **kwargs):
         if os.environ.get("VRM_MINIMAL_TEST") == "1" or model_name.startswith("stub"):
             self.model_name = model_name
@@ -331,11 +428,19 @@ class HuggingFaceBackend(BaseLLMBackend):
         if model_name.endswith("-AWQ"):
             kwargs["low_cpu_mem_usage"] = True
         else:
-            # Force 8-bit quantization for large models to fit in 16GB VRAM
-            # Desactivated by default to avoid issues with new models (Qwen2, Llama3)
-            # kwargs["load_in_8bit"] = True
             kwargs["device_map"] = "auto"
-            # kwargs["torch_dtype"] = "float16" # Enable this if VRAM is an issue without load_in_8bit
+
+            # Compute-aware GPU placement: build max_memory so accelerate
+            # places more layers on the fastest GPU (e.g. Blackwell > Ampere).
+            max_memory = self._build_compute_aware_memory_map()
+            if max_memory:
+                kwargs["max_memory"] = max_memory
+
+            # Auto-select optimal dtype based on best available GPU
+            if "torch_dtype" not in kwargs:
+                best_dtype = self._detect_optimal_dtype()
+                if best_dtype is not None:
+                    kwargs["torch_dtype"] = best_dtype
 
         if "trust_remote_code" not in kwargs:
             kwargs["trust_remote_code"] = (os.environ.get("VRM_TRUST_REMOTE_CODE") == "1")
