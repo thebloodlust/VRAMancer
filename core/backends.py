@@ -607,6 +607,22 @@ class HuggingFaceBackend(BaseLLMBackend):
         self.log.info(f"Chargement modèle HuggingFace: {model_name}")
         if model_name.endswith("-AWQ"):
             kwargs["low_cpu_mem_usage"] = True
+        elif "gptq" in model_name.lower():
+            # GPTQ: pre-quantized model — weights are already INT4/INT8.
+            # No runtime quantization needed (no BnB, no fp16 transient).
+            # Requires: pip install auto-gptq optimum
+            self.log.info("GPTQ model detected — loading pre-quantized (no BnB needed)")
+            kwargs["low_cpu_mem_usage"] = True
+            kwargs["device_map"] = "auto"
+            num_gpus = _torch.cuda.device_count() if _HAS_TORCH and _torch.cuda.is_available() else 1
+            if num_gpus >= 2:
+                max_memory = self._build_compute_aware_memory_map()
+                if max_memory:
+                    kwargs["max_memory"] = max_memory
+            # Optimal dtype for non-quantized layers (embed, norm, lm_head)
+            best_dtype = self._detect_optimal_dtype()
+            if best_dtype is not None:
+                kwargs["torch_dtype"] = best_dtype
         else:
             is_quantized = self._should_use_nvfp4()
             num_gpus = _torch.cuda.device_count() if _HAS_TORCH and _torch.cuda.is_available() else 1
