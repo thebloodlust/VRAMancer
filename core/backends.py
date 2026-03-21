@@ -140,10 +140,17 @@ class KVCacheBlock(_nn.Module if _HAS_TORCH else object):
             (hidden_states, presents) where presents is a list of KV tuples
             if use_cache=True, else None.
         """
-        presents = [] if use_cache else None
+        # Detect if past_key_values is a Cache object (DynamicCache etc.)
+        _is_cache_obj = hasattr(past_key_values, 'update')
+        presents = [] if (use_cache and not _is_cache_obj) else None
 
         for i, layer in enumerate(self.layers):
-            layer_past = past_key_values[i] if past_key_values else None
+            # For Cache objects, pass the whole cache (each layer uses its layer_idx);
+            # for legacy tuple format, index per-layer
+            if _is_cache_obj:
+                layer_past = past_key_values
+            else:
+                layer_past = past_key_values[i] if past_key_values else None
 
             # Base kwargs
             layer_kwargs = {
@@ -165,20 +172,22 @@ class KVCacheBlock(_nn.Module if _HAS_TORCH else object):
                 except Exception:
                     pass
 
-            # Try calling with KV cache kwargs (different HF model signatures)
+            # Try calling with KV cache kwargs — singular 'past_key_value' FIRST.
+            # Most modern HF layers (Llama, Mistral, Qwen2) use singular + **kwargs,
+            # so passing plural first would silently be absorbed by **kwargs without
+            # actually setting the cache parameter.
             try:
-                # Try Modern HF signature first (Llama > 4.36, Qwen2, past_key_values plural)
                 output = layer(
                     hidden_states,
-                    past_key_values=layer_past,
+                    past_key_value=layer_past,
                     **layer_kwargs
                 )
             except TypeError:
                 try:
-                    # Try Legacy Llama/Mistral signature (past_key_value singular)
+                    # Try plural 'past_key_values' for models that use it
                     output = layer(
                         hidden_states,
-                        past_key_value=layer_past,
+                        past_key_values=layer_past,
                         **layer_kwargs
                     )
                 except TypeError:
@@ -204,15 +213,18 @@ class KVCacheBlock(_nn.Module if _HAS_TORCH else object):
             # Parse output: tuple (hidden_states, present_kv, ...) or just tensor
             if isinstance(output, tuple):
                 hidden_states = output[0]
-                if use_cache and len(output) > 1 and output[1] is not None:
+                if presents is not None and len(output) > 1 and output[1] is not None:
                     presents.append(output[1])
-                elif use_cache:
+                elif presents is not None:
                     presents.append(None)
             else:
                 hidden_states = output
-                if use_cache:
+                if presents is not None:
                     presents.append(None)
 
+        # For Cache objects, they are mutated in-place — return the same object
+        if _is_cache_obj:
+            return hidden_states, past_key_values
         return hidden_states, presents
 
 
@@ -604,7 +616,9 @@ class HuggingFaceBackend(BaseLLMBackend):
             
             seq_len = inputs.shape[1]
             past_len = 0
-            if past_key_values and past_key_values[0] and past_key_values[0][0] is not None:
+            if hasattr(past_key_values, 'get_seq_length'):
+                past_len = past_key_values.get_seq_length()
+            elif past_key_values and past_key_values[0] and past_key_values[0][0] is not None:
                 past_len = past_key_values[0][0][0].shape[-2]
             pos = pt.arange(past_len, past_len + seq_len, dtype=pt.long, device=pos_dev).unsqueeze(0)
             
@@ -615,6 +629,29 @@ class HuggingFaceBackend(BaseLLMBackend):
             
         if comp["drop"] is not None:
             hidden_states = comp["drop"](hidden_states)
+
+        # Use DynamicCache for modern transformers (Llama, Mistral, Qwen, etc.)
+        # Individual layers don't create a cache — it must be provided externally.
+        _dynamic_cache = None
+        if use_cache:
+            try:
+                from transformers.cache_utils import DynamicCache as _DynCache
+                if past_key_values is None:
+                    _dynamic_cache = _DynCache()
+                elif isinstance(past_key_values, _DynCache):
+                    _dynamic_cache = past_key_values
+            except ImportError:
+                pass
+
+        # Pre-compute past sequence length BEFORE any block modifies the cache
+        _step_past_len = 0
+        if _dynamic_cache is not None:
+            _step_past_len = _dynamic_cache.get_seq_length()
+        elif past_key_values:
+            try:
+                _step_past_len = past_key_values[0][0][0].shape[-2]
+            except (IndexError, TypeError, AttributeError):
+                pass
 
         # 2. Process blocks sequentially
         if "blocks" not in self._comp_devices:
@@ -680,13 +717,20 @@ class HuggingFaceBackend(BaseLLMBackend):
                         self.log.warning(f" [WebGPU] Edge Swarm failed for block {idx}, reverting to local GPU: {e}")
             # ----------------------------------------------------
 
-            block_past = past_key_values[idx] if past_key_values else None
-            
+            # Cache: DynamicCache is shared across all blocks; legacy is per-block
+            if _dynamic_cache is not None:
+                block_past = _dynamic_cache
+                past_length = _step_past_len
+            else:
+                block_past = past_key_values[idx] if past_key_values else None
+                past_length = 0
+                if block_past is not None:
+                    try:
+                        past_length = block_past[0][0].shape[-2]
+                    except (IndexError, TypeError, AttributeError):
+                        pass
+
             seq_length = hidden_states.shape[1]
-            past_length = 0
-            if block_past is not None and len(block_past) > 0 and block_past[0] is not None:
-                past_length = block_past[0][0].shape[-2]
-                
             position_ids = pt.arange(past_length, past_length + seq_length, dtype=pt.long, device=hidden_states.device).unsqueeze(0)
 
             # Compute rotary position_embeddings from model-level rotary_emb
@@ -694,7 +738,12 @@ class HuggingFaceBackend(BaseLLMBackend):
             position_embeddings = None
             if comp.get("rotary_emb") is not None:
                 try:
-                    position_embeddings = comp["rotary_emb"](hidden_states, position_ids)
+                    rotary_dev = next(comp["rotary_emb"].parameters()).device
+                    r_pos = position_ids.to(rotary_dev)
+                    r_hid = hidden_states.to(rotary_dev)
+                    pe = comp["rotary_emb"](r_hid, r_pos)
+                    # Move cos/sin to block device if needed
+                    position_embeddings = tuple(t.to(hidden_states.device) for t in pe)
                 except Exception:
                     pass
 
@@ -705,8 +754,8 @@ class HuggingFaceBackend(BaseLLMBackend):
                 position_ids=position_ids,
                 position_embeddings=position_embeddings,
             )
-            
-            if use_cache:
+
+            if use_cache and _dynamic_cache is None:
                 all_presents.append(presents)
                 
         # 3. Final layer norm (Dynamic device)
@@ -740,7 +789,7 @@ class HuggingFaceBackend(BaseLLMBackend):
             logits = comp["embed"](hidden_states)
         
         if use_cache:
-            return logits, all_presents
+            return logits, _dynamic_cache if _dynamic_cache is not None else all_presents
         return logits
 
     def _get_device(self):
@@ -793,7 +842,8 @@ class HuggingFaceBackend(BaseLLMBackend):
                 pad_token_id=self.tokenizer.pad_token_id,
                 **kwargs,
             )
-            return self.tokenizer.decode(out_ids[0], skip_special_tokens=True)
+            new_tokens = out_ids[0][input_ids.shape[1]:]
+            return self.tokenizer.decode(new_tokens, skip_special_tokens=True)
 
         # Path 2: Multi-GPU pipeline-parallel with KV-cache
         temperature = kwargs.get('temperature', 1.0)
@@ -855,7 +905,8 @@ class HuggingFaceBackend(BaseLLMBackend):
                 if next_token.item() == self.tokenizer.eos_token_id:
                     break
 
-        return self.tokenizer.decode(generated[0], skip_special_tokens=True)
+        new_tokens = generated[0][input_ids.shape[1]:]
+        return self.tokenizer.decode(new_tokens, skip_special_tokens=True)
 
     def generate_stream(self, prompt: str, max_new_tokens: int = 128, **kwargs):
         """Yield tokens one at a time for real streaming.
