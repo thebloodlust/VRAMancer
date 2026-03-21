@@ -459,21 +459,17 @@ class HuggingFaceBackend(BaseLLMBackend):
                 # Use FREE VRAM (not total) to account for driver/OS usage.
                 # max_memory is a per-GPU cap — accelerate handles placement.
                 base_vram = gpu.free_vram_gb if gpu.free_vram_gb > 0 else gpu.total_vram_gb
-                # BnB 4-bit loading holds fp16 weights from each safetensor
-                # shard transiently on GPU while quantizing to NF4.  Peak ≈
-                # final_NF4 + shard_fp16 ≈ NF4 × 1.4.  Using 65% of free
-                # VRAM ensures the model is SPREAD across GPUs and the per-GPU
-                # fp16 transient peak stays safely under total VRAM.
-                # Non-quantized: 80% headroom for KV cache + activations.
-                reserve = 0.65 if is_quantized else 0.80
-                budget_gb = max(2.0, base_vram * reserve)
+                # 80% budget: leaves headroom for KV cache + activations +
+                # the fp16 transient during BnB quantization.  If the model
+                # doesn't quite fit, small modules (embed/lm_head) offload
+                # to CPU in fp32 via llm_int8_enable_fp32_cpu_offload.
+                budget_gb = max(2.0, base_vram * 0.80)
                 max_memory[gpu.index] = f"{budget_gb:.1f}GiB"
 
             # CPU overflow: accelerate offloads excess layers to RAM.
-            # BnB 4-bit CANNOT quantize CPU-dispatched modules, so skip
-            # CPU overflow when quantized — the model must fit on GPUs.
-            if not is_quantized:
-                max_memory["cpu"] = "32GiB"
+            # For quantized models, llm_int8_enable_fp32_cpu_offload=True
+            # keeps CPU-dispatched modules in fp32 (not quantized).
+            max_memory["cpu"] = "48GiB"
 
             # Log the decision
             primary = max(config.gpus, key=lambda g: g.effective_compute)
@@ -585,6 +581,10 @@ class HuggingFaceBackend(BaseLLMBackend):
             bnb_4bit_quant_type="nf4",
             bnb_4bit_compute_dtype=_torch.bfloat16,
             bnb_4bit_use_double_quant=True,
+            # Allow small modules (embed, lm_head) to live on CPU in fp32
+            # if they don't fit on GPUs.  Without this BnB crashes when
+            # accelerate dispatches ANY module to CPU.
+            llm_int8_enable_fp32_cpu_offload=True,
         )
         self.log.info(
             "NVFP4 quantization enabled (NF4 + double quant + bfloat16 compute) — "
