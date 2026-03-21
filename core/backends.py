@@ -541,56 +541,76 @@ class HuggingFaceBackend(BaseLLMBackend):
             return None
 
     def _ensure_gptq_imports(self):
-        """Ensure auto_gptq.QuantizeConfig is importable.
+        """Ensure auto_gptq can be imported and QuantizeConfig is available.
 
-        When auto_gptq is installed with BUILD_CUDA_EXT=0 (no compiled CUDA
-        kernels), internal import chains can break, causing NameError:
-        'QuantizeConfig is not defined' during model loading.
+        auto_gptq 0.7.x does ``from transformers.modeling_utils import
+        no_init_weights`` which was removed in transformers >= 5.x.
+        This causes the entire ``import auto_gptq`` to fail with ImportError,
+        which in turn causes ``NameError: 'QuantizeConfig' is not defined``
+        during model loading.
 
-        We test the import and, if broken, inject a minimal dataclass stub
-        into auto_gptq's namespace so transformers can proceed.
+        Fix: patch transformers.modeling_utils with a stub ``no_init_weights``
+        context manager BEFORE auto_gptq is imported, then verify the import.
         """
+        import contextlib
+        import sys
+
+        # Step 1: Patch missing transformers symbols that auto_gptq expects
+        try:
+            import transformers.modeling_utils as _tmu
+            if not hasattr(_tmu, 'no_init_weights'):
+                @contextlib.contextmanager
+                def no_init_weights(_enable=True):
+                    yield
+                _tmu.no_init_weights = no_init_weights
+                self.log.info("GPTQ: patched transformers.modeling_utils.no_init_weights stub")
+        except Exception as e:
+            self.log.debug(f"GPTQ: could not patch transformers: {e}")
+
+        # Step 2: Try importing auto_gptq now
         try:
             from auto_gptq import QuantizeConfig  # noqa: F401
             self.log.info("GPTQ: auto_gptq.QuantizeConfig OK")
         except Exception as e:
-            self.log.warning(f"auto_gptq.QuantizeConfig broken ({e}), injecting stub")
-            try:
-                import auto_gptq
-                from dataclasses import dataclass, field
+            self.log.warning(f"auto_gptq import failed ({e}), injecting stub QuantizeConfig")
+            # Create a fake auto_gptq module with QuantizeConfig if needed
+            from dataclasses import dataclass
+            from types import ModuleType
 
-                @dataclass
-                class QuantizeConfig:
-                    bits: int = 4
-                    group_size: int = 128
-                    damp_percent: float = 0.01
-                    desc_act: bool = False
-                    static_groups: bool = False
-                    sym: bool = True
-                    true_sequential: bool = True
-                    model_name_or_path: str = None
-                    model_file_base_name: str = None
-                    is_marlin_format: bool = False
+            @dataclass
+            class QuantizeConfig:
+                bits: int = 4
+                group_size: int = 128
+                damp_percent: float = 0.01
+                desc_act: bool = False
+                static_groups: bool = False
+                sym: bool = True
+                true_sequential: bool = True
+                model_name_or_path: str = None
+                model_file_base_name: str = None
+                is_marlin_format: bool = False
+                def to_dict(self):
+                    from dataclasses import asdict
+                    return asdict(self)
 
-                    def to_dict(self):
-                        from dataclasses import asdict
-                        return asdict(self)
-
-                auto_gptq.QuantizeConfig = QuantizeConfig
-                # Patch into submodules that transformers may import from
-                for attr in ("quantize_config", "utils"):
-                    mod = getattr(auto_gptq, attr, None)
-                    if mod is not None and not hasattr(mod, "QuantizeConfig"):
-                        mod.QuantizeConfig = QuantizeConfig
-                # Also inject into the global auto_gptq module namespace
-                import sys
+            # Inject into auto_gptq module (create if absent)
+            if "auto_gptq" not in sys.modules:
+                fake_mod = ModuleType("auto_gptq")
+                fake_mod.QuantizeConfig = QuantizeConfig
+                sys.modules["auto_gptq"] = fake_mod
+            else:
                 sys.modules["auto_gptq"].QuantizeConfig = QuantizeConfig
-                self.log.info("GPTQ: stub QuantizeConfig injected into auto_gptq")
-            except ImportError:
-                self.log.error(
-                    "auto_gptq not installed — install with: "
-                    "BUILD_CUDA_EXT=0 pip install auto-gptq --no-build-isolation"
-                )
+
+            # Also patch sub-paths transformers may try
+            for sub in ("auto_gptq.quantize_config", "auto_gptq.utils"):
+                if sub not in sys.modules:
+                    m = ModuleType(sub)
+                    m.QuantizeConfig = QuantizeConfig
+                    sys.modules[sub] = m
+                elif not hasattr(sys.modules[sub], "QuantizeConfig"):
+                    sys.modules[sub].QuantizeConfig = QuantizeConfig
+
+            self.log.info("GPTQ: stub QuantizeConfig injected")
 
     def _should_use_nvfp4(self) -> bool:
         """Check if NVFP4 quantization should be used.
