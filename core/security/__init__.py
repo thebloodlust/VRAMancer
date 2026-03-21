@@ -287,6 +287,10 @@ def _resolve_role(request, live_secret: Optional[str]) -> str:
              or request.headers.get("Authorization", "").replace("Bearer ", ""))
     if not token:
         return "user"
+    # When no secret is configured (dev mode), auth is effectively disabled
+    # (any token passes verify_request).  Grant admin so RBAC stays consistent.
+    if not live_secret:
+        return "admin"
     try:
         from core.auth_strong import decode_access
         payload = decode_access(token)
