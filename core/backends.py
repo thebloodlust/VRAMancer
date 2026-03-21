@@ -454,13 +454,21 @@ class HuggingFaceBackend(BaseLLMBackend):
                 return None
 
             max_memory = {}
+            is_quantized = self._should_use_nvfp4()
+            # Quantized models need extra temp memory during BnB weight
+            # conversion (fp16 -> NF4), so reserve more headroom.
+            reserve = 0.70 if is_quantized else 0.80
             for gpu in config.gpus:
-                # Fraction of VRAM to allocate = split_ratio adjusted to total pool
-                # Use 90% of total VRAM as budget (leave room for KV cache + overhead)
-                budget_gb = gpu.total_vram_gb * 0.90 * (gpu.split_ratio * len(config.gpus))
-                # Clamp: at least 2 GB, at most 95% of total
-                budget_gb = max(2.0, min(budget_gb, gpu.total_vram_gb * 0.95))
+                # Use FREE VRAM (not total) to account for driver/OS usage
+                base_vram = gpu.free_vram_gb if gpu.free_vram_gb > 0 else gpu.total_vram_gb
+                budget_gb = base_vram * reserve * (gpu.split_ratio * len(config.gpus))
+                # Clamp: at least 2 GB, at most 80% of free VRAM
+                budget_gb = max(2.0, min(budget_gb, base_vram * 0.80))
                 max_memory[gpu.index] = f"{budget_gb:.1f}GiB"
+
+            # CPU overflow: if model doesn't fit on GPUs, offload to RAM
+            # instead of OOM. Accelerate will use this as last resort.
+            max_memory["cpu"] = "32GiB"
 
             # Log the decision
             primary = max(config.gpus, key=lambda g: g.effective_compute)

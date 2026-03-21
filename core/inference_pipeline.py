@@ -826,6 +826,8 @@ class InferencePipeline:
             model = self.backend.model if self.backend else None
             if model and _TORCH:
                 kv_config = PagedKVConfig.from_model(model, device=self._detect_device())
+                # Distribute KV cache across all GPUs used by the model
+                self._distribute_kv_cache(kv_config, model)
             else:
                 kv_config = PagedKVConfig(device="cpu")
 
@@ -853,6 +855,68 @@ class InferencePipeline:
         except Exception as e:
             _logger.debug("ContinuousBatcher init skipped: %s", e)
             self.continuous_batcher = None
+
+    def _distribute_kv_cache(self, kv_config, model) -> None:
+        """Distribute KV cache pages across all GPUs used by the model.
+
+        Reads ``hf_device_map`` to discover GPUs, measures free VRAM after
+        model loading, and caps total pages so the cache fits in ≤50% of
+        the remaining memory.  Pages are split proportionally to free VRAM.
+        """
+        if not _TORCH or not torch.cuda.is_available():
+            return
+        dev_map = getattr(model, "hf_device_map", None)
+        if not dev_map:
+            return
+
+        # Collect unique CUDA devices
+        devices = sorted(set(
+            f"cuda:{v}" if isinstance(v, int) else str(v)
+            for v in dev_map.values()
+            if str(v).startswith("cuda") or (isinstance(v, int) and str(v).isdigit())
+        ))
+        if len(devices) < 2:
+            return
+
+        # Measure free VRAM per device (post-model-load)
+        free_vram: dict = {}
+        total_free = 0.0
+        for dev in devices:
+            idx = int(dev.split(":")[1]) if ":" in dev else 0
+            try:
+                free_bytes = torch.cuda.mem_get_info(idx)[0]
+                free_gb = free_bytes / (1024 ** 3)
+            except Exception:
+                free_gb = 2.0
+            free_vram[dev] = free_gb
+            total_free += free_gb
+
+        if total_free <= 0:
+            return
+
+        # Cap total KV cache to 50 % of aggregate free VRAM
+        page_bytes = kv_config.page_size_bytes
+        if page_bytes <= 0:
+            return
+        max_kv_bytes = total_free * 0.50 * (1024 ** 3)
+        affordable_pages = int(max_kv_bytes / page_bytes)
+        kv_config.max_pages = min(kv_config.max_pages, max(64, affordable_pages))
+
+        # Assign pages per device proportionally
+        kv_config.devices = devices
+        for dev in devices:
+            ratio = free_vram[dev] / total_free
+            dev_pages = max(1, int(ratio * kv_config.max_pages))
+            kv_config.pages_per_device[dev] = dev_pages
+
+        _logger.info(
+            "KV cache distributed: %d pages across %s (%.1f MB total, "
+            "%.1f GiB free across GPUs)",
+            kv_config.max_pages,
+            devices,
+            kv_config.max_pages * page_bytes / 1e6,
+            total_free,
+        )
 
     def _detect_device(self) -> str:
         """Detect the best available device."""
