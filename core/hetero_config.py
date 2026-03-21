@@ -359,6 +359,41 @@ def probe_p2p(gpu_a: int, gpu_b: int) -> bool:
 # Configuration Engine
 # ═══════════════════════════════════════════════════════════════════════════
 
+def _detect_vm() -> bool:
+    """Detect if running inside a virtual machine (QEMU/KVM, Proxmox, etc.).
+
+    VM environments typically block GPU P2P due to vfio-pci IOMMU groups.
+    """
+    # Method 1: DMI product name
+    dmi_paths = [
+        "/sys/class/dmi/id/product_name",
+        "/sys/class/dmi/id/sys_vendor",
+        "/sys/class/dmi/id/board_name",
+    ]
+    vm_signatures = (
+        "qemu", "kvm", "virtual", "vmware", "virtualbox", "xen",
+        "proxmox", "hyper-v", "bhyve", "q35", "i440fx", "standard pc",
+    )
+    for path in dmi_paths:
+        try:
+            with open(path, "r") as f:
+                content = f.read().strip().lower()
+                if any(sig in content for sig in vm_signatures):
+                    return True
+        except (OSError, IOError):
+            continue
+
+    # Method 2: Check for hypervisor CPUID flag
+    try:
+        with open("/proc/cpuinfo", "r") as f:
+            if "hypervisor" in f.read().lower():
+                return True
+    except (OSError, IOError):
+        pass
+
+    return False
+
+
 def auto_configure(
     strategy: str = "balanced",
     model_size_gb: Optional[float] = None,
@@ -372,6 +407,7 @@ def auto_configure(
         - "vram_weighted": Split proportional to free VRAM (simple)
         - "compute_weighted": Split proportional to FP16 TFLOPS (compute-bound)
         - "balanced": Weighted combination of VRAM + compute (recommended)
+        Overridden by env var VRM_HETERO_STRATEGY if set.
     model_size_gb : float, optional
         Expected model size. Used to compute if model fits and optimal split.
 
@@ -380,6 +416,11 @@ def auto_configure(
     HeteroConfig
         Complete configuration ready to apply.
     """
+    # Allow env var override for strategy
+    env_strategy = os.environ.get("VRM_HETERO_STRATEGY", "").strip().lower()
+    if env_strategy in ("vram_weighted", "compute_weighted", "balanced"):
+        strategy = env_strategy
+
     gpus = detect_gpus()
     config = HeteroConfig(gpus=gpus, split_strategy=strategy)
 
@@ -449,13 +490,28 @@ def auto_configure(
             gpu.reclaim_threshold = 0.90
 
     # ── Transfer strategy ──
+    # Respect VRM_TRANSFER_P2P=false to force-disable P2P (e.g. in VMs)
+    p2p_forced_off = os.environ.get("VRM_TRANSFER_P2P", "").lower() in ("0", "false", "no")
+    is_vm = _detect_vm()
+
     config.p2p_capable = False
-    if len(gpus) >= 2:
-        # Test P2P between first two GPUs
+    if len(gpus) >= 2 and not p2p_forced_off:
         config.p2p_capable = probe_p2p(gpus[0].index, gpus[1].index)
 
+    if is_vm and not config.p2p_capable:
+        _log.info(
+            "VM environment detected — P2P typically blocked by vfio-pci/IOMMU. "
+            "Using CPU-staged transfers (pinned memory). "
+            "To force P2P probing, set VRM_TRANSFER_P2P=true."
+        )
+
+    # Allow env var override for transfer method
+    env_transfer = os.environ.get("VRM_TRANSFER_METHOD", "").strip().lower()
+
     same_vendor = len(set(g.vendor for g in gpus)) == 1
-    if config.p2p_capable:
+    if env_transfer in ("p2p", "cpu_staged", "cross_vendor", "nccl"):
+        config.transfer_method = env_transfer
+    elif config.p2p_capable:
         config.transfer_method = "p2p"
     elif not same_vendor:
         config.transfer_method = "cross_vendor"

@@ -16,6 +16,8 @@ zstandard==0.22.0
 # Automation API (GraphQL)
 graphene==3.3
 flask-cors==4.0.0
+# Quantization (NVFp4 / INT4 / INT8)
+bitsandbytes>=0.43.0
 # Tracing
 opentelemetry-api==1.25.0
 opentelemetry-sdk==1.25.0

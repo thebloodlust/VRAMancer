@@ -35,6 +35,9 @@ def main(argv=None):
                          help="Nombre de GPUs (auto si non specifie)")
     p_serve.add_argument("--host", type=str, default="0.0.0.0")
     p_serve.add_argument("--port", type=int, default=5030)
+    p_serve.add_argument("--quantization", type=str, default=None,
+                         choices=["int8", "int4", "nvfp4", "gptq", "awq"],
+                         help="Quantization: nvfp4 (Blackwell), int8, int4, gptq, awq")
 
     # ---- generate ----
     p_gen = sub.add_parser("generate", help="Generer du texte (one-shot)")
@@ -44,6 +47,9 @@ def main(argv=None):
     p_gen.add_argument("--temperature", type=float, default=1.0)
     p_gen.add_argument("--backend", type=str, default="auto")
     p_gen.add_argument("--gpus", type=int, default=None)
+    p_gen.add_argument("--quantization", type=str, default=None,
+                         choices=["int8", "int4", "nvfp4", "gptq", "awq"],
+                         help="Quantization: nvfp4 (Blackwell), int8, int4, gptq, awq")
 
     # ---- status ----
     sub.add_parser("status", help="Afficher l'etat du systeme")
@@ -166,6 +172,8 @@ def _cmd_serve(args):
 
     os.environ.setdefault('VRM_API_HOST', args.host)
     os.environ.setdefault('VRM_API_PORT', str(args.port))
+    if args.quantization:
+        os.environ['VRM_QUANTIZATION'] = args.quantization
 
     if console:
         table = Table(show_header=False, box=None)
@@ -176,6 +184,8 @@ def _cmd_serve(args):
             table.add_row("Modèle", args.model)
         table.add_row("Backend", args.backend)
         table.add_row("GPUs", str(args.gpus or 'auto'))
+        if args.quantization:
+            table.add_row("Quantization", args.quantization.upper())
 
         endpoints = (
             "[bold]Endpoints:[/bold]\n"
@@ -252,6 +262,8 @@ def _cmd_serve(args):
 
 def _cmd_generate(args):
     """Executer une generation de texte one-shot via le pipeline."""
+    if args.quantization:
+        os.environ['VRM_QUANTIZATION'] = args.quantization
     print(f"Loading model: {args.model}...")
     try:
         from core.inference_pipeline import InferencePipeline

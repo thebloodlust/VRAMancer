@@ -165,6 +165,11 @@ class TransferManager:
         # Test/stub mode
         self._stub_mode = os.environ.get("VRM_MINIMAL_TEST", "0") == "1"
 
+        # Force-disable P2P via env var (useful in VMs where IOMMU blocks P2P)
+        self._p2p_forced_off = os.environ.get(
+            "VRM_TRANSFER_P2P", ""
+        ).lower() in ("0", "false", "no")
+
         if not self._stub_mode and _TORCH_AVAILABLE:
             self._topology = self._detect_topology()
             # Initialize cross-vendor bridge if mixed GPU vendors detected
@@ -246,10 +251,18 @@ class TransferManager:
                     "Ensure IOMMU/ACS settings remain stable for reliability."
                 )
 
+            if self._p2p_forced_off:
+                log.info(
+                    "VRM_TRANSFER_P2P=false — P2P force-disabled. "
+                    "All inter-GPU transfers will use CPU-staged (pinned memory)."
+                )
+
         return topo
 
     def _can_p2p(self, src_gpu: int, dst_gpu: int) -> bool:
         """Check if direct P2P copy is possible between two GPUs."""
+        if self._p2p_forced_off:
+            return False
         if self._topology is None:
             return False
         return self._topology.p2p_matrix.get((src_gpu, dst_gpu), False)
