@@ -459,11 +459,14 @@ class HuggingFaceBackend(BaseLLMBackend):
                 # Use FREE VRAM (not total) to account for driver/OS usage.
                 # max_memory is a per-GPU cap — accelerate handles placement.
                 base_vram = gpu.free_vram_gb if gpu.free_vram_gb > 0 else gpu.total_vram_gb
-                # 80% budget: leaves headroom for KV cache + activations +
-                # the fp16 transient during BnB quantization.  If the model
-                # doesn't quite fit, small modules (embed/lm_head) offload
-                # to CPU in fp32 via llm_int8_enable_fp32_cpu_offload.
-                budget_gb = max(2.0, base_vram * 0.80)
+                # BnB 4-bit: accelerate plans NF4 sizes, but during loading
+                # safetensor shards are held in fp16 transiently.  If one GPU's
+                # budget >= total model NF4 size, accelerate puts EVERYTHING
+                # on that GPU → fp16 transient causes OOM.  Use 60% so no
+                # single GPU can hold the whole model, FORCING a spread.
+                # Non-quantized: 80% headroom for KV cache + activations.
+                reserve = 0.60 if is_quantized else 0.80
+                budget_gb = max(2.0, base_vram * reserve)
                 max_memory[gpu.index] = f"{budget_gb:.1f}GiB"
 
             # CPU overflow: accelerate offloads excess layers to RAM.
