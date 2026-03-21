@@ -608,16 +608,36 @@ class HuggingFaceBackend(BaseLLMBackend):
         if model_name.endswith("-AWQ"):
             kwargs["low_cpu_mem_usage"] = True
         else:
-            kwargs["device_map"] = "auto"
+            is_quantized = self._should_use_nvfp4()
+            num_gpus = _torch.cuda.device_count() if _HAS_TORCH and _torch.cuda.is_available() else 1
 
-            # Compute-aware GPU placement: build max_memory so accelerate
-            # places more layers on the fastest GPU (e.g. Blackwell > Ampere).
-            max_memory = self._build_compute_aware_memory_map()
-            if max_memory:
-                kwargs["max_memory"] = max_memory
+            if is_quantized and num_gpus >= 2:
+                # BnB 4-bit multi-GPU: use "balanced" to FORCE an equal split.
+                # With "auto", accelerate's infer_auto_device_map uses NF4
+                # sizes — if the whole model fits on one GPU, it puts
+                # everything there.  During loading, fp16 weight transients
+                # accumulate on that GPU and cause OOM.  "balanced" distributes
+                # modules equally so no single GPU bears the full load.
+                kwargs["device_map"] = "balanced"
+                # Reduce fragmentation during fp16→NF4 conversion
+                os.environ.setdefault(
+                    "PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True"
+                )
+                self.log.info(
+                    "BnB 4-bit multi-GPU: using device_map='balanced' to "
+                    "spread model across %d GPUs (avoids fp16 loading OOM)",
+                    num_gpus,
+                )
+            else:
+                kwargs["device_map"] = "auto"
+                # Compute-aware GPU placement: build max_memory so accelerate
+                # places more layers on the fastest GPU (e.g. Blackwell > Ampere).
+                max_memory = self._build_compute_aware_memory_map()
+                if max_memory:
+                    kwargs["max_memory"] = max_memory
 
             # NVFP4 quantization: 4-bit NormalFloat for Blackwell GPUs
-            if self._should_use_nvfp4() and "quantization_config" not in kwargs:
+            if is_quantized and "quantization_config" not in kwargs:
                 kwargs["quantization_config"] = self._build_bnb_nvfp4_config()
             # Auto-select optimal dtype based on best available GPU
             elif "torch_dtype" not in kwargs and "dtype" not in kwargs:
