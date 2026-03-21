@@ -459,10 +459,13 @@ class HuggingFaceBackend(BaseLLMBackend):
                 # Use FREE VRAM (not total) to account for driver/OS usage.
                 # max_memory is a per-GPU cap — accelerate handles placement.
                 base_vram = gpu.free_vram_gb if gpu.free_vram_gb > 0 else gpu.total_vram_gb
-                # Quantized models: BnB converts fp16->NF4 layer-by-layer so
-                # peak GPU usage is close to the final NF4 size. Allow 85%.
-                # Non-quantized: keep 20% headroom for KV cache + activations.
-                reserve = 0.85 if is_quantized else 0.80
+                # BnB 4-bit loading holds fp16 weights from each safetensor
+                # shard transiently on GPU while quantizing to NF4.  Peak ≈
+                # final_NF4 + shard_fp16 ≈ NF4 × 1.4.  Using 65% of free
+                # VRAM ensures the model is SPREAD across GPUs and the per-GPU
+                # fp16 transient peak stays safely under total VRAM.
+                # Non-quantized: 80% headroom for KV cache + activations.
+                reserve = 0.65 if is_quantized else 0.80
                 budget_gb = max(2.0, base_vram * reserve)
                 max_memory[gpu.index] = f"{budget_gb:.1f}GiB"
 
