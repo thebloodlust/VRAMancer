@@ -274,7 +274,9 @@ class InferencePipeline:
             self._init_continuous_batching()
 
             # 13. Init VRAM Lending Pool (cooperative GPU memory)
-            if self.num_gpus > 1:
+            # Skip when vLLM manages its own VRAM (it pre-allocates KV cache)
+            _backend_type = getattr(self.backend, 'backend_type', '')
+            if self.num_gpus > 1 and _backend_type != 'vllm':
                 self._init_lending_pool()
 
             # 14. Init GPU Fault Tolerance

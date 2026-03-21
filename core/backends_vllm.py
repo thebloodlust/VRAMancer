@@ -8,13 +8,15 @@ logger = logging.getLogger(__name__)
 class vLLMBackend(BaseLLMBackend):
     def __init__(self, model_name: str, cache_dir: str = None, 
                  tensor_parallel_size: int = 1, pipeline_parallel_size: int = 1,
-                 gpu_memory_utilization: float = 0.90, dtype_str: str = None):
+                 gpu_memory_utilization: float = 0.90, dtype_str: str = None,
+                 target_gpu: int = None):
         self.model_name = model_name
         self.cache_dir = cache_dir
         self.tensor_parallel_size = tensor_parallel_size
         self.pipeline_parallel_size = pipeline_parallel_size
         self.gpu_memory_utilization = gpu_memory_utilization
         self.dtype_str = dtype_str  # "bfloat16", "float16", or None (auto)
+        self.target_gpu = target_gpu  # Pin to specific GPU for TP=1 hetero setups
         self.engine = None
         self.backend_type = "vllm"
         self.is_loaded = False
@@ -32,6 +34,11 @@ class vLLMBackend(BaseLLMBackend):
             raise ImportError("vLLM not found")
 
         logger.info(f"Initialisation de vLLM (TP={self.tensor_parallel_size}, PP={self.pipeline_parallel_size}) pour {self.model_name}")
+
+        # Pin to target GPU when TP=1 on a heterogeneous multi-GPU system
+        if self.target_gpu is not None and self.tensor_parallel_size == 1:
+            os.environ["CUDA_VISIBLE_DEVICES"] = str(self.target_gpu)
+            logger.info(f"vLLM pinned to GPU {self.target_gpu} via CUDA_VISIBLE_DEVICES")
         
         gpu_utilization = float(kwargs.get("gpu_memory_utilization", self.gpu_memory_utilization))
         max_model_len = int(kwargs.get("max_model_len", 8192))

@@ -241,24 +241,67 @@ def _vllm_available() -> bool:
         return False
 
 
+def _gpus_are_homogeneous() -> bool:
+    """Check if all CUDA GPUs share the same architecture (CC major).
+
+    Tensor Parallelism requires frequent all-reduce between GPUs.
+    Without P2P (heterogeneous GPUs, different PCIe root), all-reduce
+    falls back to CPU-staged NCCL which is ~7x slower than pipeline parallel.
+    """
+    if not _HAS_TORCH or not _torch.cuda.is_available():
+        return True
+    n = _torch.cuda.device_count()
+    if n < 2:
+        return True
+    majors = set()
+    for i in range(n):
+        props = _torch.cuda.get_device_properties(i)
+        majors.add(props.major)
+    return len(majors) == 1
+
+
 def _compute_vllm_config(num_gpus: int) -> dict:
     """Build vLLM engine kwargs from hetero_config (compute-aware).
 
     Returns dict with keys: tensor_parallel_size, gpu_memory_utilization,
     dtype_str, and optionally max_model_len.
+
+    Key decision: if GPUs are heterogeneous (different CC major), TP is
+    downgraded to 1 on the largest GPU — tensor parallel all-reduce without
+    P2P goes through CPU and is much slower than pipeline parallelism.
     """
     result = {"tensor_parallel_size": num_gpus, "gpu_memory_utilization": 0.90}
+
+    # Heterogeneous GPUs: TP=1 on the biggest GPU (vLLM TP all-reduce
+    # without P2P is ~7x slower than accelerate pipeline parallel)
+    if num_gpus > 1 and not _gpus_are_homogeneous():
+        logger.info(
+            "Heterogeneous GPUs detected (different architectures) — "
+            "vLLM will use TP=1 on largest GPU for best throughput"
+        )
+        result["tensor_parallel_size"] = 1
+
     try:
         from core.hetero_config import auto_configure
         config = auto_configure(strategy="balanced")
         if config.gpus:
-            # Use the max VRAM fraction that hetero_config recommends
-            min_vram_gb = min(g.total_vram_gb for g in config.gpus)
-            # Utilisation: leave 1.5 GB headroom on the smallest GPU
+            # When TP=1, use only the GPU with the most VRAM
+            if result["tensor_parallel_size"] == 1 and len(config.gpus) >= 2:
+                best_gpu = max(config.gpus, key=lambda g: g.total_vram_gb)
+                result["target_gpu"] = best_gpu.index
+                vram_gb = best_gpu.total_vram_gb
+                logger.info(
+                    f"vLLM TP=1 targeting GPU {best_gpu.index} "
+                    f"({best_gpu.name}, {vram_gb:.1f} GB)"
+                )
+            else:
+                vram_gb = min(g.total_vram_gb for g in config.gpus)
+
+            # Utilisation: leave 1.5 GB headroom
             headroom_gb = 1.5
-            if min_vram_gb > headroom_gb:
+            if vram_gb > headroom_gb:
                 result["gpu_memory_utilization"] = round(
-                    (min_vram_gb - headroom_gb) / min_vram_gb, 2
+                    (vram_gb - headroom_gb) / vram_gb, 2
                 )
             # Optimal dtype string for vLLM
             best_cc = max((g.compute_capability for g in config.gpus), default=(0, 0))
@@ -271,7 +314,7 @@ def _compute_vllm_config(num_gpus: int) -> dict:
             arch = primary.profile.architecture if primary.profile else "unknown"
             logger.info(
                 f"vLLM compute-aware: primary GPU {primary.index} "
-                f"({primary.name}, {arch}), TP={num_gpus}, "
+                f"({primary.name}, {arch}), TP={result['tensor_parallel_size']}, "
                 f"gpu_util={result['gpu_memory_utilization']}"
             )
     except Exception as e:
@@ -287,13 +330,26 @@ def select_backend(model_name: str, cache_dir: str = None, backend: str = "auto"
         try:
             from core.backends_vllm import vLLMBackend
             vllm_cfg = _compute_vllm_config(num_gpus)
-            logger.info(f"Utilisation du backend vLLM pour {model_name} (TP={vllm_cfg['tensor_parallel_size']})")
+            tp = vllm_cfg["tensor_parallel_size"]
+            target_gpu = vllm_cfg.get("target_gpu")
+
+            # If heterogeneous GPUs forced TP=1 but model needs more VRAM
+            # than the single largest GPU, fall through to accelerate
+            if tp == 1 and num_gpus > 1:
+                logger.info(
+                    f"vLLM TP=1 on GPU {target_gpu or 0} "
+                    f"(heterogeneous setup — 2nd GPU available via accelerate fallback "
+                    f"if model doesn't fit)"
+                )
+
+            logger.info(f"Utilisation du backend vLLM pour {model_name} (TP={tp})")
             return vLLMBackend(
                 model_name,
                 cache_dir=cache_dir,
-                tensor_parallel_size=vllm_cfg["tensor_parallel_size"],
+                tensor_parallel_size=tp,
                 gpu_memory_utilization=vllm_cfg.get("gpu_memory_utilization", 0.90),
                 dtype_str=vllm_cfg.get("dtype_str"),
+                target_gpu=target_gpu,
             )
         except ImportError:
             logger.info("Fallback sur HuggingFaceBackend car vLLM n'est pas disponible.")
