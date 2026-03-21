@@ -437,10 +437,19 @@ class HuggingFaceBackend(BaseLLMBackend):
                 kwargs["max_memory"] = max_memory
 
             # Auto-select optimal dtype based on best available GPU
-            if "torch_dtype" not in kwargs:
+            if "torch_dtype" not in kwargs and "dtype" not in kwargs:
                 best_dtype = self._detect_optimal_dtype()
                 if best_dtype is not None:
-                    kwargs["torch_dtype"] = best_dtype
+                    # Newer transformers (>= 4.46) use 'dtype', older use 'torch_dtype'
+                    try:
+                        import transformers as _tf
+                        _tf_ver = tuple(int(x) for x in _tf.__version__.split(".")[:2])
+                        if _tf_ver >= (4, 46):
+                            kwargs["dtype"] = best_dtype
+                        else:
+                            kwargs["torch_dtype"] = best_dtype
+                    except Exception:
+                        kwargs["torch_dtype"] = best_dtype
 
         if "trust_remote_code" not in kwargs:
             kwargs["trust_remote_code"] = (os.environ.get("VRM_TRUST_REMOTE_CODE") == "1")
