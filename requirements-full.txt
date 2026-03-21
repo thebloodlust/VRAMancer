@@ -18,7 +18,6 @@ graphene==3.3
 flask-cors==4.0.0
 # Quantization (NVFp4 / INT4 / INT8)
 bitsandbytes>=0.43.0
-auto-gptq>=0.7.0
 optimum>=1.17.0
 # Tracing
 opentelemetry-api==1.25.0
