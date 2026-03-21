@@ -610,10 +610,13 @@ class HuggingFaceBackend(BaseLLMBackend):
         elif "gptq" in model_name.lower():
             # GPTQ: pre-quantized model — weights are already INT4/INT8.
             # No runtime quantization needed (no BnB, no fp16 transient).
-            # Uses transformers' built-in GPTQConfig with use_exllama=False
-            # so no compiled CUDA kernels (auto-gptq) are needed.
-            # Requires: pip install optimum
+            # The model's config.json contains its own quantization_config,
+            # so we do NOT pass our own — just disable exllama kernels via
+            # env var so auto_gptq uses PyTorch dequant (no CUDA compilation).
+            # Requires: pip install optimum auto-gptq (BUILD_CUDA_EXT=0)
             self.log.info("GPTQ model detected — loading pre-quantized (no BnB needed)")
+            os.environ["DISABLE_EXLLAMA"] = "1"
+            os.environ["DISABLE_EXLLAMAV2"] = "1"
             kwargs["low_cpu_mem_usage"] = True
             kwargs["device_map"] = "auto"
             num_gpus = _torch.cuda.device_count() if _HAS_TORCH and _torch.cuda.is_available() else 1
@@ -625,19 +628,6 @@ class HuggingFaceBackend(BaseLLMBackend):
             best_dtype = self._detect_optimal_dtype()
             if best_dtype is not None:
                 kwargs["torch_dtype"] = best_dtype
-            # Explicit GPTQConfig: disable exllama kernels to avoid
-            # needing auto-gptq compiled CUDA extensions.
-            # Pure PyTorch dequantization — slower but works everywhere.
-            if "quantization_config" not in kwargs:
-                try:
-                    from transformers import GPTQConfig
-                    kwargs["quantization_config"] = GPTQConfig(
-                        bits=4,
-                        use_exllama=False,
-                    )
-                    self.log.info("GPTQ: using PyTorch dequant (no exllama kernels)")
-                except ImportError:
-                    self.log.info("GPTQ: GPTQConfig not available, relying on model config")
         else:
             is_quantized = self._should_use_nvfp4()
             num_gpus = _torch.cuda.device_count() if _HAS_TORCH and _torch.cuda.is_available() else 1
