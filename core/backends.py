@@ -653,6 +653,23 @@ class HuggingFaceBackend(BaseLLMBackend):
             except (IndexError, TypeError, AttributeError):
                 pass
 
+        # Build 4D causal attention mask.
+        # When calling decoder layers directly (bypassing MistralModel.forward()),
+        # no causal mask is created — tokens can attend to future positions.
+        # Shape: [batch, 1, seq_len, past_len + seq_len]
+        _seq_len = hidden_states.shape[1]
+        _total_len = _step_past_len + _seq_len
+        _causal_mask = None
+        try:
+            _causal_mask = pt.full((_total_len, _total_len), float("-inf"), device=hidden_states.device, dtype=hidden_states.dtype)
+            _causal_mask = pt.triu(_causal_mask, diagonal=1)
+            # Slice to [seq_len, total_len] for the current step
+            _causal_mask = _causal_mask[_step_past_len:_step_past_len + _seq_len, :_total_len]
+            # Expand to 4D: [batch, 1, seq_len, total_len]
+            _causal_mask = _causal_mask.unsqueeze(0).unsqueeze(0)
+        except Exception:
+            _causal_mask = None
+
         # 2. Process blocks sequentially
         if "blocks" not in self._comp_devices:
             self._comp_devices["blocks"] = {}
@@ -757,10 +774,16 @@ class HuggingFaceBackend(BaseLLMBackend):
                     import logging as _lg
                     _lg.getLogger(__name__).warning("rotary_emb failed: %s", _re)
 
+            # Move causal mask to block device if needed
+            _block_mask = _causal_mask
+            if _block_mask is not None and _block_mask.device != hidden_states.device:
+                _block_mask = _block_mask.to(device=hidden_states.device, dtype=hidden_states.dtype)
+
             hidden_states, presents = block(
                 hidden_states,
                 past_key_values=block_past,
                 use_cache=use_cache,
+                attention_mask=_block_mask,
                 position_ids=position_ids,
                 position_embeddings=position_embeddings,
             )
