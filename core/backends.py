@@ -738,14 +738,24 @@ class HuggingFaceBackend(BaseLLMBackend):
             position_embeddings = None
             if comp.get("rotary_emb") is not None:
                 try:
-                    rotary_dev = next(comp["rotary_emb"].parameters()).device
+                    # Find rotary_emb device from parameters OR buffers
+                    # (MistralRotaryEmbedding uses inv_freq as a buffer, not a parameter)
+                    rotary_dev = None
+                    for p in comp["rotary_emb"].parameters():
+                        rotary_dev = p.device; break
+                    if rotary_dev is None:
+                        for b in comp["rotary_emb"].buffers():
+                            rotary_dev = b.device; break
+                    if rotary_dev is None:
+                        rotary_dev = hidden_states.device
                     r_pos = position_ids.to(rotary_dev)
                     r_hid = hidden_states.to(rotary_dev)
                     pe = comp["rotary_emb"](r_hid, r_pos)
                     # Move cos/sin to block device if needed
                     position_embeddings = tuple(t.to(hidden_states.device) for t in pe)
-                except Exception:
-                    pass
+                except Exception as _re:
+                    import logging as _lg
+                    _lg.getLogger(__name__).warning("rotary_emb failed: %s", _re)
 
             hidden_states, presents = block(
                 hidden_states,
