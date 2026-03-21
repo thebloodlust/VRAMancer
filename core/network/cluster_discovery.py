@@ -90,6 +90,15 @@ def get_local_info() -> Dict[str, Any]:
         except Exception as e:
             pass
 
+    # Apple Silicon: report MPS as 1 GPU even if torch isn't available
+    if not gpu_list and platform.system() == "Darwin" and _is_apple_silicon():
+        gpu_list.append({
+            "id": "mps:0",
+            "backend": "mps",
+            "name": "Apple MPS (unified memory)",
+            "total_memory": _get_total_ram(),
+        })
+
     ram_bytes = _get_total_ram()
 
     return {
@@ -110,13 +119,30 @@ def get_local_info() -> Dict[str, Any]:
     }
 
 
+def _is_apple_silicon() -> bool:
+    """Detect Apple Silicon even under Rosetta 2 (x86_64 emulation)."""
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["sysctl", "-n", "hw.optional.arm64"],
+            capture_output=True, text=True, timeout=3,
+        )
+        if result.returncode == 0 and result.stdout.strip() == "1":
+            return True
+    except Exception:
+        pass
+    # Fallback: check arch directly (works when not under Rosetta)
+    arch = platform.machine().lower()
+    return "arm" in arch or "aarch64" in arch
+
+
 def detect_platform_type() -> str:
     """Detect platform type with GPU-awareness."""
     system = platform.system().lower()
     arch = platform.machine().lower()
 
     if system == "darwin":
-        if "arm" in arch or "aarch64" in arch:
+        if _is_apple_silicon():
             return "Apple Silicon"
         return "Apple Intel"
     elif system == "windows":
