@@ -455,20 +455,22 @@ class HuggingFaceBackend(BaseLLMBackend):
 
             max_memory = {}
             is_quantized = self._should_use_nvfp4()
-            # Quantized models need extra temp memory during BnB weight
-            # conversion (fp16 -> NF4), so reserve more headroom.
-            reserve = 0.70 if is_quantized else 0.80
             for gpu in config.gpus:
-                # Use FREE VRAM (not total) to account for driver/OS usage
+                # Use FREE VRAM (not total) to account for driver/OS usage.
+                # max_memory is a per-GPU cap — accelerate handles placement.
                 base_vram = gpu.free_vram_gb if gpu.free_vram_gb > 0 else gpu.total_vram_gb
-                budget_gb = base_vram * reserve * (gpu.split_ratio * len(config.gpus))
-                # Clamp: at least 2 GB, at most 80% of free VRAM
-                budget_gb = max(2.0, min(budget_gb, base_vram * 0.80))
+                # Quantized models: BnB converts fp16->NF4 layer-by-layer so
+                # peak GPU usage is close to the final NF4 size. Allow 85%.
+                # Non-quantized: keep 20% headroom for KV cache + activations.
+                reserve = 0.85 if is_quantized else 0.80
+                budget_gb = max(2.0, base_vram * reserve)
                 max_memory[gpu.index] = f"{budget_gb:.1f}GiB"
 
-            # CPU overflow: if model doesn't fit on GPUs, offload to RAM
-            # instead of OOM. Accelerate will use this as last resort.
-            max_memory["cpu"] = "32GiB"
+            # CPU overflow: accelerate offloads excess layers to RAM.
+            # BnB 4-bit CANNOT quantize CPU-dispatched modules, so skip
+            # CPU overflow when quantized — the model must fit on GPUs.
+            if not is_quantized:
+                max_memory["cpu"] = "32GiB"
 
             # Log the decision
             primary = max(config.gpus, key=lambda g: g.effective_compute)
