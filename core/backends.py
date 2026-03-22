@@ -27,6 +27,22 @@ except ImportError:
     _nn = None  # type: ignore
     _HAS_TORCH = False
 
+# ---------------------------------------------------------------------------
+# Early patch: transformers.modeling_utils.no_init_weights
+# auto_gptq 0.7.x imports this at module level; it was removed in
+# transformers >= 5.x.  Patch BEFORE any auto_gptq import happens.
+# ---------------------------------------------------------------------------
+try:
+    import contextlib as _contextlib
+    import transformers.modeling_utils as _tmu
+    if not hasattr(_tmu, 'no_init_weights'):
+        @_contextlib.contextmanager
+        def _no_init_weights(_enable=True):
+            yield
+        _tmu.no_init_weights = _no_init_weights
+except Exception:
+    pass
+
 
 # ---------------------------------------------------------------------------
 # Model component extraction patterns (for KV-cache multi-GPU)
@@ -697,7 +713,30 @@ class HuggingFaceBackend(BaseLLMBackend):
         for k in optimum_gptq_keys:
             del sys.modules[k]
 
-        self.log.info("GPTQ: patched QuantizeConfig, FORMAT, etc. into auto_gptq + cleared optimum.gptq cache")
+        # ── Step 10: Verify the patch works by test-importing ──────────
+        try:
+            from auto_gptq import QuantizeConfig as _test_qc  # noqa: F401
+            self.log.info("GPTQ: verified — 'from auto_gptq import QuantizeConfig' works")
+        except Exception as exc:
+            self.log.error("GPTQ: patch verification FAILED: %s", exc)
+
+        # Try to pre-import optimum.gptq so it resolves against patched modules
+        try:
+            import optimum.gptq  # noqa: F401
+            self.log.info("GPTQ: optimum.gptq pre-imported successfully")
+        except Exception as exc:
+            self.log.warning("GPTQ: optimum.gptq pre-import failed: %s", exc)
+            # Re-inject into whatever partially loaded
+            for key, mod in list(sys.modules.items()):
+                if mod is None:
+                    continue
+                if key.startswith("optimum.gptq") or key.startswith("auto_gptq"):
+                    g = vars(mod)
+                    for sym_name, sym_val in _symbols.items():
+                        if sym_name not in g:
+                            g[sym_name] = sym_val
+
+        self.log.info("GPTQ: patched QuantizeConfig, FORMAT, etc. into auto_gptq + optimum.gptq")
 
     def _should_use_nvfp4(self) -> bool:
         """Check if NVFP4 quantization should be used.
@@ -787,7 +826,15 @@ class HuggingFaceBackend(BaseLLMBackend):
             # Optimal dtype for non-quantized layers (embed, norm, lm_head)
             best_dtype = self._detect_optimal_dtype()
             if best_dtype is not None:
-                kwargs["torch_dtype"] = best_dtype
+                try:
+                    import transformers as _tf
+                    _tf_ver = tuple(int(x) for x in _tf.__version__.split(".")[:2])
+                    if _tf_ver >= (4, 46):
+                        kwargs["dtype"] = best_dtype
+                    else:
+                        kwargs["torch_dtype"] = best_dtype
+                except Exception:
+                    kwargs["torch_dtype"] = best_dtype
         else:
             is_quantized = self._should_use_nvfp4()
             num_gpus = _torch.cuda.device_count() if _HAS_TORCH and _torch.cuda.is_available() else 1
@@ -848,7 +895,13 @@ class HuggingFaceBackend(BaseLLMBackend):
         if "trust_remote_code" not in kwargs:
             kwargs["trust_remote_code"] = (os.environ.get("VRM_TRUST_REMOTE_CODE") == "1")
 
-        self.model = AutoModelForCausalLM.from_pretrained(model_name, **kwargs)
+        try:
+            self.model = AutoModelForCausalLM.from_pretrained(model_name, **kwargs)
+        except Exception as e:
+            # Log full traceback for GPTQ/quantized model debugging
+            import traceback
+            self.log.error("from_pretrained failed:\n%s", traceback.format_exc())
+            raise
         try:
             self.tokenizer = AutoTokenizer.from_pretrained(model_name)
             if self.tokenizer.pad_token is None:
