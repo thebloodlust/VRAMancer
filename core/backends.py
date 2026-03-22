@@ -609,6 +609,60 @@ class HuggingFaceBackend(BaseLLMBackend):
                     )
 
             GptqHfQuantizer.__init__ = _safe_gptq_init
+
+            # ── Monkey-patch validate_environment ───────────────────────
+            # transformers 5.x requires gptqmodel (not auto_gptq).
+            # For inference with pre-quantized models, auto_gptq is enough.
+            _original_validate = GptqHfQuantizer.validate_environment
+
+            def _safe_validate_environment(self_inner, *args, **kwargs):
+                try:
+                    _original_validate(self_inner, *args, **kwargs)
+                except ImportError:
+                    # gptqmodel not installed, but auto_gptq is available
+                    # for inference (weight deserialization via QuantLinear).
+                    try:
+                        import auto_gptq  # noqa: F401
+                        logger.warning(
+                            "GPTQ: gptqmodel not installed, using auto_gptq for inference"
+                        )
+                    except ImportError:
+                        raise ImportError(
+                            "GPTQ quantized model requires either gptqmodel or auto-gptq. "
+                            "Install with: pip install auto-gptq (BUILD_CUDA_EXT=0 if no CUDA toolkit)"
+                        )
+
+            GptqHfQuantizer.validate_environment = _safe_validate_environment
+
+            # ── Monkey-patch _process_model_before_weight_loading ────────
+            # Calls self.optimum_quantizer.convert_model() which fails
+            # when optimum_quantizer is None.  For pre-quantized models
+            # the weights are already quantized — convert_model is a no-op.
+            _original_before = GptqHfQuantizer._process_model_before_weight_loading
+
+            def _safe_before_weight_loading(self_inner, model, **kwargs):
+                if getattr(self_inner, 'optimum_quantizer', None) is not None:
+                    return _original_before(self_inner, model, **kwargs)
+                # Skip convert_model — weights are already GPTQ-quantized
+                logger.info("GPTQ: skipping convert_model (no optimum_quantizer)")
+
+            GptqHfQuantizer._process_model_before_weight_loading = _safe_before_weight_loading
+
+            # ── Monkey-patch _process_model_after_weight_loading ─────────
+            # Calls self.optimum_quantizer.post_init_model() for pre-quantized
+            # models.  Without it, we do a manual post-init (set is_quantized etc.)
+            _original_after = GptqHfQuantizer._process_model_after_weight_loading
+
+            def _safe_after_weight_loading(self_inner, model, **kwargs):
+                if getattr(self_inner, 'optimum_quantizer', None) is not None:
+                    return _original_after(self_inner, model, **kwargs)
+                # Manual post-init for pre-quantized models
+                model.is_quantized = True
+                model.quantization_method = "gptq"
+                logger.info("GPTQ: manual post-init (no optimum_quantizer)")
+
+            GptqHfQuantizer._process_model_after_weight_loading = _safe_after_weight_loading
+
             self.log.info("GPTQ: patched GptqHfQuantizer to bypass broken optimum")
         except ImportError:
             self.log.warning("GPTQ: transformers.quantizers.quantizer_gptq not found")
