@@ -738,6 +738,64 @@ class HuggingFaceBackend(BaseLLMBackend):
 
         self.log.info("GPTQ: patched QuantizeConfig, FORMAT, etc. into auto_gptq + optimum.gptq")
 
+    def _patch_optimum_gptq_globals(self):
+        """Last-resort: force-inject GPTQ symbols into optimum.gptq.quantizer.
+
+        Called right before from_pretrained().  At this point all imports have
+        settled — we can inspect the actual module objects and patch any
+        missing names directly in their __dict__.  This handles the case
+        where optimum loaded quantizer.py with a try/except around
+        ``from auto_gptq import QuantizeConfig`` that silently failed.
+        """
+        import sys
+
+        # Get our stub QuantizeConfig from auto_gptq (set by _ensure_gptq_imports)
+        auto_gptq = sys.modules.get("auto_gptq")
+        if auto_gptq is None or not hasattr(auto_gptq, "QuantizeConfig"):
+            return
+
+        qc = auto_gptq.QuantizeConfig
+
+        # Build the symbols dict
+        _symbols = {"QuantizeConfig": qc}
+        const_mod = sys.modules.get("auto_gptq.modeling._const")
+        if const_mod:
+            for attr in ("FORMAT", "FORMAT_FIELD_JSON", "QUANTIZE_BLACK_LIST"):
+                if hasattr(const_mod, attr):
+                    _symbols[attr] = getattr(const_mod, attr)
+
+        # Ensure optimum.gptq.quantizer is imported (may be lazy-loaded)
+        if "optimum.gptq.quantizer" not in sys.modules:
+            try:
+                import optimum.gptq.quantizer  # noqa: F401
+            except Exception:
+                pass
+
+        # Also trigger transformers' GPTQ quantizer import — it may import
+        # GPTQQuantizer from optimum for the first time here
+        if "transformers.quantizers.quantizer_gptq" not in sys.modules:
+            try:
+                import transformers.quantizers.quantizer_gptq  # noqa: F401
+            except Exception:
+                pass
+
+        # Inject into EVERY optimum.gptq.* and auto_gptq.* module that
+        # is currently in sys.modules.  This covers the actual module
+        # objects whose globals are used by GPTQQuantizer's methods.
+        patched = []
+        for key, mod in list(sys.modules.items()):
+            if mod is None:
+                continue
+            if key.startswith("optimum.gptq") or key.startswith("auto_gptq"):
+                g = vars(mod)
+                for sym_name, sym_val in _symbols.items():
+                    if sym_name not in g:
+                        g[sym_name] = sym_val
+                        patched.append(f"{key}.{sym_name}")
+
+        if patched:
+            self.log.info("GPTQ last-resort patch: injected %s", patched)
+
     def _should_use_nvfp4(self) -> bool:
         """Check if NVFP4 quantization should be used.
 
@@ -894,6 +952,14 @@ class HuggingFaceBackend(BaseLLMBackend):
 
         if "trust_remote_code" not in kwargs:
             kwargs["trust_remote_code"] = (os.environ.get("VRM_TRUST_REMOTE_CODE") == "1")
+
+        # Last-resort GPTQ fix: ensure optimum.gptq.quantizer has all
+        # required symbols in its module globals.  The previous patching
+        # ensured auto_gptq.QuantizeConfig exists and `from auto_gptq import
+        # QuantizeConfig` works, but the actual module loading might have
+        # cached a broken state.  Force-inject right before from_pretrained.
+        if "gptq" in model_name.lower():
+            self._patch_optimum_gptq_globals()
 
         try:
             self.model = AutoModelForCausalLM.from_pretrained(model_name, **kwargs)
