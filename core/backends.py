@@ -541,26 +541,48 @@ class HuggingFaceBackend(BaseLLMBackend):
             return None
 
     def _ensure_gptq_imports(self):
-        """Ensure auto_gptq can be imported and QuantizeConfig is available.
+        """Build a complete auto_gptq shim for transformers/optimum GPTQ loading.
 
-        auto_gptq 0.7.x is incompatible with transformers >= 5.x:
-        1. ``from transformers.modeling_utils import no_init_weights`` removed
-        2. Internal import chains break, QuantizeConfig never gets exported
-        3. NameError in submodules that expected QuantizeConfig in their scope
-
-        Fix strategy:
-        - Patch missing transformers symbols BEFORE auto_gptq loads
-        - Try the import; if QuantizeConfig is still missing, create a stub
-        - Inject stub into EVERY loaded auto_gptq submodule (shotgun fix)
+        auto_gptq 0.7.x is fundamentally incompatible with transformers >= 5.x:
+        multiple internal imports fail (no_init_weights, QuantizeConfig, FORMAT,
+        etc.).  Rather than patching individual symbols, we nuke all partially-
+        loaded auto_gptq modules and replace them with a complete shim that
+        provides every symbol optimum/transformers expect.
         """
         import contextlib
         import sys
         from dataclasses import dataclass
+        from enum import Enum
         from types import ModuleType
 
-        # --- Stub class used everywhere below ---
+        # --- Patch transformers.modeling_utils first ---
+        try:
+            import transformers.modeling_utils as _tmu
+            if not hasattr(_tmu, 'no_init_weights'):
+                @contextlib.contextmanager
+                def no_init_weights(_enable=True):
+                    yield
+                _tmu.no_init_weights = no_init_weights
+        except Exception:
+            pass
+
+        # --- Check if real auto_gptq actually works end-to-end ---
+        try:
+            from auto_gptq import QuantizeConfig  # noqa: F401
+            from auto_gptq.modeling._const import FORMAT  # noqa: F401
+            self.log.info("GPTQ: auto_gptq fully functional")
+            return  # Everything works, no shim needed
+        except Exception as e:
+            self.log.warning(f"auto_gptq broken ({e}), replacing with shim")
+
+        # --- Nuke all partially-loaded auto_gptq modules ---
+        to_remove = [k for k in sys.modules if k.startswith("auto_gptq")]
+        for k in to_remove:
+            del sys.modules[k]
+
+        # --- Build shim types ---
         @dataclass
-        class _QuantizeConfig:
+        class QuantizeConfig:
             bits: int = 4
             group_size: int = 128
             damp_percent: float = 0.01
@@ -575,75 +597,80 @@ class HuggingFaceBackend(BaseLLMBackend):
                 from dataclasses import asdict
                 return asdict(self)
 
-        # Step 1: Patch missing transformers symbols that auto_gptq expects
-        try:
-            import transformers.modeling_utils as _tmu
-            if not hasattr(_tmu, 'no_init_weights'):
-                @contextlib.contextmanager
-                def no_init_weights(_enable=True):
-                    yield
-                _tmu.no_init_weights = no_init_weights
-                self.log.info("GPTQ: patched transformers.modeling_utils.no_init_weights")
-        except Exception as e:
-            self.log.debug(f"GPTQ: could not patch transformers: {e}")
+        class FORMAT(str, Enum):
+            GPTQ = "gptq"
+            GPTQ_V2 = "gptq_v2"
+            MARLIN = "marlin"
 
-        # Step 2: Try importing auto_gptq
-        try:
-            import auto_gptq
-        except Exception as e:
-            self.log.warning(f"auto_gptq import failed ({e}), creating fake module")
-            auto_gptq = ModuleType("auto_gptq")
-            sys.modules["auto_gptq"] = auto_gptq
+        FORMAT_FIELD_JSON = "format"
+        QUANTIZE_BLACK_LIST = ["lm_head"]
 
-        # Step 3: Ensure QuantizeConfig is on the top-level module
-        if not hasattr(auto_gptq, "QuantizeConfig"):
-            # Try to find it in submodules
-            found = False
-            for attr in ("quantize_config", "utils", "modeling._base"):
-                submod_name = f"auto_gptq.{attr}"
-                submod = sys.modules.get(submod_name)
-                if submod and hasattr(submod, "QuantizeConfig"):
-                    auto_gptq.QuantizeConfig = submod.QuantizeConfig
-                    found = True
-                    self.log.info(f"GPTQ: found QuantizeConfig in {submod_name}")
-                    break
-            if not found:
-                auto_gptq.QuantizeConfig = _QuantizeConfig
-                self.log.info("GPTQ: injected stub QuantizeConfig into auto_gptq")
+        class _StubGPTQForCausalLM:
+            """Minimal stub — optimum uses from_quantized()."""
+            @classmethod
+            def from_quantized(cls, model_name_or_path, **kwargs):
+                raise NotImplementedError(
+                    "auto_gptq shim: from_quantized not available. "
+                    "Install a compatible auto-gptq or use transformers' "
+                    "built-in GPTQ loading."
+                )
+            @classmethod
+            def from_pretrained(cls, model_name_or_path, quantize_config, **kwargs):
+                raise NotImplementedError("auto_gptq shim: from_pretrained not available")
 
-        # Step 4: Shotgun — inject QuantizeConfig into EVERY loaded auto_gptq
-        # submodule AND optimum.gptq.* modules. The NameError occurs in
-        # optimum/gptq/quantizer.py which does `from auto_gptq import
-        # QuantizeConfig` at module scope — if that import failed, the name
-        # is missing from optimum's namespace too.
-        qc = auto_gptq.QuantizeConfig
-        for key, mod in list(sys.modules.items()):
-            if mod is None:
-                continue
-            if key.startswith("auto_gptq") or key.startswith("optimum.gptq"):
-                if not hasattr(mod, "QuantizeConfig"):
-                    mod.QuantizeConfig = qc
-                # Also patch module globals dict directly for bare name refs
-                if "QuantizeConfig" not in vars(mod):
-                    vars(mod)["QuantizeConfig"] = qc
+        # --- Create complete module tree ---
+        root = ModuleType("auto_gptq")
+        root.__package__ = "auto_gptq"
+        root.__path__ = []
+        root.QuantizeConfig = QuantizeConfig
+        root.AutoGPTQForCausalLM = _StubGPTQForCausalLM
+        root.__version__ = "0.7.1"  # pretend
+        sys.modules["auto_gptq"] = root
 
-        # Step 5: Ensure known submodule paths exist in sys.modules
-        for sub in ("auto_gptq.quantize_config", "auto_gptq.utils"):
-            if sub not in sys.modules:
-                m = ModuleType(sub)
-                m.QuantizeConfig = qc
-                sys.modules[sub] = m
+        # auto_gptq.modeling
+        modeling = ModuleType("auto_gptq.modeling")
+        modeling.__package__ = "auto_gptq.modeling"
+        modeling.__path__ = []
+        sys.modules["auto_gptq.modeling"] = modeling
 
-        # Step 6: Pre-import optimum.gptq.quantizer and patch it
-        try:
-            import optimum.gptq.quantizer as _oq
-            if "QuantizeConfig" not in vars(_oq):
-                vars(_oq)["QuantizeConfig"] = qc
-                self.log.info("GPTQ: patched optimum.gptq.quantizer.QuantizeConfig")
-        except Exception:
-            pass
+        # auto_gptq.modeling._const
+        const = ModuleType("auto_gptq.modeling._const")
+        const.FORMAT = FORMAT
+        const.FORMAT_FIELD_JSON = FORMAT_FIELD_JSON
+        const.QUANTIZE_BLACK_LIST = QUANTIZE_BLACK_LIST
+        sys.modules["auto_gptq.modeling._const"] = const
 
-        self.log.info("GPTQ: QuantizeConfig available in all auto_gptq/optimum submodules")
+        # auto_gptq.quantize_config
+        qc_mod = ModuleType("auto_gptq.quantize_config")
+        qc_mod.QuantizeConfig = QuantizeConfig
+        sys.modules["auto_gptq.quantize_config"] = qc_mod
+
+        # auto_gptq.utils
+        utils_mod = ModuleType("auto_gptq.utils")
+        utils_mod.QuantizeConfig = QuantizeConfig
+        sys.modules["auto_gptq.utils"] = utils_mod
+
+        # auto_gptq.utils.import_utils (optimum checks this)
+        import_utils = ModuleType("auto_gptq.utils.import_utils")
+        import_utils.dynamically_import_QuantLinear = lambda *a, **kw: None
+        sys.modules["auto_gptq.utils.import_utils"] = import_utils
+
+        # auto_gptq.nn_modules (needed by some optimum versions)
+        nn_mod = ModuleType("auto_gptq.nn_modules")
+        nn_mod.__path__ = []
+        sys.modules["auto_gptq.nn_modules"] = nn_mod
+
+        # auto_gptq.nn_modules.qlinear
+        qlinear = ModuleType("auto_gptq.nn_modules.qlinear")
+        qlinear.__path__ = []
+        sys.modules["auto_gptq.nn_modules.qlinear"] = qlinear
+
+        # --- Also clear and re-patch optimum.gptq modules ---
+        optimum_to_remove = [k for k in sys.modules if k.startswith("optimum.gptq")]
+        for k in optimum_to_remove:
+            del sys.modules[k]
+
+        self.log.info("GPTQ: complete auto_gptq shim installed (QuantizeConfig, FORMAT, etc.)")
 
     def _should_use_nvfp4(self) -> bool:
         """Check if NVFP4 quantization should be used.
