@@ -612,13 +612,20 @@ class HuggingFaceBackend(BaseLLMBackend):
                 self.log.info("GPTQ: injected stub QuantizeConfig into auto_gptq")
 
         # Step 4: Shotgun — inject QuantizeConfig into EVERY loaded auto_gptq
-        # submodule. This fixes NameError in submodules that had a failed
-        # `from ... import QuantizeConfig` at module scope.
+        # submodule AND optimum.gptq.* modules. The NameError occurs in
+        # optimum/gptq/quantizer.py which does `from auto_gptq import
+        # QuantizeConfig` at module scope — if that import failed, the name
+        # is missing from optimum's namespace too.
         qc = auto_gptq.QuantizeConfig
         for key, mod in list(sys.modules.items()):
-            if key.startswith("auto_gptq") and mod is not None:
+            if mod is None:
+                continue
+            if key.startswith("auto_gptq") or key.startswith("optimum.gptq"):
                 if not hasattr(mod, "QuantizeConfig"):
                     mod.QuantizeConfig = qc
+                # Also patch module globals dict directly for bare name refs
+                if "QuantizeConfig" not in vars(mod):
+                    vars(mod)["QuantizeConfig"] = qc
 
         # Step 5: Ensure known submodule paths exist in sys.modules
         for sub in ("auto_gptq.quantize_config", "auto_gptq.utils"):
@@ -627,7 +634,16 @@ class HuggingFaceBackend(BaseLLMBackend):
                 m.QuantizeConfig = qc
                 sys.modules[sub] = m
 
-        self.log.info("GPTQ: QuantizeConfig available in all auto_gptq submodules")
+        # Step 6: Pre-import optimum.gptq.quantizer and patch it
+        try:
+            import optimum.gptq.quantizer as _oq
+            if "QuantizeConfig" not in vars(_oq):
+                vars(_oq)["QuantizeConfig"] = qc
+                self.log.info("GPTQ: patched optimum.gptq.quantizer.QuantizeConfig")
+        except Exception:
+            pass
+
+        self.log.info("GPTQ: QuantizeConfig available in all auto_gptq/optimum submodules")
 
     def _should_use_nvfp4(self) -> bool:
         """Check if NVFP4 quantization should be used.
