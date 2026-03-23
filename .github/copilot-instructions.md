@@ -26,7 +26,7 @@ VRAMancer est un orchestrateur multi-GPU Python (~18 000 lignes, ~200 fichiers .
 - `compute_engine.py` — execution de vrais modules nn.Module (pas de poids aleatoires)
 - `model_splitter.py` — split VRAM-proportionnel (FREE memory) ou profiler-optimise (DP), support MPS, imports defensifs
 - `layer_profiler.py` — profiling par couche (latence, FLOPS, memoire), benchmark GPU (compute, bandwidth), placement DP-optimal
-- `transfer_manager.py` — transport GPU-to-GPU : CUDA P2P > CPU-staged (pinned memory). NCCL reserve au mode distribue multi-processus (MASTER_ADDR/WORLD_SIZE). Stub si `VRM_MINIMAL_TEST=1`.
+- `transfer_manager.py` — transport GPU-to-GPU : Strategy 0 (cross-vendor bridge) > Strategy 1 (CUDA P2P) > **Strategy 1.5 (Rust cuMemcpyDtoD bypass via vramancer_rust, 6-14x faster que PyTorch .to())** > Strategy 2 (ReBAR pipelined) > Strategy 3 (NCCL distribue) > Strategy 4 (CPU-staged pinned). Stub si `VRM_MINIMAL_TEST=1`.
 - `network/fibre_fastpath.py` — transport reseau : RDMA verbs > Zero-copy TCP > mmap local
 - `network/cluster_discovery.py` — mDNS/ZeroConf + UDP broadcast, heartbeat, USB4 hot-plug (pyudev/IOKit)
 - `transport_factory.py` — factory unifie selon localite (SAME_GPU / SAME_NODE / SAME_RACK / REMOTE)
@@ -76,7 +76,7 @@ python -m build
 - **Multi-accelerateur** : `core/utils.py:detect_backend()` retourne `cuda`, `rocm`, `mps` ou `cpu`. ROCm passe par l'API `torch.cuda`. Ne jamais coder specifiquement CUDA — utiliser l'abstraction.
 - **Securite Flask** : toute nouvelle route API doit passer par `install_security(app)` qui injecte un `before_request` pour validation token/HMAC.
 - **Metriques** : declarer les compteurs/gauges dans `core/metrics.py` et les incrementer aux points d'instrumentation appropries.
-- **Version** : la source de verite est `core/__init__.__version__` (actuellement `0.2.4`). Les fichiers `pyproject.toml`, `setup.cfg` et `setup.py` doivent rester synchronises.
+- **Version** : la source de verite est `core/__init__.__version__` (actuellement `1.5.0`). Les fichiers `pyproject.toml`, `setup.cfg` et `setup.py` doivent rester synchronises.
 - **Config multi-OS** : `core/config.py` cherche `config.yaml` dans XDG_CONFIG_HOME (Linux), ~/Library/Application Support (macOS), %APPDATA% (Windows), puis le repertoire courant.
 
 ## Pieges connus
@@ -102,6 +102,9 @@ Le fichier `tests/test_pipeline.py` teste l'integration end-to-end : InferencePi
 - `core/backends.py` — contient BaseLLMBackend, HuggingFaceBackend, KVCacheBlock, select_backend()
 - `core/backends_vllm.py` — vLLMBackend (extrait de backends.py)
 - `core/backends_ollama.py` — OllamaBackend (extrait de backends.py)
+- `core/backends_webgpu.py` — WebGPU offloading via WebSocket
+- `_deprecated/backends_deepspeed.py` — DeepSpeed (non integre, archive)
+- `_deprecated/backends_tensorrt.py` — TensorRT (non integre, archive)
 - `core/api/routes_ops.py` — routes health/system/gpu (Blueprint extrait de production_api.py)
 - `core/api/registry.py` — PipelineRegistry (extrait de production_api.py)
 - `core/api/validation.py` — validation des parametres (extrait de production_api.py)

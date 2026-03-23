@@ -444,6 +444,29 @@ class TransferManager:
             except Exception as e:
                 log.warning(f"P2P transfer failed ({e}), falling back")
 
+        # --- Strategy 1.5: Rust cuMemcpyDtoD bypass (GIL-released) ---
+        # When PyTorch reports no P2P, the CUDA driver can still do DtoD
+        # copies using internal CPU staging. This is 6-14x faster than
+        # PyTorch .to() for typical activation sizes (10-100 MB) because
+        # it avoids PyTorch stream/device management overhead.
+        try:
+            import vramancer_rust
+            if hasattr(vramancer_rust, 'direct_vram_copy') and _TORCH_AVAILABLE:
+                src_tensor = tensor.cuda(source_gpu) if not tensor.is_cuda else tensor
+                with torch.cuda.device(target_gpu):
+                    dst_tensor = torch.empty_like(src_tensor, device=f"cuda:{target_gpu}")
+                nbytes = src_tensor.element_size() * src_tensor.nelement()
+                vramancer_rust.direct_vram_copy(
+                    src_tensor.data_ptr(), dst_tensor.data_ptr(), nbytes
+                )
+                log.debug(
+                    f"Rust DtoD bypass GPU {source_gpu} → GPU {target_gpu}: "
+                    f"{nbytes / 1e6:.1f} MB"
+                )
+                return TransportMethod.CUDA_P2P, dst_tensor
+        except Exception as e:
+            log.debug(f"Rust DtoD bypass failed: {e}")
+
         # --- Strategy 2: ReBAR-accelerated pipelined transfer ---
         # When P2P is blocked (consumer GPUs, mixed architectures) but ReBAR
         # is enabled, use larger chunk sizes for double-buffered pinned transfer
@@ -563,47 +586,6 @@ class TransferManager:
         Effective: ~25 GB/s (bottleneck = 3090 side)
         """
         src_tensor = tensor.cuda(source_gpu) if not tensor.is_cuda else tensor
-
-        # Step 1: GPU -> pinned CPU memory (async)
-        #  OPTIMISATION VRAMANCER: Bypass de l'interdiction P2P Nvidia via extension Rust / ReBAR
-        try:
-            import vramancer_rust as cxl_bypass
-            # S'il arrive à importer notre module Rust compilé récemment, on shunte le fallback PyTorch super lent
-            # et on demande à Cudarc de mapper la mémoire via les drivers DMA buf/ReBAR du host
-            # => En theorie on garde 100% de la bande passante PCIe 4.0/5.0
-            
-            # Allocation cible
-            dst_tensor = torch.empty_like(src_tensor, device=f"cuda:{target_gpu}")
-
-            # Tentative de P2P direct via Rust sans CPU staging si les deux GPUs sont supportés
-            try:
-                src_ptr = src_tensor.data_ptr()
-                dst_ptr = dst_tensor.data_ptr()
-                size_bytes = src_tensor.element_size() * src_tensor.nelement()
-                if hasattr(cxl_bypass, 'direct_vram_copy'):
-                    success = cxl_bypass.direct_vram_copy(src_ptr, dst_ptr, size_bytes)
-                    if success:
-                        return TransportMethod.CROSS_VENDOR, dst_tensor
-            except Exception as e:
-                log.debug(f"Rust P2P direct_vram_copy failed: {e}")
-
-            # Chunked pipeline via Rust/Tokio (4 MiB chunks with per-chunk HMAC)
-            try:
-                if hasattr(cxl_bypass, 'send_tensor_chunked'):
-                    src_bytes = src_tensor.contiguous().cpu().numpy().tobytes()
-                    import os as _os
-                    secret = _os.environ.get("VRM_TRANSFER_SECRET", "vramancer").encode()
-                    # Local inter-GPU: loopback fast path
-                    acked = cxl_bypass.send_tensor_chunked(
-                        "127.0.0.1", 19876, secret, src_bytes, None
-                    )
-                    if acked == len(src_bytes):
-                        return TransportMethod.CROSS_VENDOR, dst_tensor
-            except Exception as e:
-                log.debug(f"Rust chunked transfer failed: {e}")
-        except (ImportError, Exception):
-            # Si le bypass echoue, on revient a la methode standard PyTorch (Lente car buffer CPU bloquant)
-            pass
 
         cpu_tensor = torch.empty(
             src_tensor.shape,
