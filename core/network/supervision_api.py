@@ -314,8 +314,8 @@ def fastpath_select():
     if not re.match(r'^[a-zA-Z0-9_\-\.]+$', name):
         return jsonify({'error': 'invalid interface name'}), 400
     known = detect_fast_interfaces()
-    known_names = {i.get('interface') for i in known if i.get('interface')}
-    known_names |= {i.get('kind') for i in known if i.get('kind')}
+    known_names = {i.get('if') for i in known if i.get('if')}
+    known_names |= {i.get('type') for i in known if i.get('type')}
     if name not in known_names:
         return jsonify({'error': 'unknown interface', 'available': list(known_names)}), 400
     os.environ['VRM_FASTPATH_IF'] = name

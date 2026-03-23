@@ -969,8 +969,7 @@ class CrossVendorBridge:
                     name=props.name,
                     pci_bdf=bdf,
                     bar_size_bytes=bar_size,
-                    total_vram_bytes=props.total_mem if hasattr(props, 'total_mem')
-                                     else getattr(props, 'total_memory', 0),
+                    total_vram_bytes=getattr(props, 'total_memory', 0) or getattr(props, 'total_mem', 0),
                     rebar_enabled=rebar_on,
                     compute_capability=(props.major, props.minor),
                 )

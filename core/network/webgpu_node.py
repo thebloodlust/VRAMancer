@@ -228,23 +228,55 @@ class WebGPUNodeManager:
                     continue
                 
                 # Smart Load Balancing: prioriser les meilleurs GPUs, déprioritiser edge
+                # Battery-aware: exclure les appareils sous les seuils critiques
                 def get_gpu_score(client_data):
-                    # Edge devices get low priority — used only when desktops are busy
-                    if client_data.get("is_edge"):
-                        battery = client_data.get("hw_specs", {}).get("battery", 100)
-                        if battery < 20:
-                            return 1  # Almost dead battery — last resort
+                    hw = client_data.get("hw_specs", {})
+                    battery = hw.get("battery", 100)
+                    is_charging = hw.get("charging", True)
+                    is_edge = client_data.get("is_edge", False)
+
+                    # Battery-aware policies for mobile/edge
+                    if is_edge:
+                        # Hard stop: battery < 15% and not charging -> exclude
+                        if battery < 15 and not is_charging:
+                            return -1  # Will be filtered out
+                        # Low battery (< 30%) and not charging -> last resort
+                        if battery < 30 and not is_charging:
+                            return 1
+                        # Medium battery -> light tasks only
+                        if battery < 50:
+                            return 3
                         return 5  # Edge device — light tasks only
+
                     gpu_name = client_data.get("gpu", "").lower()
-                    if "rtx" in gpu_name or "m3 max" in gpu_name or "m4 max" in gpu_name: return 100
-                    if "m2" in gpu_name or "m1 max" in gpu_name or "rx 7900" in gpu_name or "m3 pro" in gpu_name: return 80
-                    if "m1" in gpu_name or "gtx 1080" in gpu_name: return 50
-                    return 10 # generic
-                
+                    vram = hw.get("vram_gb", 0)
+                    # Blackwell & high-end ranking
+                    if "5090" in gpu_name or "5080" in gpu_name or "5070 ti" in gpu_name:
+                        return 120  # Blackwell
+                    if "rtx" in gpu_name or "m3 max" in gpu_name or "m4 max" in gpu_name:
+                        return 100
+                    if "m2" in gpu_name or "m1 max" in gpu_name or "rx 7900" in gpu_name or "m3 pro" in gpu_name:
+                        return 80
+                    if "m1" in gpu_name or "gtx 1080" in gpu_name:
+                        return 50
+                    # VRAM-based scoring for unknown GPUs
+                    if vram >= 24:
+                        return 90
+                    if vram >= 12:
+                        return 60
+                    return 10  # generic
+
+                # Filter out clients that should not receive work (score < 0)
+                scored = [(cid, c, get_gpu_score(c)) for cid, c in available_clients]
+                eligible = [(cid, c) for cid, c, s in scored if s >= 0]
+                if not eligible:
+                    await asyncio.sleep(0.1)
+                    continue
+
                 # Trie par score décroissant (meilleur GPU d'abord)
-                available_clients.sort(key=lambda x: get_gpu_score(x[1]), reverse=True)
+                eligible.sort(key=lambda x: get_gpu_score(x[1]), reverse=True)
                 
-                best_client_id = available_clients[0][0]
+                best_client_id = eligible[0][0]
                 ws = self.clients[best_client_id]["ws"]
                 self.clients[best_client_id]["busy"] = True
                 self.pending_tasks[task.task_id] = task

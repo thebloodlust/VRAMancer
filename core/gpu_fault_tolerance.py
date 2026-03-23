@@ -609,6 +609,128 @@ class GPUFaultManager:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# K-Replication — block redundancy for fault prevention
+# ═══════════════════════════════════════════════════════════════════════════
+
+class BlockReplicator:
+    """Manages redundant copies of model blocks across GPUs/CPU.
+
+    Each block is kept on its *primary* GPU.  ``replicate()`` creates
+    shadow copies on *k-1* other locations (other GPUs or CPU RAM) so
+    that if the primary GPU disconnects during generation, a replica
+    can be promoted instantly.
+
+    Parameters
+    ----------
+    k : int
+        Replication factor (1 = no replicas, 2 = one backup, etc.)
+    prefer_cpu : bool
+        If True, replicas are stored in pinned CPU memory instead of
+        other GPUs (saves VRAM at the cost of higher restore latency).
+    """
+
+    def __init__(self, k: int = 2, prefer_cpu: bool = True):
+        self.k = max(1, k)
+        self.prefer_cpu = prefer_cpu
+        self._lock = threading.Lock()
+        # block_id -> list of (location, tensor_data)
+        self._replicas: Dict[int, List[tuple]] = {}
+        self._checkpoints: Dict[str, Any] = {}  # inference_id -> state
+
+    def replicate(self, block_id: int, tensor: Any, primary_gpu: int,
+                  available_gpus: Optional[List[int]] = None) -> int:
+        """Create k-1 replicas of a block. Returns number of replicas created."""
+        if self.k <= 1 or not _TORCH:
+            return 0
+
+        replicas = []
+        targets_needed = self.k - 1
+
+        if not self.prefer_cpu and available_gpus:
+            # Replicate to other GPUs
+            alt_gpus = [g for g in available_gpus if g != primary_gpu]
+            for gpu_id in alt_gpus[:targets_needed]:
+                try:
+                    replica = tensor.detach().clone().to(f"cuda:{gpu_id}")
+                    replicas.append((f"cuda:{gpu_id}", replica))
+                except Exception as e:
+                    _log.debug("GPU replica for block %d on GPU %d failed: %s", block_id, gpu_id, e)
+
+        # Fill remaining replicas with CPU (pinned memory)
+        while len(replicas) < targets_needed:
+            try:
+                replica = tensor.detach().clone().cpu()
+                if torch.cuda.is_available():
+                    replica = replica.pin_memory()
+                replicas.append(("cpu:pinned", replica))
+            except Exception as e:
+                _log.debug("CPU replica for block %d failed: %s", block_id, e)
+                break
+
+        with self._lock:
+            self._replicas[block_id] = replicas
+
+        if replicas:
+            _log.info("Block %d: %d replicas created (primary=GPU %d)", block_id, len(replicas), primary_gpu)
+        return len(replicas)
+
+    def get_replica(self, block_id: int, target_device: str = "cpu") -> Optional[Any]:
+        """Retrieve a replica of a block (for failover)."""
+        with self._lock:
+            replicas = self._replicas.get(block_id, [])
+        for location, tensor in replicas:
+            try:
+                return tensor.to(target_device)
+            except Exception:
+                continue
+        return None
+
+    def has_replica(self, block_id: int) -> bool:
+        """Check if we have at least one replica for a block."""
+        with self._lock:
+            return bool(self._replicas.get(block_id))
+
+    def drop_replicas(self, block_id: int) -> None:
+        """Remove all replicas for a block (e.g. after inference completes)."""
+        with self._lock:
+            replicas = self._replicas.pop(block_id, [])
+        for _, tensor in replicas:
+            del tensor
+
+    def checkpoint(self, inference_id: str, layer_idx: int, hidden_state: Any) -> None:
+        """Save an intermediate hidden-state checkpoint during inference.
+
+        If a GPU fails mid-generation, resume from the last checkpoint
+        instead of restarting from scratch.
+        """
+        with self._lock:
+            self._checkpoints[inference_id] = {
+                "layer_idx": layer_idx,
+                "hidden_state": hidden_state.detach().clone().cpu() if _TORCH else hidden_state,
+                "timestamp": time.time(),
+            }
+
+    def get_checkpoint(self, inference_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve the last checkpoint for an inference run."""
+        with self._lock:
+            return self._checkpoints.get(inference_id)
+
+    def clear_checkpoint(self, inference_id: str) -> None:
+        """Clear checkpoint after successful inference completion."""
+        with self._lock:
+            self._checkpoints.pop(inference_id, None)
+
+    def stats(self) -> Dict[str, Any]:
+        with self._lock:
+            return {
+                "k": self.k,
+                "replicated_blocks": len(self._replicas),
+                "total_replicas": sum(len(r) for r in self._replicas.values()),
+                "active_checkpoints": len(self._checkpoints),
+            }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Singleton
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -641,6 +763,7 @@ __all__ = [
     "GPUHealth",
     "GPUState",
     "FaultType",
+    "BlockReplicator",
     "get_fault_manager",
     "reset_fault_manager",
 ]

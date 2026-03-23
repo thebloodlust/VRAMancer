@@ -95,6 +95,56 @@ def _extract_layers(model: Any) -> Optional[list]:
 
 
 # ------------------------------------------------------------------
+# GPU ranking by compute power (Blackwell > Ampere > Turing etc.)
+# ------------------------------------------------------------------
+
+def _get_gpu_compute_scores(num_gpus: int) -> List[float]:
+    """Return a compute power score for each GPU.
+
+    Score = compute_capability * sm_count * clock_mhz.
+    Higher is better.  Used for asymmetric load balancing so a
+    Blackwell (CC 12.x) card naturally gets more layers than an Ampere
+    (CC 8.x) card.
+    """
+    if torch is None or not getattr(torch, 'cuda', None) or not torch.cuda.is_available():
+        return [1.0] * num_gpus
+    scores = []
+    for i in range(num_gpus):
+        try:
+            props = torch.cuda.get_device_properties(i)
+            cc = props.major + props.minor / 10.0  # e.g. 12.0, 8.6
+            sm = getattr(props, 'multi_processor_count', 1) or 1
+            # Estimate relative throughput (rough but fair)
+            scores.append(cc * sm)
+        except Exception:
+            scores.append(1.0)
+    return scores
+
+
+def rank_gpus(num_gpus: int) -> List[int]:
+    """Return GPU indices sorted by descending compute power.
+
+    The first GPU in the returned list should be used as the *master*
+    (e.g. RTX 5070 Ti Blackwell before RTX 3090 Ampere).
+
+    Respects ``VRM_GPU_ORDER`` env var for explicit override:
+        VRM_GPU_ORDER=1,0  -> force GPU 1 first.
+    """
+    override = os.environ.get('VRM_GPU_ORDER', '').strip()
+    if override:
+        try:
+            order = [int(x) for x in override.split(',')]
+            if len(order) == num_gpus:
+                return order
+            _logger.warning("VRM_GPU_ORDER has %d entries but %d GPUs — ignoring", len(order), num_gpus)
+        except ValueError:
+            _logger.warning("VRM_GPU_ORDER invalid ('%s') — ignoring", override)
+
+    scores = _get_gpu_compute_scores(num_gpus)
+    return sorted(range(num_gpus), key=lambda i: scores[i], reverse=True)
+
+
+# ------------------------------------------------------------------
 # VRAM detection (free memory, not total)
 # ------------------------------------------------------------------
 
@@ -130,12 +180,17 @@ def _get_free_vram_per_gpu(num_gpus: int) -> List[int]:
         result = []
         for i in range(num_gpus):
             try:
-                total = torch.cuda.get_device_properties(i).total_mem
-                allocated = torch.cuda.memory_allocated(i)
-                free = total - allocated
-                result.append(int(free // (1024 * 1024)))
+                # Prefer mem_get_info (accurate free memory including driver caches)
+                free_bytes, _ = torch.cuda.mem_get_info(i)
+                result.append(int(free_bytes // (1024 * 1024)))
             except Exception:
-                result.append(8192)
+                try:
+                    props = torch.cuda.get_device_properties(i)
+                    total = getattr(props, 'total_memory', 0) or getattr(props, 'total_mem', 0)
+                    allocated = torch.cuda.memory_allocated(i)
+                    result.append(int((total - allocated) // (1024 * 1024)))
+                except Exception:
+                    result.append(8192)
         return result
 
     return [8192] * num_gpus
@@ -160,7 +215,9 @@ def _get_total_vram_per_gpu(num_gpus: int) -> List[int]:
         result = []
         for i in range(num_gpus):
             try:
-                result.append(torch.cuda.get_device_properties(i).total_mem // (1024 * 1024))
+                props = torch.cuda.get_device_properties(i)
+                total = getattr(props, 'total_memory', 0) or getattr(props, 'total_mem', 0)
+                result.append(int(total // (1024 * 1024)))
             except Exception:
                 result.append(8192)
         return result
@@ -249,13 +306,15 @@ def split_model_into_blocks(model_name: str, num_gpus: int,
         except Exception as exc:
             _logger.warning("Profiler-based split failed (%s), falling back to VRAM", exc)
 
-    # Fallback: VRAM-proportional
+    # Fallback: VRAM-proportional weighted by compute power
     if use_free_vram:
         vram_per_gpu = _get_free_vram_per_gpu(num_gpus)
     else:
         vram_per_gpu = _get_total_vram_per_gpu(num_gpus)
 
-    blocks = _split_by_vram(layers, vram_per_gpu)
+    compute_scores = _get_gpu_compute_scores(num_gpus)
+    _logger.info("GPU compute scores: %s", list(zip(range(num_gpus), compute_scores)))
+    blocks = _split_by_vram(layers, vram_per_gpu, compute_scores=compute_scores)
     _logger.info("Split into %d blocks: %s",
                  len(blocks), [len(list(b.children())) for b in blocks])
     return blocks
@@ -304,16 +363,29 @@ def _split_by_profiler(model: Any, layers: list, num_gpus: int) -> List[Any]:
     return blocks
 
 
-def _split_by_vram(layers: list, vram_per_gpu: List[int]) -> List[Any]:
-    """Split layers proportionally to VRAM."""
-    total_vram = sum(vram_per_gpu)
-    n_layers = len(layers)
+def _split_by_vram(layers: list, vram_per_gpu: List[int],
+                   compute_scores: Optional[List[float]] = None) -> List[Any]:
+    """Split layers proportionally to VRAM weighted by compute power.
 
-    if total_vram == 0:
-        per_gpu = max(1, n_layers // len(vram_per_gpu))
-        counts = [per_gpu] * len(vram_per_gpu)
+    When *compute_scores* is provided the effective weight for each GPU
+    becomes ``vram_i * compute_score_i`` so that a faster GPU receives
+    proportionally more layers even when both GPUs have similar VRAM.
+    """
+    n_layers = len(layers)
+    n_gpus = len(vram_per_gpu)
+
+    # Compute effective weights (VRAM * compute_power)
+    if compute_scores and len(compute_scores) == n_gpus:
+        weights = [max(v, 1) * max(s, 0.1) for v, s in zip(vram_per_gpu, compute_scores)]
     else:
-        ratios = [v / total_vram for v in vram_per_gpu]
+        weights = [max(v, 1) for v in vram_per_gpu]
+
+    total = sum(weights)
+    if total == 0:
+        per_gpu = max(1, n_layers // n_gpus)
+        counts = [per_gpu] * n_gpus
+    else:
+        ratios = [w / total for w in weights]
         counts = [max(1, round(r * n_layers)) for r in ratios]
 
     while sum(counts) < n_layers:

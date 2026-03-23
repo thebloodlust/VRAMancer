@@ -4,7 +4,8 @@ import threading
 import uuid
 import secrets
 import hashlib
-from typing import Dict, Any, Optional
+import hmac as _hmac
+from typing import Dict, Any, Optional, List
 
 try:
     from core.logger import LoggerAdapter
@@ -49,6 +50,29 @@ class SwarmLedger:
                     host TEXT,
                     contribution_mb REAL,
                     last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(user_id) REFERENCES users(id)
+                )
+            """)
+            # ── Private Groups (Cercles de Confiance) ──
+            curr.execute("""
+                CREATE TABLE IF NOT EXISTS groups (
+                    group_id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    invite_token_hash TEXT UNIQUE NOT NULL,
+                    owner_id TEXT NOT NULL,
+                    max_members INTEGER DEFAULT 50,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(owner_id) REFERENCES users(id)
+                )
+            """)
+            curr.execute("""
+                CREATE TABLE IF NOT EXISTS group_members (
+                    group_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    node_id TEXT,
+                    joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY(group_id, user_id),
+                    FOREIGN KEY(group_id) REFERENCES groups(group_id),
                     FOREIGN KEY(user_id) REFERENCES users(id)
                 )
             """)
@@ -119,6 +143,129 @@ class SwarmLedger:
                 curr.execute("UPDATE users SET vram_credits = vram_credits + ? WHERE id = ?", (reward, user_id))
                 conn.commit()
             conn.close()
+
+    # ══════════════════════════════════════════════════════════════════
+    # Private Groups (Cercles de Confiance)
+    # ══════════════════════════════════════════════════════════════════
+
+    def create_group(self, name: str, owner_id: str, max_members: int = 50) -> tuple:
+        """Create a private swarm group. Returns (group_id, invite_token).
+
+        The invite_token is shown only once — share it with trusted members.
+        Nodes must present this token to join the group.
+        """
+        group_id = str(uuid.uuid4())
+        raw_token = secrets.token_urlsafe(32)
+        invite_token = f"grp-{raw_token}"
+        token_hash = hashlib.sha256(invite_token.encode()).hexdigest()
+
+        with _lock:
+            conn = self._get_conn()
+            curr = conn.cursor()
+            curr.execute(
+                "INSERT INTO groups (group_id, name, invite_token_hash, owner_id, max_members) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (group_id, name, token_hash, owner_id, max_members),
+            )
+            # Owner is automatically a member
+            curr.execute(
+                "INSERT INTO group_members (group_id, user_id) VALUES (?, ?)",
+                (group_id, owner_id),
+            )
+            conn.commit()
+            conn.close()
+
+        _logger.info("Private group '%s' created by %s (max=%d)", name, owner_id, max_members)
+        return group_id, invite_token
+
+    def join_group(self, invite_token: str, user_id: str, node_id: Optional[str] = None) -> Optional[str]:
+        """Join a private group using the invite token. Returns group_id or None."""
+        token_hash = hashlib.sha256(invite_token.encode()).hexdigest()
+        with _lock:
+            conn = self._get_conn()
+            curr = conn.cursor()
+            curr.execute("SELECT group_id, max_members FROM groups WHERE invite_token_hash = ?", (token_hash,))
+            row = curr.fetchone()
+            if not row:
+                conn.close()
+                return None
+            group_id, max_members = row
+
+            # Check membership count
+            curr.execute("SELECT COUNT(*) FROM group_members WHERE group_id = ?", (group_id,))
+            count = curr.fetchone()[0]
+            if count >= max_members:
+                conn.close()
+                _logger.warning("Group %s full (%d/%d)", group_id, count, max_members)
+                return None
+
+            # Idempotent join
+            curr.execute(
+                "INSERT OR IGNORE INTO group_members (group_id, user_id, node_id) VALUES (?, ?, ?)",
+                (group_id, user_id, node_id),
+            )
+            conn.commit()
+            conn.close()
+
+        _logger.info("User %s joined group %s", user_id, group_id)
+        return group_id
+
+    def is_group_member(self, group_id: str, user_id: str) -> bool:
+        """Check whether a user belongs to a group."""
+        with _lock:
+            conn = self._get_conn()
+            curr = conn.cursor()
+            curr.execute(
+                "SELECT 1 FROM group_members WHERE group_id = ? AND user_id = ?",
+                (group_id, user_id),
+            )
+            found = curr.fetchone() is not None
+            conn.close()
+        return found
+
+    def get_group_members(self, group_id: str) -> List[Dict[str, Any]]:
+        """List members of a group."""
+        with _lock:
+            conn = self._get_conn()
+            curr = conn.cursor()
+            curr.execute(
+                "SELECT gm.user_id, u.alias, gm.node_id, gm.joined_at "
+                "FROM group_members gm LEFT JOIN users u ON gm.user_id = u.id "
+                "WHERE gm.group_id = ?",
+                (group_id,),
+            )
+            rows = curr.fetchall()
+            conn.close()
+        return [
+            {"user_id": r[0], "alias": r[1], "node_id": r[2], "joined_at": r[3]}
+            for r in rows
+        ]
+
+    def get_user_groups(self, user_id: str) -> List[Dict[str, Any]]:
+        """List groups a user belongs to."""
+        with _lock:
+            conn = self._get_conn()
+            curr = conn.cursor()
+            curr.execute(
+                "SELECT g.group_id, g.name, g.owner_id "
+                "FROM groups g JOIN group_members gm ON g.group_id = gm.group_id "
+                "WHERE gm.user_id = ?",
+                (user_id,),
+            )
+            rows = curr.fetchall()
+            conn.close()
+        return [{"group_id": r[0], "name": r[1], "owner_id": r[2]} for r in rows]
+
+    def validate_group_token(self, invite_token: str) -> Optional[str]:
+        """Validate an invite token without joining. Returns group_id or None."""
+        token_hash = hashlib.sha256(invite_token.encode()).hexdigest()
+        with _lock:
+            conn = self._get_conn()
+            curr = conn.cursor()
+            curr.execute("SELECT group_id FROM groups WHERE invite_token_hash = ?", (token_hash,))
+            row = curr.fetchone()
+            conn.close()
+        return row[0] if row else None
 
 # Singleton du Ledger
 ledger = SwarmLedger()
