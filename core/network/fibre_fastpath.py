@@ -16,6 +16,7 @@ import struct
 import socket
 import hashlib
 import mmap
+import tempfile
 import threading
 from dataclasses import dataclass, field
 from typing import Any, Optional, Dict, List, Tuple, Callable
@@ -661,8 +662,13 @@ class FastHandle:
 
     def _ensure_segment(self, size: int):
         if not self.shm_path:
-            name = f"/tmp/vramancer_fast_{hashlib.sha1(str(self.meta).encode()).hexdigest()[:8]}"
-            self.shm_path = name
+            tmp_dir = tempfile.gettempdir()
+            hash_id = hashlib.sha1(str(self.meta).encode()).hexdigest()[:8]
+            base = os.path.join(tmp_dir, f"vramancer_fast_{hash_id}")
+            # If stale file exists but isn't writable, use a per-uid variant
+            if os.path.exists(base) and not os.access(base, os.W_OK):
+                base = f"{base}_{os.getuid()}"
+            self.shm_path = base
         with open(self.shm_path, 'ab') as f:
             if f.tell() < size:
                 f.truncate(size)

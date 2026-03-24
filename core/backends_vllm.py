@@ -201,3 +201,46 @@ class vLLMBackend(BaseLLMBackend):
                         if new_text:
                             yield new_text
                             last_text = current_text
+
+    def generate_batch(self, prompts: List[str], max_new_tokens: int = 128, **kwargs) -> List[str]:
+        """Process multiple prompts via vLLM's native multi-request engine.
+
+        Submits all prompts as separate requests and steps the engine
+        until all are complete — leveraging vLLM's continuous batching.
+        """
+        if os.environ.get("VRM_MINIMAL_TEST") == "1":
+            return [f"vllm_batch_stub_{i}" for i in range(len(prompts))]
+        if not self.is_loaded or self.engine is None:
+            raise RuntimeError("Le moteur vLLM n'est pas initialisé.")
+
+        from vllm import SamplingParams
+        import uuid
+
+        max_tokens_val = int(kwargs.get('max_tokens', max_new_tokens))
+        t = kwargs.get('temperature')
+        temperature = float(t) if t is not None else 0.7
+        valid_kwargs = {k: v for k, v in kwargs.items()
+                        if k in ['top_p', 'top_k', 'presence_penalty', 'frequency_penalty']
+                        and v is not None}
+        sampling_params = SamplingParams(
+            temperature=temperature,
+            max_tokens=max_tokens_val,
+            **valid_kwargs,
+        )
+
+        # Submit all prompts
+        request_ids = []
+        for prompt in prompts:
+            rid = str(uuid.uuid4())
+            request_ids.append(rid)
+            self.engine.add_request(rid, prompt, sampling_params)
+
+        # Step until all done
+        results: dict[str, str] = {}
+        while self.engine.has_unfinished_requests():
+            step_outputs = self.engine.step()
+            for output in step_outputs:
+                if output.request_id in request_ids:
+                    results[output.request_id] = output.outputs[0].text
+
+        return [results.get(rid, "") for rid in request_ids]

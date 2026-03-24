@@ -194,16 +194,17 @@ class ContinuousBatcher:
 
     def start(self) -> None:
         """Start the continuous batching loop in a background thread."""
-        if self._running:
-            return
-        self._running = True
-        self._start_time = time.time()
-        self._thread = threading.Thread(
-            target=self._loop,
-            daemon=True,
-            name="continuous-batcher",
-        )
-        self._thread.start()
+        with self._lock:
+            if self._running:
+                return
+            self._running = True
+            self._start_time = time.time()
+            self._thread = threading.Thread(
+                target=self._loop,
+                daemon=True,
+                name="continuous-batcher",
+            )
+            self._thread.start()
         _logger.info("ContinuousBatcher started (max_batch=%d)", self.max_batch_size)
 
     def stop(self, timeout: float = 10.0) -> None:
@@ -251,13 +252,35 @@ class ContinuousBatcher:
         """Main continuous batching loop — one iteration = one forward pass.
 
         Lock scope is narrowed: the lock only covers queue mutations
-        (admit/evict), NOT the forward pass.  This allows new requests
-        to be submitted while compute is running.
+        (admit/evict), NOT the forward pass or tokenization.
+        This allows new requests to be submitted while compute is running.
         """
         while self._running:
-            # Phase 1: Snapshot under lock (fast — no compute here)
+            # Phase 1: Move waiting requests to a staging list under lock
             with self._lock:
-                self._admit_requests()
+                slots = self.max_batch_size - len(self._active)
+                to_prepare: List[InferenceRequest] = []
+                if slots > 0 and self._waiting:
+                    to_prepare = self._waiting[:slots]
+                    self._waiting = self._waiting[slots:]
+
+            # Phase 1b: Tokenize OUTSIDE lock — O(seq_len), can be slow
+            for req in to_prepare:
+                try:
+                    self._prepare_request(req)
+                    req.status = RequestStatus.ACTIVE
+                except Exception as e:
+                    req.status = RequestStatus.ERROR
+                    if req.future and not req.future.done():
+                        req.future.set_exception(e)
+
+            # Phase 1c: Add prepared requests to active batch under lock
+            prepared = [r for r in to_prepare if r.status == RequestStatus.ACTIVE]
+            with self._lock:
+                self._active.extend(prepared)
+                for req in prepared:
+                    _logger.debug("Request %s admitted (batch=%d)",
+                                  req.request_id, len(self._active))
                 batch = list(self._active)
 
             if not batch:
@@ -282,7 +305,12 @@ class ContinuousBatcher:
             time.sleep(0.0001)  # busy
 
     def _admit_requests(self) -> None:
-        """Move requests from waiting → active (up to batch capacity)."""
+        """Legacy admission — kept for external callers.
+
+        The main _loop() now handles admission with tokenization
+        outside the lock. This method is only called if someone
+        invokes it directly.
+        """
         slots = self.max_batch_size - len(self._active)
         if slots <= 0 or not self._waiting:
             return

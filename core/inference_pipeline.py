@@ -279,11 +279,13 @@ class InferencePipeline:
                 self.start_rebalancing()
 
             # 12. Init continuous batcher + paged KV cache
-            self._init_continuous_batching()
+            # Skip when vLLM is the backend — it has its own batching engine
+            _backend_type = getattr(self.backend, 'backend_type', '')
+            if _backend_type != 'vllm':
+                self._init_continuous_batching()
 
             # 13. Init VRAM Lending Pool (cooperative GPU memory)
             # Skip when vLLM/llama.cpp manage their own VRAM
-            _backend_type = getattr(self.backend, 'backend_type', '')
             if self.num_gpus > 1 and _backend_type not in ('vllm', 'llamacpp'):
                 self._init_lending_pool()
 
@@ -1261,9 +1263,8 @@ class InferencePipeline:
                 fut.set_exception(e)
             return fut
 
-        # Start batcher if not running
-        if not self.continuous_batcher._running:
-            self.continuous_batcher.start()
+        # Start batcher if not running (thread-safe via batcher.start() lock)
+        self.continuous_batcher.start()
 
         return self.continuous_batcher.submit(
             prompt,
