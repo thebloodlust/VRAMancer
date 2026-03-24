@@ -1,5 +1,40 @@
 ## Changelog
 
+### 1.5.0 (2026-03-23) - Honest Engineering Release
+
+**Benchmarks & Performance (NEW):**
+- **Benchmarks tok/s publies** : GPT-2 (124M) -0.2%, TinyLlama-1.1B +7.9%, Mistral-7B +1.4% vs HuggingFace natif
+- Nouveau script `benchmarks/bench_tok_s.py` — subprocess-isolated, reproductible
+- Rapport complet dans `benchmarks/BENCHMARK_RESULTS.md`
+- Multi-GPU : documente comme bloque par TDR Xorg en VM (pas un bug VRAMancer)
+- vs vLLM : non teste (a faire)
+
+**Continuous Batcher (WIRED):**
+- `generate()` dans `inference_pipeline.py` route desormais vers le `ContinuousBatcher` quand il tourne
+- Auto-start via `VRM_CONTINUOUS_BATCHING=1` au chargement modele dans `PipelineRegistry`
+- Nouvelles env vars : `VRM_CONTINUOUS_BATCHING`, `VRM_GENERATE_TIMEOUT`
+
+**Rust Bypass (CORRECTED):**
+- Corrige faux claim "6-14x" en vrais 1.3-1.6x dans `VRAMANCER_RUST_BYPASS.md`
+- L'ancien chiffre etait un artefact du cache driver NVIDIA
+- `GpuPipeline` persistent class pour transferts >1MB
+
+**Dead Code Cleanup:**
+- 19 fichiers deplaces vers `_deprecated/` (deepspeed, tensorrt, anciens scripts)
+- 0 code mort dans `core/` apres audit exhaustif des 70 fichiers source
+
+**Documentation:**
+- Audit honnete de maturite : 48/70 modules production-ready, 22 utiles, 0 dead
+- `TODO.md` mis a jour avec dette technique reelle (aitp_fec stub, speculative_decoding non cable)
+- `copilot-instructions.md` complete avec benchmarks, maturite, pieges reels
+
+**Honnete — Ce Qui Ne Marche Pas Encore :**
+- `aitp_fec.py` pretend faire du Reed-Solomon mais fait du XOR simple
+- `speculative_decoding.py` a l'algorithme correct mais n'est cable a aucun backend
+- Aucun benchmark multi-GPU (TDR bloquant)
+- Aucun test de charge du continuous batcher
+- Aucune comparaison VRAMancer vs vLLM
+
 ### 1.1.0 (2025-10-15) - Production-Ready Release 🚀
 
 **Major Changes:**

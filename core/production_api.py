@@ -22,7 +22,7 @@ from core.logger import get_logger
 
 # Import extracted sub-modules
 from core.api.registry import PipelineRegistry
-from core.api.validation import validate_generation_params, count_tokens
+from core.api.validation import validate_generation_params, validate_prompt, count_tokens
 from core.api.routes_ops import register_ops_blueprint
 
 # Logger
@@ -72,7 +72,7 @@ def create_app(model_name: Optional[str] = None,
     model_name : str, optional
         If provided, load the model at startup.
     backend : str
-        Backend to use (auto, huggingface, vllm, ollama).
+        Backend to use (auto, huggingface, vllm, ollama, llamacpp).
     num_gpus : int, optional
         Number of GPUs (auto-detect if None).
 
@@ -334,15 +334,12 @@ def _register_routes(application: Flask, _run_with_timeout, queue_depth, queue_l
         """OpenAI-compatible completion endpoint."""
         data = request.get_json(silent=True) or {}
         prompt = data.get('prompt', '')
-        if len(prompt) > 32768:
-            return jsonify({"error": "prompt exceeds 32KB limit"}), 400
+        prompt_err = validate_prompt(prompt)
+        if prompt_err:
+            return jsonify({'error': prompt_err[0]}), prompt_err[1]
         data['max_tokens'] = min(data.get('max_tokens', 128), 8192)
-        prompt = data.get('prompt', '')
         model_name = data.get('model')
         stream = data.get('stream', False)
-
-        if not prompt:
-            return jsonify({'error': 'Missing "prompt" field'}), 400
 
         params, val_err = _validate_generation_params(data)
         if val_err:
@@ -497,8 +494,9 @@ def _register_routes(application: Flask, _run_with_timeout, queue_depth, queue_l
         messages = data.get('messages', [])
         
         full_len = sum(len(str(m.get('content', ''))) for m in messages)
-        if full_len > 65536:
-            return jsonify({"error": "messages exceed 64KB limit"}), 400
+        from core.api.validation import _MAX_PROMPT_LENGTH
+        if full_len > _MAX_PROMPT_LENGTH:
+            return jsonify({"error": f"messages exceed {_MAX_PROMPT_LENGTH} char limit"}), 413
         data['max_tokens'] = min(data.get('max_tokens', 128), 8192)
 
         model_name = data.get('model')
@@ -1013,7 +1011,7 @@ def main():
     parser.add_argument("--model", type=str, default=None,
                         help="Pre-load a model at startup")
     parser.add_argument("--backend", type=str, default="auto",
-                        help="LLM backend (auto, huggingface, vllm, ollama)")
+                        help="LLM backend (auto, huggingface, vllm, ollama, llamacpp)")
     parser.add_argument("--gpus", type=int, default=None,
                         help="Number of GPUs to use")
     parser.add_argument("--host", type=str, default=None)

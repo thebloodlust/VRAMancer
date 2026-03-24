@@ -8,29 +8,39 @@ Ce fichier documente les avancées majeures de `vramancer_rust`, le module Rust 
 
 **La solution VRAMancer :** Appel direct à `cuMemcpyDtoD_v2` via la CUDA Driver API depuis Rust, avec le GIL relâché (`py.allow_threads`). Le driver NVIDIA gère le staging CPU **en interne**, de manière transparente et optimisée.
 
-### Résultats benchmarkés (RTX 3090 + RTX 5070 Ti, topologie PIX) :
+### Résultats benchmarkés (RTX 3090 ↔ RTX 5070 Ti, Proxmox VM, topologie PIX)
 
-| Taille | PyTorch `.to()` | Rust `cuMemcpyDtoD` | Speedup |
-|--------|----------------|---------------------|---------|
-| 1 MB   | 0.14 ms        | 0.02 ms            | **9x**  |
-| 10 MB  | 0.99 ms        | 0.07 ms            | **13x** |
-| 50 MB  | 4.77 ms        | 0.33 ms            | **14x** |
-| 100 MB | 9.49 ms        | 1.59 ms            | **6x**  |
-| 200 MB | 18.88 ms       | 12.90 ms           | **1.5x**|
+**Strategy 1.5 hybride** : DtoD pour petits transferts (≤1 MB), GpuPipeline persistent (double-buffered async + pinned memory) pour transferts >1 MB.
 
-### Fonctions CUDA implémentées (Rust FFI via `libloading`) :
-- `direct_vram_copy(src_ptr, dst_ptr, nbytes)` — `cuMemcpyDtoD_v2` (6-14x plus rapide)
+| Taille | PyTorch `.to()` | Rust DtoD / GpuPipeline | Speedup | Notes |
+|--------|----------------|------------------------|---------|-------|
+| 64 KB  | 0.14 ms        | 0.09 ms (DtoD)         | **1.6x** | Latency gain |
+| 256 KB | 0.19 ms        | 0.12 ms (DtoD)         | **1.6x** | Latency gain |
+| 1 MB   | 0.35 ms        | 0.27 ms (DtoD)         | **1.3x** | Latency gain |
+| 4 MB   | 1.05 ms        | 0.82 ms (GpuPipeline)  | **1.3x** | Throughput: ~4.9 GB/s |
+| 50 MB  | 4.8 ms         | 3.2 ms (GpuPipeline)   | **1.5x** | Peak: ~15.5 GB/s |
+| 200 MB | 18.9 ms        | 14.6 ms (GpuPipeline)  | **1.3x** | PCIe 4.0 limited |
+
+> **Note honnête :** Les résultats initiaux affichaient "6-14x" — c'était un artéfact du cache driver NVIDIA (les premières mesures ne reflétaient pas un vrai transfert PCIe). Les chiffres ci-dessus sont les résultats réels après correction, mesurés avec warm-up et synchronisation CUDA stricte.
+
+**Bande passante PCIe mesurée :**
+- RTX 3090 (PCIe 4.0 x16) : 24.5 GB/s théorique, ~11 GB/s réel en VM (overhead VFIO ~10-15%)
+- RTX 5070 Ti (PCIe 5.0 x16) : 27 GB/s théorique, ~11 GB/s réel en VM
+
+### Fonctions CUDA (Rust FFI via `libloading`) :
+- `direct_vram_copy(src_ptr, dst_ptr, nbytes)` — `cuMemcpyDtoD_v2` (1.3-1.6x plus rapide)
 - `staged_gpu_transfer(src, dst, bytes, gpu0, gpu1, chunk)` — double-buffered avec pinned memory
 - `inject_to_vram_ptr(payload, dest_ptr)` — `cuMemcpyHtoD_v2` direct bytes→VRAM
+- `GpuPipeline(src_gpu, dst_gpu, chunk_size)` — objet persistent avec streams/events/pinned buffers pré-alloués
 
 ### Intégrité des données vérifiée ✓
 Tous les transferts vérifient `torch.allclose(source.cpu(), dest.cpu())` — zéro corruption.
 
-### Intégration : `transfer_manager.py` → Strategy 1.5
+### Intégration : `transfer_manager.py` → Strategy 1.5 hybride
 ```
 Strategy 0: Cross-vendor bridge (AMD ↔ NVIDIA)
 Strategy 1: CUDA P2P direct (NVLink/PCIe, blocked on consumer)
-Strategy 1.5: ★ Rust cuMemcpyDtoD bypass (GIL released, 6-14x faster) ★
+Strategy 1.5: ★ Rust bypass hybride (DtoD ≤1MB, GpuPipeline >1MB, 1.3-1.6x) ★
 Strategy 2: ReBAR pipelined (double-buffered Python)
 Strategy 3: NCCL (distributed mode only)
 Strategy 4: CPU-staged PyTorch fallback
@@ -61,4 +71,4 @@ cd rust_core && maturin develop --release
 ```
 
 ---
-*18 fonctions PyO3, 645 tests passés, 0 échec.*
+*19 fonctions PyO3 + GpuPipeline persistent, 645 tests passés, 0 échec. Chiffres corrigés après suppression de l'artéfact cache driver.*

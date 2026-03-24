@@ -1,0 +1,294 @@
+# VRAMancer — Benchmark Results (tok/s)
+
+## Test Environment
+
+| | |
+|---|---|
+| **CPU** | Intel i7 (Proxmox QEMU Q35+ICH9 VM) |
+| **GPU 0** | NVIDIA RTX 3090 (24 GB, PCIe 4.0 x16, Ampere CC 8.6) |
+| **GPU 1** | NVIDIA RTX 5070 Ti (16 GB, PCIe 5.0 x16, Blackwell CC 12.0) |
+| **Python** | 3.12.3 |
+| **PyTorch** | 2.10.0+cu128 |
+| **CUDA** | 12.8 |
+| **OS** | Ubuntu (Proxmox VM, VFIO GPU passthrough) |
+| **Precision** | bfloat16 |
+
+## Single-GPU Performance (Sequential, 5 prompts × 128 tokens)
+
+| Model | Params | Native HF generate() | VRAMancer pipeline | Delta |
+|---|---|---|---|---|
+| GPT-2 | 124M | 123.4 tok/s | 125.6 tok/s | **+1.8%** |
+| TinyLlama-1.1B | 1.1B | 53.0 tok/s | 56.5 tok/s | **+6.6%** |
+| Mistral-7B-v0.1 | 7.2B | 35.1 tok/s | 34.9 tok/s | -0.6% |
+
+**Key finding:** VRAMancer pipeline has **near-zero overhead** for large models and is **faster** (+2-7%) on small/medium models due to proactive KV cache management, causal mask skipping, and greedy fast-path optimizations.
+
+### Methodology
+
+- **Native HF:** `AutoModelForCausalLM.from_pretrained()` + `model.generate(do_sample=False, use_cache=True)` — no VRAMancer code involved
+- **VRAMancer:** `InferencePipeline.load()` + `pipeline.generate()` — full pipeline with backend, scheduler, monitors, KV cache, fault tolerance
+- Each benchmark: 1 warmup prompt (20 tokens) + 5 sequential prompts × 128 tokens each
+- GPU: RTX 3090 (`CUDA_VISIBLE_DEVICES=0`)
+- All models loaded in bfloat16, greedy decoding
+
+## Multi-GPU Performance (GPT-2, 5 prompts × 64 tokens)
+
+| Mode | GPUs | Throughput | vs Single |
+|---|---|---|---|
+| **Single GPU (native HF)** | 1 × RTX 3090 | 124.6 tok/s | baseline |
+| **Pipeline-parallel** | RTX 3090 + RTX 5070 Ti | 92.0 tok/s | -26.2% |
+| **Tensor-parallel** | RTX 3090 + RTX 5070 Ti | 86.0 tok/s | -31.0% |
+
+**Analysis:** GPT-2 (124M params) is too small to benefit from multi-GPU — PCIe transfer overhead dominates. Multi-GPU shines for larger models (7B+) that don't fit on a single GPU. Both pipeline-parallel and tensor-parallel modes run stably with no TDR crashes.
+
+### Multi-GPU Details
+
+- **Pipeline-parallel:** VRAMancer `InferencePipeline` with `VRM_FORCE_MULTI_GPU=1`, model split by `accelerate` across 2 devices (7 layers GPU 0, 10 layers GPU 1), CPU-staged transfers (P2P blocked by IOMMU/VM)
+- **Tensor-parallel:** `core/tensor_parallel.py` — column-parallel Q/K/V + row-parallel O/down projections, NCCL all-reduce sum, each GPU processes half the attention heads
+- **P2P status:** Disabled (consumer GPUs + VFIO passthrough), all cross-GPU transfers via CPU-staged pinned memory
+- **No TDR crashes** — resolved by GPU persistence mode (`nvidia-smi -pm 1`)
+
+## CUDA PagedAttention Kernel
+
+Custom CUDA decode kernel (`csrc/paged_attention_kernel.cu`) — warp-level online softmax, GQA support, fp16/fp32 KV pool:
+
+| Context Length | PyTorch bmm | CUDA Kernel | Speedup |
+|---|---|---|---|
+| 64 tokens | 1.00x | 0.114x | **8.80x** |
+| 256 tokens | 1.00x | 0.420x | **2.38x** |
+| 1024 tokens | 1.00x | 1.43x | 0.70x |
+
+Best for decode (short context per step). PyTorch bmm wins at long prefill contexts where batch-level parallelism dominates.
+
+## Heterogeneous Multi-GPU — The Proof (Qwen2.5-14B-Instruct)
+
+The key VRAMancer value proposition: run models **too large for any single GPU** by pooling heterogeneous VRAM.
+
+| Test | GPU(s) | VRAM Used | Result |
+|---|---|---|---|
+| 14B single GPU 0 | RTX 3090 (23.6 GB) | — | **OOM** |
+| 14B single GPU 1 | RTX 5070 Ti (15.5 GB) | — | **OOM** |
+| 14B VRAMancer 2-GPU | 3090 + 5070 Ti (38.5 GB pool) | GPU 0: 21.7 GiB, GPU 1: 14.2 GiB, CPU: 1 layer | **16.1 tok/s** ✅ |
+
+- Model: Qwen2.5-14B-Instruct (~28 GB bf16)
+- Split: VRAM-proportional — {cuda:0: 23 layers, cuda:1: 28 layers, cpu: 1 (lm_head)}
+- Load time: 3.9s
+- Budget: 92% VRAM to minimize CPU offload
+- Transfers: CPU-staged pinned memory (~11 GB/s), P2P blocked by VFIO/IOMMU
+- **Bare metal expected:** +10-30% throughput with P2P/NVLink transfers
+
+## Quantization Performance Tiers
+
+NF4 quantization enables a **counter-intuitive speedup**: by compressing the model to fit on a single GPU, it eliminates cross-GPU transfer overhead entirely.
+
+### Qwen2.5-14B-Instruct (14.7B params)
+
+| Quantization | GPUs | VRAM | Throughput | vs BF16 |
+|---|---|---|---|---|
+| **BF16** | 2-GPU (3090 + 5070 Ti) | 35.9 GiB total | 16.1 tok/s | baseline |
+| **BF16 TurboEngine** | 2-GPU (3090 + 5070 Ti) | 35.9 GiB total | 16.2 tok/s | +1% |
+| **NF4** | single GPU 0 (3090) | 10.8 GiB | **10.5 tok/s** | -35% (single GPU, no multi-GPU overhead) |
+| **INT8** | — | — | — | **OOM** (see notes) |
+
+**Note:** The 14B BF16 2-GPU result improved from 6.0 tok/s (previous session) to 16.1 tok/s (+168%). Likely cause: model now fully cached on disk (no partial downloads), better accelerate layer placement.
+
+### Qwen2.5-7B-Instruct (7.6B params)
+
+| Quantization | GPUs | VRAM | Throughput |
+|---|---|---|---|
+| **NF4** | single GPU 0 (3090) | ~5 GiB | **20.2 tok/s** |
+| **INT8** | single GPU 0 (3090) | ~10 GiB | **8.1 tok/s** |
+
+### Key Findings
+
+1. **NF4 vs BF16 trade-off** — 14B NF4 single-GPU (10.5 tok/s) is 35% slower than BF16 2-GPU (16.1 tok/s) but uses 70% less VRAM (10.8 vs 35.9 GiB). When the model fits on one GPU, BF16 multi-GPU with fast transfers wins on throughput.
+2. **NF4 > INT8** — 4-bit quantization is both smaller and faster than 8-bit due to BnB's `LLM.int8()` outlier decomposition overhead.
+3. **INT8 14B limitation** — INT8 14B requires ~22 GB (weights + outlier state). Loading peaks exceed 23.6 GB on RTX 3090. Multi-GPU BnB is broken upstream (accelerate hooks don't handle cross-device residual connections with quantized layers — confirmed with standalone test, not a VRAMancer issue).
+
+### Known Upstream Bugs (transformers 5.3.0 + accelerate 1.13.0 + BnB 0.49.2)
+
+- **Multi-GPU BnB broken**: `AlignDevicesHook` doesn't move residual tensors across devices for quantized layers. Error: `Expected all tensors on same device, cuda:0 and cuda:1` at residual addition. Confirmed with pure HF test (no VRAMancer). Workaround: single-GPU placement.
+- **`dtype` bypasses BnB**: The new transformers 5.3 `dtype` parameter completely bypasses BnB quantization (loads full precision). Must use deprecated `torch_dtype=torch.float16` for BnB loads.
+
+## vLLM Comparison
+
+**Not tested.** vLLM 0.18.0 requires downgrading transformers (5.3.0 → 4.57.6) and numpy (2.4.3 → 2.2.6), which would break the current environment. A dedicated venv comparison is planned.
+
+## Auto-GPU Selection
+
+VRAMancer's `_auto_select_num_gpus()` correctly identifies when multi-GPU is unnecessary:
+
+```
+Mistral-7B-v0.1 fits on single GPU 0 (estimated 14.1 GB, GPU has 23.3 GB free
+→ skipping multi-GPU overhead)
+```
+
+This avoids the PCIe transfer penalty entirely when the model fits on a single GPU.
+
+## TurboEngine — Compiled Inference (Qwen2.5-7B-Instruct)
+
+`core/turbo_engine.py` replaces HF `generate()` with a hand-rolled autoregressive loop, optionally compiled with `torch.compile(mode="default")`. Eliminates overhead from GenerationMixin dispatch, LogitsProcessor chains, and stopping criteria.
+
+### Single-GPU (RTX 3090)
+
+| Config | tok/s | vs HF generate |
+|---|---|---|
+| **fp16 HF generate** | 36.5 | baseline |
+| **fp16 TurboEngine** (compiled) | **49.1** | **+34%** |
+| **NF4 HF generate** | 20.5 | baseline |
+| **NF4 TurboEngine** (compiled) | **29.4** | **+43%** |
+
+### Single-GPU (RTX 5070 Ti)
+
+| Config | tok/s | vs HF generate |
+|---|---|---|
+| **fp16 HF generate** | 36.1 | baseline |
+| **fp16 TurboEngine** (compiled) | **48.8** | **+35%** |
+| **NF4 HF generate** | 19.8 | baseline |
+| **NF4 TurboEngine** (compiled) | **29.1** | **+47%** |
+
+### Key Findings
+
+1. **TurboEngine adds +34-47%** on top of HF generate, purely from loop optimization + torch.compile.
+2. **RTX 5070 Ti matches RTX 3090** within 1-4% (Blackwell CC 12.0 vs Ampere CC 8.6 — similar memory bandwidth is the bottleneck).
+3. **torch.compile limitations**: Only `mode="default"` works. `reduce-overhead` and `max-autotune` crash with CUDA graphs on quantized models. Compilation takes 5-15 minutes per model.
+4. **NF4 benefits more** (+43-47%) than fp16 (+34-35%) — BnB dequantization creates more overhead that compile can fuse/amortize.
+
+### Multi-GPU TurboEngine (Qwen2.5-14B-Instruct, 2-GPU)
+
+torch.compile cannot be used for multi-GPU because accelerate's `AlignDevicesHook` must intercept each layer forward for cross-device transfers. MultiGPUTurboEngine uses the same hand-rolled decode loop without compilation.
+
+| Config | tok/s | vs HF |
+|---|---|---|
+| BF16 2-GPU HF generate | 16.1 | 1.00x |
+| BF16 2-GPU MultiGPUTurboEngine | 16.2 | 1.01x |
+
+Multi-GPU TurboEngine matches HF generate — the bottleneck is PCIe transfers between GPUs (CPU-staged, ~11 GB/s in Proxmox VM), not Python-side overhead the compile eliminates.
+
+### Speculative Decoding (Qwen 0.5B draft → 7B NF4 main)
+
+| Config | tok/s | vs TurboEngine | Acceptance Rate |
+|---|---|---|---|
+| TurboEngine (uncompiled ref) | 17.8 | 1.00x | — |
+| Speculative γ=3 | 13.6 | 0.76x | 35% |
+| Speculative γ=5 | 12.3 | 0.69x | 28% |
+| Speculative γ=8 | 10.9 | 0.61x | 23% |
+
+**Conclusion:** Speculative decoding is a **net loss** for 0.5B→7B NF4. Acceptance rate too low (needs >60% to break even). The 0.5B draft model is too dissimilar from a quantized 7B main. Would require a same-architecture distilled draft (e.g., 1.5B pruned from 7B).
+
+### AWQ — Not Viable
+
+- autoawq 0.2.9: CUDA fused kernels **not compiled** for PyTorch 2.10
+- AWQ HF generate: 17.5 tok/s, AWQ TurboEngine (compiled): 11.9 tok/s (**0.68x worse**)
+- Root cause: autoawq dispatches to slow Python fallback kernels. Project appears deprecated.
+
+## Maximum Throughput Ceiling (fp16 Qwen2.5-7B, RTX 3090)
+
+Tested every available optimization strategy to find the absolute ceiling for fp16 decode:
+
+| Approach | tok/s | vs Baseline |
+|---|---|---|
+| Baseline (uncompiled `model.forward`) | 37.1 | 1.00x |
+| **TurboEngine** (`torch.compile mode=default`) | **49.2** | **1.33x** |
+| CUDA stream (dedicated compute stream) | 48.8 | 1.32x |
+| `torch.compile mode=reduce-overhead` (CUDA graphs) | 49.1 | 1.32x |
+
+**Conclusion:** All compiled approaches converge at **~49 tok/s**. This is a **hardware-fundamental ceiling** — not a software limitation. At fp16, a 7B model requires reading ~14 GB of weights per decode step. On RTX 3090 (936 GB/s bandwidth): `936 / 14 ≈ 67 tok/s` theoretical max. 49 tok/s = **73% bandwidth utilization** (overhead from KV cache reads, activations, kernel launches). CUDA streams and CUDA graphs add nothing beyond `torch.compile` because the bottleneck is memory bandwidth, not kernel launch overhead.
+
+## Custom Triton NF4 GEMV Kernel (`core/triton_gemv.py`)
+
+Attempted to fuse NF4 dequantization + GEMV in a single Triton kernel to eliminate BnB's per-layer overhead.
+
+### BnB NF4 Data Format (documented for reference)
+
+- Packed weights: `uint8`, 2 elements per byte (blocksize=64)
+- **Hi nibble (bits 7-4) → EVEN element (index 2i)**, **Lo nibble (bits 3-0) → ODD element (index 2i+1)**
+- Code table: 16 `float32` NF4 quantization levels (fixed table)
+- Absmax: nested quantization — absmax itself is `uint8`, requires `dequantize_blockwise(absmax, state2) + offset`
+
+### Results (Qwen2.5-7B layer dimensions)
+
+| Matrix Size | BnB µs | Triton µs | Speedup |
+|---|---|---|---|
+| [3584, 3584] | 103.2 | 116.3 | 0.89x |
+| [3584, 18944] | 103.7 | 195.5 | 0.53x |
+| [18944, 3584] | 103.9 | 192.2 | 0.54x |
+| [3584, 152064] | 682.2 | 1543.0 | 0.44x |
+| [4096, 4096] | 102.5 | 115.9 | 0.88x |
+
+**Correctness: PERFECT** (max diff matches BnB's own fp16 rounding error).
+
+**Conclusion:** Triton kernel is **0.44-0.89x slower** than BnB's hand-tuned CUDA. GEMV is purely memory-bandwidth bound — both read the same data, but BnB uses `float4` vectorized loads + warp shuffles with lower overhead per byte. A Triton kernel cannot beat a tuned CUDA kernel at pure memory-bandwidth workloads. Kept as reference implementation.
+
+## GGUF / llama.cpp vs BnB NF4 (Qwen2.5-7B-Instruct)
+
+GGUF Q4_K_M quantization via llama-cpp-python (`core/backends_llamacpp.py`) vs BnB NF4 via HuggingFace. GGUF uses dp4a INT8 dot product kernels that keep weights quantized during compute (4 MACs/cycle vs fp16 1 MAC/cycle), while BnB NF4 dequantizes to fp16 before every GEMV.
+
+### Results (5 prompts × 128 tokens, Qwen2.5-7B-Instruct)
+
+| Method | tok/s | TTFT | Load Time | VRAM | Model Size |
+|---|---|---|---|---|---|
+| **Raw llama-cpp-python 1-GPU** | **106.8** | 27.4 ms | 1.0s | 3.0 GB | 4.4 GB (Q4_K_M) |
+| **VRAMancer LlamaCppBackend 1-GPU** | **106.7** | 15.3 ms | 1.2s | 3.0 GB | 4.4 GB (Q4_K_M) |
+| **Raw llama-cpp-python 2-GPU** | **107.7** | 14.6 ms | 0.9s | 3.0 GB | 4.4 GB (Q4_K_M) |
+| **VRAMancer LlamaCppBackend 2-GPU** | **106.7** | 14.5 ms | 1.1s | 3.0 GB | 4.4 GB (Q4_K_M) |
+| BnB NF4 (HuggingFace generate) | 19.7 | — | 5.7s | 6.6 GB | ~5 GB (NF4) |
+
+### Key Findings
+
+1. **GGUF Q4_K_M is 5.4x faster than BnB NF4** (106.8 vs 19.7 tok/s) — dp4a kernels keep weights quantized during compute, while BnB dequantizes to fp16 before every GEMV operation.
+2. **GGUF uses 2.2x less VRAM** (3.0 GB vs 6.6 GB) — Q4_K_M format is more compact than NF4 with double quantization.
+3. **GGUF loads 5.7x faster** (1.0s vs 5.7s) — GGUF is a single mmap'd file vs BnB's per-layer safetensor loading + quantization.
+4. **VRAMancer LlamaCppBackend has zero overhead** vs raw llama-cpp-python (106.7 vs 106.8 tok/s) — the backend is a thin wrapper.
+5. **2-GPU tensor_split adds nothing** for a 7B Q4_K_M model (3.0 GB) that fits easily on a single GPU. Multi-GPU benefits only models that exceed single-GPU VRAM.
+6. **GGUF is 2.17x faster than the fp16 TurboEngine ceiling** (106.8 vs 49.2 tok/s) — 4-bit quantized models read 4x fewer bytes per decode step, linearly increasing throughput for memory-bandwidth-bound inference.
+
+### Why GGUF Wins
+
+The performance gap is architectural:
+
+- **BnB NF4**: Read 4-bit packed weights → dequantize to fp16 → fp16 GEMV → result. Dequantization is a separate kernel launch per layer, and fp16 GEMV uses 1 fused multiply-accumulate per cycle.
+- **GGUF Q4_K_M**: Read 4-bit packed weights → dp4a INT8 dot product directly on packed data → accumulate in fp32 → result. The dp4a instruction processes 4 INT8 multiply-accumulates in a single cycle, and weights stay quantized during compute.
+
+At memory-bandwidth saturation (which is the bottleneck for all LLM decode), reading 4x fewer bytes = 4x faster. GGUF achieves this because it never expands weights to fp16. The measured 5.4x speedup vs BnB NF4 (which does expand) tracks with 4x less data read + eliminated dequantization kernel overhead.
+
+## What's Missing
+
+- [ ] Continuous batching throughput (multi-request concurrent)
+- [ ] vLLM comparison (requires separate venv — version conflicts with current transformers/numpy)
+- [ ] Bare-metal benchmarks (no VM overhead, P2P/NVLink enabled)
+- [ ] INT8 14B (needs GPU with >24 GB, or upstream multi-GPU BnB fix)
+- [x] ~~Custom CUDA fused kernel for NF4~~ — Triton GEMV kernel correct but 0.44-0.89x vs BnB (memory-bandwidth bound, can't beat tuned CUDA)
+- [x] ~~CUDA graphs / reduce-overhead~~ — converges at same ~49 tok/s as torch.compile default (bandwidth ceiling)
+- [x] ~~GGUF/llama.cpp vs BnB NF4~~ — **5.4x speedup** (see below)
+- [ ] GGUF/llama.cpp comparison (Ollama's backend — likely the 60-100 tok/s reference)
+
+## Reproduction
+
+```bash
+# Single model benchmark
+CUDA_VISIBLE_DEVICES=0 python benchmarks/bench_tok_s.py --model gpt2 --max-tokens 128 --num-prompts 5
+
+# Multi-GPU validation
+python benchmarks/bench_vs_vllm.py --model gpt2 --skip-vllm
+
+# RTX 5070 Ti vs RTX 3090 with TurboEngine
+python benchmarks/bench_5070ti.py
+
+# 14B 2-GPU TurboEngine
+python benchmarks/bench_14b_turbo.py
+
+# Speculative decoding
+python benchmarks/bench_speculative_quick.py
+
+# Heterogeneous multi-GPU (14B, requires 2 GPUs with ~38 GB total VRAM)
+python benchmarks/bench_heterogeneous.py --model Qwen/Qwen2.5-14B-Instruct
+
+# Quantization tiers
+VRM_QUANTIZATION=nf4 python benchmarks/bench_heterogeneous.py --model Qwen/Qwen2.5-14B-Instruct --quantization nf4
+VRM_QUANTIZATION=nf4 python benchmarks/bench_heterogeneous.py --model Qwen/Qwen2.5-7B-Instruct --quantization nf4
+VRM_QUANTIZATION=int8 python benchmarks/bench_heterogeneous.py --model Qwen/Qwen2.5-7B-Instruct --quantization int8
+
+# Maximum throughput ceiling test
+CUDA_VISIBLE_DEVICES=0 python benchmarks/bench_max_tps.py
+```

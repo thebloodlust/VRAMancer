@@ -5,8 +5,12 @@ behind a reentrant lock so concurrent Flask requests are safe.
 """
 from __future__ import annotations
 
+import logging
+import os
 import threading
 from typing import Any, Optional
+
+_logger = logging.getLogger("vramancer.registry")
 
 
 class PipelineRegistry:
@@ -55,6 +59,14 @@ class PipelineRegistry:
                 backend_name=backend, verbose=verbose
             )
             self._pipeline.load(model_name, num_gpus=num_gpus, **kwargs)
+
+            # Auto-start continuous batcher for API serving
+            if os.environ.get("VRM_CONTINUOUS_BATCHING", "").strip() == "1":
+                if self._pipeline.continuous_batcher is not None:
+                    self._pipeline.continuous_batcher.start()
+                    _logger.info(
+                        "Continuous batcher auto-started (VRM_CONTINUOUS_BATCHING=1)"
+                    )
 
     def shutdown(self):
         with self._lock:

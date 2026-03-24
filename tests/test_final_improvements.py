@@ -155,7 +155,10 @@ class TestSecurityHeaders:
         app = self._make_app()
         with app.test_client() as c:
             resp = c.get('/health', headers={'X-API-TOKEN': 'testtoken'})
-            assert resp.headers.get('Content-Security-Policy') == "default-src * 'unsafe-inline' 'unsafe-eval' data: blob:;"
+            csp = resp.headers.get('Content-Security-Policy')
+            assert "default-src 'self'" in csp
+            assert "'unsafe-eval'" not in csp
+            assert "'unsafe-inline'" in csp
 
     def test_no_acao_without_origin(self):
         """Without Origin header, Access-Control-Allow-Origin should NOT be set."""
@@ -229,7 +232,7 @@ class TestSecurityPackage:
     def test_submodules_accessible(self):
         """Security submodules should be importable (skip if deps missing)."""
         import importlib
-        for name in ('remote_access',):
+        for name in ('startup_checks',):
             mod = importlib.import_module(f'core.security.{name}')
             assert mod is not None
 

@@ -375,10 +375,20 @@ class FastNVMeTransfer:
 
 class HierarchicalMemoryManager:
     """Hyperviseur L1-L7 pour VRAM distribuée.
-    
-    Traque où se trouve chaque `block_id`. Intercepte les accès et orchestre
-    les pre-fetches asynchrones via le VTP C++ backend."""
-    def __init__(self, nvme_dir: str = ".hm_cache", max_nvme_mb: int = 2048, decay_half_life_s: float = 60.0):
+
+    6 niveaux actifs intégrés au VRAMLendingPool :
+      L1 : VRAM GPU primaire (accès direct)
+      L2 : VRAM GPUs secondaires — emprunts via VRAMLendingPool
+      L3 : RAM hôte locale (Pinned DRAM)
+      L4 : RAM distante (réseau)
+      L5 : NVMe Local (O_DIRECT / FastNVMe)
+      L6 : Disque réseau distant / fallback
+
+    L1↔L2 : géré par VRAMLendingPool (lease-based, auto-reclaim)
+    L2→L3 / L3→L5 : migration physique réelle (tensor.cpu(), NVMe spill)
+    """
+    def __init__(self, nvme_dir: str = ".hm_cache", max_nvme_mb: int = 2048,
+                 decay_half_life_s: float = 60.0, lending_pool=None):
         self.log = LoggerAdapter("hmem.v2")
         self.nvme_dir = Path(nvme_dir)
         
@@ -395,12 +405,18 @@ class HierarchicalMemoryManager:
         self.registry: dict[str, dict[str, Any]] = {}
         # Tensor registry: block_id -> tensor
         self._tensor_registry: dict[str, Any] = {}
+        # Lease registry: block_id -> VRAMLease (for L2 lending)
+        self._lease_registry: dict[str, Any] = {}
         # Hotness hybride
         self._hot_scores: dict[str, float] = {}
         self._last_touch: dict[str, float] = {}
         self._decay_half_life = decay_half_life_s
         self._prefetch_queue: List[str] = []
-        
+
+        # VRAMLendingPool integration (L1↔L2 cooperative lending)
+        self._lending_pool = lending_pool
+        self._init_lending_pool()
+
         # Lier au backend C++ VTP si dispo
         self._vtp_backend = None
         self._init_vtp()
@@ -420,6 +436,19 @@ class HierarchicalMemoryManager:
         # Eviction Balancer Thread (CPU RAM <-> NVMe)
         self._balancing = True
         _thr.Thread(target=self._cpu_nvme_balancer_loop, daemon=True, name="L4_L5_Balancer").start()
+
+    def _init_lending_pool(self):
+        """Connect to or create the VRAMLendingPool for L1↔L2 cooperative GPU memory."""
+        if self._lending_pool is not None:
+            self.log.info("VRAMLendingPool injected (L1↔L2 cooperative lending active)")
+            return
+        try:
+            from core.vram_lending import get_lending_pool
+            self._lending_pool = get_lending_pool()
+            self.log.info("VRAMLendingPool connected (L1↔L2 cooperative lending active)")
+        except Exception as e:
+            self.log.debug(f"VRAMLendingPool unavailable: {e}")
+            self._lending_pool = None
     
     def _cpu_nvme_balancer_loop(self):
         """Monitors system RAM (L4) and proactively evicts cold blocks to NVMe (L5) to prevent OOM."""
@@ -547,12 +576,13 @@ class HierarchicalMemoryManager:
     def _execute_physical_move(self, block: MemoryBlock, prev: Tier, target: Tier, tensor: Any) -> Any:
         """Execute the actual data movement between tiers."""
         try:
-            # L1 <-> L2: inter-GPU transfer via NCCL/P2P
+            # L1 <-> L2: inter-GPU transfer via lending pool / NCCL/P2P
             if prev in {"L1", "L2"} and target in {"L1", "L2"}:
                 return self._move_inter_gpu(block, tensor, target)
 
-            # L1/L2 -> L3: GPU to CPU
+            # L1/L2 -> L3: GPU to CPU — release any lending lease first
             if prev in {"L1", "L2"} and target == "L3":
+                self._release_block_lease(block.id)
                 return self._move_gpu_to_cpu(tensor)
 
             # L3 -> L1/L2: CPU to GPU
@@ -569,24 +599,58 @@ class HierarchicalMemoryManager:
         return tensor
 
     def _move_inter_gpu(self, block: MemoryBlock, tensor: Any, target: Tier) -> Any:
-        """Move tensor between GPUs using TransferManager (NCCL/P2P).
+        """Move tensor between GPUs using VRAMLendingPool (L1↔L2) or TransferManager.
 
-        Returns the tensor ON THE TARGET GPU (not the source).
+        When moving to L2 (secondary GPU), creates a lending lease so the
+        source GPU can reclaim the memory when needed. When promoting back
+        to L1, releases the lease.
         """
+        src_gpu = tensor.device.index if hasattr(tensor, 'device') and tensor.device.index is not None else 0
+        dst_gpu = 0 if target == "L1" else (block.gpu_id if block.gpu_id != src_gpu else 1)
+
+        # Use VRAMLendingPool for L2 leasing
+        if self._lending_pool is not None and target == "L2":
+            try:
+                import torch as _torch
+                nbytes = tensor.numel() * tensor.element_size()
+                lease = self._lending_pool.borrow(
+                    borrower_gpu=src_gpu,
+                    size_bytes=nbytes,
+                    purpose=f"hmem_block_{block.id[:8]}",
+                    priority=1,
+                    preferred_lender=dst_gpu,
+                )
+                if lease is not None:
+                    dst_tensor = tensor.to(f"cuda:{lease.owner_gpu}", non_blocking=True)
+                    lease.tensor_ref = dst_tensor
+                    self._lease_registry[block.id] = lease
+                    self.log.debug(
+                        f"L1→L2 via lending: GPU {src_gpu}→GPU {lease.owner_gpu} "
+                        f"({nbytes / 1e6:.1f}MB, lease={lease.lease_id})"
+                    )
+                    return dst_tensor
+            except Exception as e:
+                self.log.debug(f"Lending borrow failed: {e}, fallback to TransferManager")
+
+        # Release lending lease when promoting back to L1
+        if self._lending_pool is not None and target == "L1" and block.id in self._lease_registry:
+            try:
+                lease = self._lease_registry.pop(block.id)
+                self._lending_pool.release(lease.lease_id)
+                self.log.debug(f"L2→L1: released lease {lease.lease_id}")
+            except Exception:
+                pass
+
+        # Fallback: TransferManager direct transfer
         try:
             from core.transfer_manager import TransferManager
             if not hasattr(self, '_transfer_mgr'):
                 self._transfer_mgr = TransferManager(verbose=False)
-            # Determine target GPU from block metadata or tier convention
-            # L1 = primary GPU (0), L2 = secondary GPU (1+)
-            src_gpu = tensor.device.index if hasattr(tensor, 'device') and tensor.device.index is not None else 0
-            dst_gpu = 0 if target == "L1" else (block.gpu_id if block.gpu_id != src_gpu else 1)
             result = self._transfer_mgr.send_activation(src_gpu, dst_gpu, tensor)
             self.log.debug(
                 f"Inter-GPU {src_gpu}->{dst_gpu}: "
                 f"{result.bytes_transferred / 1e6:.1f}MB, {result.bandwidth_gbps:.1f} Gbps"
             )
-            # Return tensor on the DESTINATION GPU
             import torch as _torch
             dst_tensor = tensor.to(f"cuda:{dst_gpu}", non_blocking=True)
             return dst_tensor
@@ -628,6 +692,18 @@ class HierarchicalMemoryManager:
         except ImportError:
             self.log.warning("FastHandle unavailable, skip network move")
         return tensor
+
+    def _release_block_lease(self, block_id: str) -> None:
+        """Release a VRAMLendingPool lease for a block being demoted off GPU."""
+        if self._lending_pool is None:
+            return
+        lease = self._lease_registry.pop(block_id, None)
+        if lease is not None:
+            try:
+                self._lending_pool.release(lease.lease_id)
+                self.log.debug(f"Released lending lease {lease.lease_id} for block {block_id[:8]}")
+            except Exception as e:
+                self.log.debug(f"Lease release failed: {e}")
 
     def _is_promotion(self, prev: Tier, target: Tier) -> bool:
         order = ["L6","L5","L4","L3","L2","L1"]  # plus lent → plus rapide
@@ -678,8 +754,10 @@ class HierarchicalMemoryManager:
         if acc >= 8:
             meta["access"] = 0
 
-    # --- NVMe spill (L5) --- CXL Software Bridge Enabled
+    # --- NVMe spill (L5) --- Direct binary I/O (GIL-bypassed via Rust if available)
     def spill_to_nvme(self, block: MemoryBlock, payload: Any):
+        # Release any lending lease before spilling to NVMe
+        self._release_block_lease(block.id)
         import torch
         if torch.is_tensor(payload):
             path = self.nvme_dir / f"{block.id}.cxl"
@@ -690,23 +768,20 @@ class HierarchicalMemoryManager:
             
             # Stockage des metadata sans pickle
             self.registry[block.id].setdefault("meta", {}).update({
-                "storage_type": "cxl_raw",
+                "storage_type": "raw_binary",
                 "shape": tuple(cpu_tensor.shape),
                 "dtype_str": str(cpu_tensor.dtype),
                 "device": "cpu"
             })
             
             try:
-                try:
-                    import vramancer_rust as cxl_ext
-                except ImportError:
-                    import software_cxl as cxl_ext
-                cxl_ext.cxl_direct_memory_dump(str(path), ptr, num_bytes)
+                import vramancer_rust
+                vramancer_rust.cxl_direct_memory_dump(str(path), ptr, num_bytes)
                 self.migrate(block, "L5")
-                self.log.debug(f"⚡ [CXL] Spill {block.id[:8]} -> NVMe ({num_bytes/1e6:.1f}MB) GIL-bypassed")
+                self.log.debug(f"⚡ [Direct I/O] Spill {block.id[:8]} -> NVMe ({num_bytes/1e6:.1f}MB) GIL-bypassed")
                 return
             except Exception as e:
-                self.log.warning(f"CXL Bridge fallback: {e}")
+                self.log.debug(f"Rust direct I/O unavailable: {e}")
                 
             try:
                 FastNVMeTransfer.save_tensor(path, payload)
@@ -725,11 +800,14 @@ class HierarchicalMemoryManager:
 
     def load_from_nvme(self, block: MemoryBlock) -> Any | None:
         meta = self.registry.get(block.id, {}).get("meta", {})
-        if meta.get("storage_type") == "cxl_raw":
+        if meta.get("storage_type") in ("raw_binary", "cxl_raw"):
             import torch
-            path = self.nvme_dir / f"{block.id}.cxl"
+            path = self.nvme_dir / f"{block.id}.bin"
             if not path.exists():
-                return None
+                # Backward compat: try old .cxl extension
+                path = self.nvme_dir / f"{block.id}.cxl"
+                if not path.exists():
+                    return None
                 
             dtype_map = {
                 "torch.float32": torch.float32, "torch.float16": torch.float16,
@@ -745,16 +823,13 @@ class HierarchicalMemoryManager:
             ptr = tensor.data_ptr()
             
             try:
-                try:
-                    import vramancer_rust as cxl_ext
-                except ImportError:
-                    import software_cxl as cxl_ext
-                cxl_ext.cxl_direct_memory_load(str(path), ptr, num_bytes)
+                import vramancer_rust
+                vramancer_rust.cxl_direct_memory_load(str(path), ptr, num_bytes)
                 self.migrate(block, "L3")
-                self.log.debug(f"⚡ [CXL] Reload {block.id[:8]} from NVMe ({num_bytes/1e6:.1f}MB) GIL-bypassed")
+                self.log.debug(f"⚡ [Direct I/O] Reload {block.id[:8]} from NVMe ({num_bytes/1e6:.1f}MB) GIL-bypassed")
                 return tensor
             except Exception as e:
-                self.log.warning(f"CXL reload fallback: {e}")
+                self.log.debug(f"Rust direct I/O unavailable: {e}")
                 
             try:
                 from core.tracing import get_tracer
@@ -793,28 +868,14 @@ class HierarchicalMemoryManager:
 
     # --- Eviction planner (lot B) ---
     def update_all_scores(self, current_time: float):
-        """Update all hotness scores using C++ extension if available."""
-        try:
-            import vramancer_vtp_c
-            # Prepare inputs for C++
-            access_counts = {bid: meta["access"] for bid, meta in self.registry.items()}
-            # C++ function returns updated scores
-            new_scores = vramancer_vtp_c.compute_hotness_scores(
-                access_counts,
-                self._last_touch,
-                current_time,
-                self._decay_half_life
-            )
-            self._hot_scores.update(new_scores)
-        except ImportError:
-            # Fallback to Python loop
-            decay_constant = 0.69314718056 / self._decay_half_life if self._decay_half_life > 0 else 0
-            import math
-            for bid, meta in self.registry.items():
-                count = meta["access"]
-                last_t = self._last_touch.get(bid, current_time)
-                dt = max(0.0, current_time - last_t)
-                self._hot_scores[bid] = count * math.exp(-decay_constant * dt)
+        """Update all hotness scores using exponential decay."""
+        decay_constant = 0.69314718056 / self._decay_half_life if self._decay_half_life > 0 else 0
+        import math
+        for bid, meta in self.registry.items():
+            count = meta["access"]
+            last_t = self._last_touch.get(bid, current_time)
+            dt = max(0.0, current_time - last_t)
+            self._hot_scores[bid] = count * math.exp(-decay_constant * dt)
 
     def eviction_cycle(self, target_free_pct: float = 10.0, vram_pressure: float | None = None):
         """Applique une politique d'éviction basée sur le hotness.
@@ -867,7 +928,21 @@ class HierarchicalMemoryManager:
         tiers: dict[str,int] = {k:0 for k in ["L1","L2","L3","L4","L5","L6"]}
         for meta in self.registry.values():
             tiers[meta["tier"]] += 1
-        return {"tiers": tiers, "count": len(self.registry)}
+        result: dict[str, Any] = {"tiers": tiers, "count": len(self.registry)}
+        # Include lending pool stats if available
+        if self._lending_pool is not None:
+            try:
+                result["lending"] = self._lending_pool.pool_capacity()
+            except Exception:
+                pass
+        # Include active leases count
+        result["active_leases"] = len(self._lease_registry)
+        return result
+
+    def set_lending_pool(self, pool) -> None:
+        """Inject or replace the VRAMLendingPool (for late-binding or testing)."""
+        self._lending_pool = pool
+        self.log.info("VRAMLendingPool %s", "set" if pool else "cleared")
 
     # --- Persistence (prod stricte) ---
     def save_state(self, path: str = ".hm_state.json"):
@@ -914,4 +989,4 @@ class HierarchicalMemoryManager:
         self.log.info("Memory tier benchmarking not available")
         return None
 
-__all__ = ["HierarchicalMemoryManager"]
+__all__ = ["HierarchicalMemoryManager", "FastNVMeTransfer", "Tier"]

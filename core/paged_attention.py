@@ -500,6 +500,8 @@ class PagedKVCacheManager:
 
         past_key_values: tuple of (key, value) per layer.
           key/value shape: [batch, num_kv_heads, seq_len, head_dim]
+
+        Optimized: uses vectorized page-level writes instead of per-token loops.
         """
         if self._gpu_pool is None or past_key_values is None:
             return
@@ -509,11 +511,25 @@ class PagedKVCacheManager:
             if entry is None:
                 entry = self.allocate(request_id)
 
-        num_layers = len(past_key_values)
-        seq_len = past_key_values[0][0].shape[2]  # [batch, heads, seq, dim]
+        try:
+            # Handle DynamicCache (transformers >= 4.36)
+            if hasattr(past_key_values, 'key_cache'):
+                num_layers = len(past_key_values.key_cache)
+                if num_layers == 0:
+                    return
+                seq_len = past_key_values.key_cache[0].shape[2]
+            else:
+                num_layers = len(past_key_values)
+                if num_layers == 0:
+                    return
+                seq_len = past_key_values[0][0].shape[2]
+        except (IndexError, AttributeError):
+            return
+
+        page_size = self.config.page_size
 
         # Ensure enough pages allocated
-        pages_needed = math.ceil(seq_len / self.config.page_size)
+        pages_needed = math.ceil(seq_len / page_size)
         with self._lock:
             while len(entry.pages) < pages_needed:
                 page_id = self._alloc_page()
@@ -524,18 +540,24 @@ class PagedKVCacheManager:
                 entry.pages.append(page_id)
             entry.num_tokens = seq_len
 
-        # Write KV into pages
+        # Vectorized write: one scatter per page instead of per-token
         for layer_idx in range(min(num_layers, self.config.num_layers)):
-            k = past_key_values[layer_idx][0][0]  # [heads, seq, dim]
-            v = past_key_values[layer_idx][1][0]
+            if hasattr(past_key_values, 'key_cache'):
+                k = past_key_values.key_cache[layer_idx][0]  # [heads, seq, dim]
+                v = past_key_values.value_cache[layer_idx][0]
+            else:
+                k = past_key_values[layer_idx][0][0]  # [heads, seq, dim]
+                v = past_key_values[layer_idx][1][0]
 
-            for token_idx in range(seq_len):
-                page_index = token_idx // self.config.page_size
-                slot = token_idx % self.config.page_size
-                if page_index < len(entry.pages):
-                    page_id = entry.pages[page_index]
-                    self._gpu_pool[page_id, layer_idx, 0, :, slot, :] = k[:, token_idx, :]
-                    self._gpu_pool[page_id, layer_idx, 1, :, slot, :] = v[:, token_idx, :]
+            for page_index, page_id in enumerate(entry.pages):
+                tok_start = page_index * page_size
+                tok_end = min(tok_start + page_size, seq_len)
+                if tok_start >= seq_len:
+                    break
+                slot_end = tok_end - tok_start
+                # Write whole page slice at once: [heads, slot_end, dim]
+                self._gpu_pool[page_id, layer_idx, 0, :, :slot_end, :] = k[:, tok_start:tok_end, :]
+                self._gpu_pool[page_id, layer_idx, 1, :, :slot_end, :] = v[:, tok_start:tok_end, :]
 
     def to_hf_cache(self, request_id: str) -> Optional[Any]:
         """Reconstruct HuggingFace past_key_values from paged memory.
@@ -660,13 +682,13 @@ class PagedKVCacheManager:
         else:
             victim = min(candidates, key=lambda p: p.last_access)
 
-        # 1. VTP OFFLOAD (Seamless zero-copy to L4 RAM or L7 Network)
+        # 1. KV PAGE OFFLOAD via HierarchicalMemoryManager (GPU -> CPU RAM)
         # We hook into HierarchicalMemoryManager to move the tensor.
         if hasattr(self, '_gpu_pool') and self._gpu_pool is not None:
             block_id = f"kv_page_{victim.page_id}"
             
-            # Select target tier (L4 SysRAM by default, L7 WebGPU if heavily congested)
-            target_tier: str = "L4" if victim.is_borrowed else "L7"
+            # Offload to CPU RAM (L3)
+            target_tier: str = "L3"
             
             try:
                 # Extract actual tensor slice representing the page
@@ -681,7 +703,7 @@ class PagedKVCacheManager:
                 # Command actual physical migration via VTP / HMM
                 hm_manager.migrate(mb, target_tier, page_tensor)
                 
-                _logger.info(f"[VTP] Out-of-Memory Eviction: Page {victim.page_id} physically offloaded to {target_tier} via C++ Data Path.")
+                _logger.info(f"KV page {victim.page_id} evicted to {target_tier} via HierarchicalMemoryManager")
             except Exception as e:
                 _logger.error(f"[VTP] Offload error: {e}")
 
@@ -749,6 +771,72 @@ class PagedKVCacheManager:
         return (
             f"PagedKVCache(pages={s['used_pages']}/{s['total_pages']}, "
             f"requests={s['active_requests']}, mem={s['memory_mb']:.1f}MB)"
+        )
+
+    # ------------------------------------------------------------------
+    # Direct attention from paged KV (CUDA kernel path)
+    # ------------------------------------------------------------------
+
+    def compute_attention_decode(
+        self,
+        query: Any,
+        request_ids: list,
+        layer_idx: int,
+        scale: float = None,
+    ) -> Any:
+        """Compute attention directly from paged KV cache (decode step).
+
+        Uses the custom CUDA kernel when available, avoiding the need
+        to materialise contiguous KV tensors via to_hf_cache().
+
+        Args:
+            query: [batch, num_heads, head_dim] tensor (fp32).
+            request_ids: List of request_id strings, one per batch element.
+            layer_idx: Transformer layer index.
+            scale: Attention scale (defaults to 1/sqrt(head_dim)).
+
+        Returns:
+            Attention output [batch, num_heads, head_dim] tensor.
+        """
+        if self._gpu_pool is None or not _TORCH:
+            return None
+
+        try:
+            from core.paged_attention_cuda import paged_attention_decode
+        except ImportError:
+            return None
+
+        batch_size = len(request_ids)
+        page_size = self.config.page_size
+
+        # Build page table and context lengths tensors
+        max_pp = 0
+        entries = []
+        for rid in request_ids:
+            entry = self._page_tables.get(rid)
+            if entry is None:
+                entries.append(([], 0))
+            else:
+                entries.append((entry.pages, entry.num_tokens))
+                max_pp = max(max_pp, len(entry.pages))
+
+        if max_pp == 0:
+            return None
+
+        page_table = torch.full(
+            (batch_size, max_pp), -1,
+            dtype=torch.int32, device=query.device,
+        )
+        context_lens = torch.zeros(batch_size, dtype=torch.int32, device=query.device)
+
+        for b, (pages, ntok) in enumerate(entries):
+            for p, pid in enumerate(pages):
+                page_table[b, p] = pid
+            context_lens[b] = ntok
+
+        return paged_attention_decode(
+            query, self._gpu_pool, page_table, context_lens,
+            layer_idx, scale,
         )
 
 

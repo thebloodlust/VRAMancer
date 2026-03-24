@@ -111,6 +111,21 @@ class TestInferencePipeline:
         except Exception:
             pass  # Expected in minimal mode
 
+    def test_estimate_model_vram_returns_none_minimal(self):
+        """_estimate_model_vram_gb returns None in minimal test mode."""
+        from core.inference_pipeline import InferencePipeline
+        result = InferencePipeline._estimate_model_vram_gb("gpt2", {})
+        # In VRM_MINIMAL_TEST=1, should return None (safe fallback)
+        assert result is None
+
+    def test_auto_select_num_gpus_default(self):
+        """_auto_select_num_gpus preserves num_gpus when estimation fails."""
+        from core.inference_pipeline import InferencePipeline
+        pipe = InferencePipeline(enable_metrics=False, enable_discovery=False, verbose=False)
+        # In minimal mode, estimation returns None → keeps num_gpus as-is
+        result = pipe._auto_select_num_gpus("unknown-model", 2, {})
+        assert result == 2
+
 
 # ========================================================================
 # Production API tests

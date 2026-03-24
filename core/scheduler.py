@@ -390,7 +390,7 @@ class SimpleScheduler:
         """Migrate a block from its current GPU to target_gpu.
 
         Attempts to use the TransferManager for efficient GPU-to-GPU transfer.
-        Falls back to CPU-staged move if direct transfer is unavailable.
+        Falls back to simple .to() if TransferManager is unavailable.
         """
         if block.gpu_id == target_gpu:
             return
@@ -401,16 +401,34 @@ class SimpleScheduler:
 
         # Move the actual module if present
         if block.module is not None and torch is not None:
+            migrated = False
+            # Try TransferManager for efficient GPU-to-GPU transfer
             try:
+                from core.transfer_manager import TransferManager
+                tm = TransferManager()
+                for param in block.module.parameters():
+                    tm.send_activation(src, target_gpu, param.data)
+                for buf in block.module.buffers():
+                    tm.send_activation(src, target_gpu, buf)
+                # Move module metadata to target device
                 from core.utils import get_device_type
                 device = get_device_type(target_gpu)
                 block.module = block.module.to(device)
+                migrated = True
             except Exception as exc:
-                _logger.warning("Module migration failed: %s (CPU fallback)", exc)
+                _logger.debug("TransferManager migration failed: %s, using .to()", exc)
+
+            if not migrated:
                 try:
-                    block.module = block.module.to("cpu")
-                except Exception as e:
-                    _logger.debug(f"Exception silencieuse dans l'exécution: {e}", exc_info=True)
+                    from core.utils import get_device_type
+                    device = get_device_type(target_gpu)
+                    block.module = block.module.to(device)
+                except Exception as exc:
+                    _logger.warning("Module migration failed: %s (CPU fallback)", exc)
+                    try:
+                        block.module = block.module.to("cpu")
+                    except Exception as e:
+                        _logger.debug("CPU fallback also failed: %s", e)
 
         # Update accounting
         with self._lock:

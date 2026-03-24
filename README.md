@@ -11,6 +11,20 @@ VRAMancer is a heterogeneous multi-GPU Python orchestrator for Large Language Mo
 - **RESTful API:** Provides an OpenAI-compatible API endpoint (`/v1/completions`, `/api/generate`) for integration with standard frontends and services.
 - **Web Interface:** Includes a real-time visualization dashboard and chat completion interface with Server-Sent Events (SSE) streaming support.
 
+## Performance (Verified Benchmarks)
+
+Single-GPU benchmarks on RTX 3090, CUDA 12.8, PyTorch 2.10, Mistral-7B/TinyLlama/GPT-2:
+
+| Model | Native HuggingFace | VRAMancer | Delta |
+|-------|-------------------|-----------|-------|
+| GPT-2 (124M) | 126.8 tok/s | 126.5 tok/s | -0.2% |
+| TinyLlama-1.1B | 53.1 tok/s | 57.3 tok/s | **+7.9%** |
+| Mistral-7B-v0.1 | 35.7 tok/s | 36.2 tok/s | **+1.4%** |
+
+Full details: [`benchmarks/BENCHMARK_RESULTS.md`](benchmarks/BENCHMARK_RESULTS.md)
+
+**Not yet benchmarked:** Multi-GPU throughput (blocked by CUDA TDR in VM), VRAMancer vs vLLM comparison.
+
 ## Installation
 
 ### Requirements

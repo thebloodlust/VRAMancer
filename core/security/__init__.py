@@ -444,9 +444,18 @@ def install_security(app):
         resp.headers['X-Frame-Options'] = 'DENY'
         resp.headers['X-XSS-Protection'] = '1; mode=block'
         resp.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
-        # CSP assoupli pour supporter le tableau de bord web, Tailwind CDN, les scripts inline etc.
+        # CSP: whitelist CDN domains used by dashboard, allow inline scripts
+        # (templates use <script> blocks), but NO unsafe-eval.
         resp.headers['Content-Security-Policy'] = (
-            "default-src * 'unsafe-inline' 'unsafe-eval' data: blob:;"
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com "
+            "https://cdn.jsdelivr.net https://unpkg.com; "
+            "style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com "
+            "https://unpkg.com; "
+            "img-src 'self' data:; "
+            "connect-src 'self'; "
+            "font-src 'self' https://unpkg.com; "
+            "frame-ancestors 'none'"
         )
 
         # HSTS — only meaningful behind TLS (production)

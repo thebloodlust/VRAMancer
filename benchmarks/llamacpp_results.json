@@ -1,0 +1,51 @@
+[
+  {
+    "method": "raw_llamacpp_1gpu",
+    "gguf": "Qwen2.5-7B-Instruct-Q4_K_M.gguf",
+    "num_gpus": 1,
+    "tok_s": 106.8,
+    "ttft_ms": 27.4,
+    "tokens": 645,
+    "elapsed_s": 6.04,
+    "load_time_s": 1.0
+  },
+  {
+    "method": "vramancer_llamacpp_1gpu",
+    "model": "bartowski/Qwen2.5-7B-Instruct-GGUF",
+    "num_gpus": 1,
+    "tok_s": 106.7,
+    "ttft_ms": 15.3,
+    "tokens": 640,
+    "elapsed_s": 6.0,
+    "load_time_s": 1.2
+  },
+  {
+    "method": "raw_llamacpp_2gpu",
+    "gguf": "Qwen2.5-7B-Instruct-Q4_K_M.gguf",
+    "num_gpus": 2,
+    "tok_s": 107.7,
+    "ttft_ms": 14.6,
+    "tokens": 645,
+    "elapsed_s": 5.99,
+    "load_time_s": 0.9
+  },
+  {
+    "method": "vramancer_llamacpp_2gpu",
+    "model": "bartowski/Qwen2.5-7B-Instruct-GGUF",
+    "num_gpus": 2,
+    "tok_s": 106.7,
+    "ttft_ms": 14.5,
+    "tokens": 640,
+    "elapsed_s": 6.0,
+    "load_time_s": 1.1
+  },
+  {
+    "method": "bnb_nf4",
+    "model": "Qwen/Qwen2.5-7B-Instruct",
+    "tok_s": 19.7,
+    "tokens": 640,
+    "elapsed_s": 32.55,
+    "load_time_s": 5.7,
+    "vram_gb": 6.6
+  }
+]

@@ -27,6 +27,14 @@ except ImportError:
     _nn = None  # type: ignore
     _HAS_TORCH = False
 
+# Fused Triton sampling (optional — falls back to PyTorch)
+try:
+    from core.triton_sampling import fused_sample as _fused_sample, has_triton
+    _HAS_FUSED_SAMPLE = True
+except ImportError:
+    _fused_sample = None
+    _HAS_FUSED_SAMPLE = False
+
 # ---------------------------------------------------------------------------
 # Early patch: transformers.modeling_utils.no_init_weights
 # auto_gptq 0.7.x imports this at module level; it was removed in
@@ -376,6 +384,10 @@ def select_backend(model_name: str, cache_dir: str = None, backend: str = "auto"
         logger.info(f"Utilisation du backend HuggingFace pour {model_name}")
         return HuggingFaceBackend(model_name, cache_dir=cache_dir)
 
+    if backend == "llamacpp":
+        from core.backends_llamacpp import LlamaCppBackend
+        return LlamaCppBackend(model_name, cache_dir=cache_dir)
+
     if backend == "ollama":
         from core.backends_ollama import OllamaBackend
         return OllamaBackend(model_name)
@@ -470,18 +482,20 @@ class HuggingFaceBackend(BaseLLMBackend):
                 return None
 
             max_memory = {}
-            is_quantized = self._should_use_nvfp4()
+            quant_mode = self._get_quantization_mode()
             for gpu in config.gpus:
                 # Use FREE VRAM (not total) to account for driver/OS usage.
                 # max_memory is a per-GPU cap — accelerate handles placement.
                 base_vram = gpu.free_vram_gb if gpu.free_vram_gb > 0 else gpu.total_vram_gb
-                # BnB 4-bit: accelerate plans NF4 sizes, but during loading
-                # safetensor shards are held in fp16 transiently.  If one GPU's
-                # budget >= total model NF4 size, accelerate puts EVERYTHING
-                # on that GPU → fp16 transient causes OOM.  Use 60% so no
-                # single GPU can hold the whole model, FORCING a spread.
-                # Non-quantized: 80% headroom for KV cache + activations.
-                reserve = 0.60 if is_quantized else 0.80
+                # NF4: 60% (fp16 loading transient = 4x planned NF4 size)
+                # INT8: 85% (fp16→int8 but less headroom needed)
+                # Non-quantized: aggressive 92% to minimize CPU offload.
+                if quant_mode == "nf4":
+                    reserve = 0.60
+                elif quant_mode == "int8":
+                    reserve = 0.85
+                else:
+                    reserve = 0.92
                 budget_gb = max(2.0, base_vram * reserve)
                 max_memory[gpu.index] = f"{budget_gb:.1f}GiB"
 
@@ -667,43 +681,40 @@ class HuggingFaceBackend(BaseLLMBackend):
         except ImportError:
             self.log.warning("GPTQ: transformers.quantizers.quantizer_gptq not found")
 
-    def _should_use_nvfp4(self) -> bool:
-        """Check if NVFP4 quantization should be used.
+    def _get_quantization_mode(self) -> str:
+        """Return the active quantization mode.
 
-        Conditions:
-          - VRM_QUANTIZATION=nvfp4 env var set (explicit opt-in)
-          - At least one Blackwell GPU (CC >= 12.0)
-          - bitsandbytes is installed
+        Returns one of: 'nf4', 'int8', or '' (no quantization).
+        Checks VRM_QUANTIZATION env var and verifies bitsandbytes is installed.
+        NF4: ~0.5 bytes/param (4-bit NormalFloat), works on all CUDA GPUs.
+        INT8: ~1.0 bytes/param (LLM.int8()), works on all CUDA GPUs with CC>=7.5.
         """
         quant = os.environ.get("VRM_QUANTIZATION", "").lower()
-        if quant != "nvfp4":
-            return False
+        if quant not in ("nvfp4", "nf4", "int8"):
+            return ""
         if not _HAS_TORCH or not _torch.cuda.is_available():
-            return False
-        has_blackwell = False
-        for i in range(_torch.cuda.device_count()):
-            props = _torch.cuda.get_device_properties(i)
-            if props.major >= 12:
-                has_blackwell = True
-                break
-        if not has_blackwell:
-            self.log.warning("VRM_QUANTIZATION=nvfp4 requested but no Blackwell GPU (CC>=12) found")
-            return False
+            return ""
         try:
             import bitsandbytes  # noqa: F401
-            return True
         except ImportError:
             self.log.warning(
-                "VRM_QUANTIZATION=nvfp4 requested but bitsandbytes not installed. "
-                "Install with: pip install bitsandbytes>=0.43.0"
+                "VRM_QUANTIZATION=%s requested but bitsandbytes not installed. "
+                "Install with: pip install bitsandbytes>=0.43.0", quant
             )
-            return False
+            return ""
+        if quant in ("nvfp4", "nf4"):
+            return "nf4"
+        return "int8"
 
-    def _build_bnb_nvfp4_config(self):
-        """Build BitsAndBytesConfig for NVFP4 (4-bit NormalFloat) quantization.
+    def _should_use_nvfp4(self) -> bool:
+        """Check if NF4 quantization should be used (backward compat)."""
+        return self._get_quantization_mode() == "nf4"
 
-        Uses NF4 quantization with bfloat16 compute dtype — the Blackwell
-        native FP4 format. A 7B model goes from ~14 GB (BF16) to ~4 GB (NF4).
+    def _build_bnb_nf4_config(self):
+        """Build BitsAndBytesConfig for NF4 (4-bit NormalFloat) quantization.
+
+        Works on all CUDA GPUs (CC >= 7.0). Uses bfloat16 compute dtype.
+        A 14B model goes from ~28 GB (BF16) to ~7 GB (NF4).
         """
         from transformers import BitsAndBytesConfig
         bnb_config = BitsAndBytesConfig(
@@ -711,18 +722,63 @@ class HuggingFaceBackend(BaseLLMBackend):
             bnb_4bit_quant_type="nf4",
             bnb_4bit_compute_dtype=_torch.bfloat16,
             bnb_4bit_use_double_quant=True,
-            # Allow small modules (embed, lm_head) to live on CPU in fp32
-            # if they don't fit on GPUs.  Without this BnB crashes when
-            # accelerate dispatches ANY module to CPU.
             llm_int8_enable_fp32_cpu_offload=True,
         )
         self.log.info(
-            "NVFP4 quantization enabled (NF4 + double quant + bfloat16 compute) — "
+            "NF4 quantization enabled (4-bit NormalFloat + double quant) — "
             "model size reduced ~75%%"
         )
         return bnb_config
 
+    _build_bnb_nvfp4_config = _build_bnb_nf4_config  # backward compat alias
+
+    def _build_bnb_int8_config(self):
+        """Build BitsAndBytesConfig for INT8 (LLM.int8()) quantization.
+
+        Works on all CUDA GPUs with CC >= 7.5 (Turing+).
+        A 14B model goes from ~28 GB (BF16) to ~14 GB (INT8).
+        """
+        from transformers import BitsAndBytesConfig
+        bnb_config = BitsAndBytesConfig(
+            load_in_8bit=True,
+            llm_int8_enable_fp32_cpu_offload=True,
+        )
+        self.log.info(
+            "INT8 quantization enabled (LLM.int8()) — model size reduced ~50%%"
+        )
+        return bnb_config
+
+    @staticmethod
+    def _patch_bnb_for_transformers():
+        """Monkey-patch bitsandbytes to accept extra kwargs from transformers 5.x.
+
+        transformers >= 5.0 passes _is_hf_initialized to tensor __new__()
+        but bitsandbytes 0.49.x doesn't accept it -> TypeError.
+        Wrap __new__ to strip unknown kwargs.
+        """
+        try:
+            import bitsandbytes as bnb
+            for cls in (bnb.nn.Params4bit, bnb.nn.Int8Params):
+                orig_new = cls.__new__
+                if getattr(orig_new, '_vrm_patched', False):
+                    continue
+                import inspect
+                sig = inspect.signature(orig_new)
+                if '_is_hf_initialized' not in sig.parameters and '**' not in str(sig):
+                    def make_wrapper(original, klass):
+                        def _patched_new(cls_, *args, **kwargs):
+                            kwargs.pop('_is_hf_initialized', None)
+                            return original(cls_, *args, **kwargs)
+                        _patched_new._vrm_patched = True
+                        return _patched_new
+                    cls.__new__ = make_wrapper(orig_new, cls)
+        except ImportError:
+            pass
+
     def load_model(self, model_name: str, **kwargs):
+        # Pop VRAMancer-specific kwargs that should NOT be forwarded to from_pretrained
+        _pipeline_num_gpus = kwargs.pop("num_gpus", None)
+
         if os.environ.get("VRM_MINIMAL_TEST") == "1" or model_name.startswith("stub"):
             self.model_name = model_name
             self.model = "STUB_MODEL"
@@ -732,8 +788,44 @@ class HuggingFaceBackend(BaseLLMBackend):
         from transformers import AutoModelForCausalLM, AutoTokenizer
         self.model_name = model_name
         self.log.info(f"Chargement modèle HuggingFace: {model_name}")
-        if model_name.endswith("-AWQ"):
-            kwargs["low_cpu_mem_usage"] = True
+        if model_name.endswith("-AWQ") or "-awq" in model_name.lower():
+            # AWQ: use autoawq native loader (transformers 5.3 requires gptqmodel
+            # which has build issues). autoawq fuses QKV/MLP layers for faster
+            # INT4 GEMM kernels (~3-4x faster than BnB kgemm_4bit_inference_naive).
+            try:
+                from awq import AutoAWQForCausalLM as _AWQ
+                self.log.info("AWQ model detected — loading via autoawq (fused layers)")
+                # Pick best GPU for single-GPU AWQ
+                if _HAS_TORCH and _torch.cuda.is_available():
+                    best_gpu = 0
+                    best_free = 0.0
+                    for i in range(_torch.cuda.device_count()):
+                        free_bytes = _torch.cuda.mem_get_info(i)[0]
+                        if free_bytes > best_free:
+                            best_free = free_bytes
+                            best_gpu = i
+                    fuse_layers = True
+                else:
+                    best_gpu = 0
+                    fuse_layers = False
+                awq_model = _AWQ.from_quantized(
+                    model_name,
+                    fuse_layers=fuse_layers,
+                    trust_remote_code=(os.environ.get("VRM_TRUST_REMOTE_CODE") == "1"),
+                )
+                self.model = awq_model.model
+                if _HAS_TORCH and _torch.cuda.is_available() and best_gpu != 0:
+                    self.model = self.model.to(f"cuda:{best_gpu}")
+                try:
+                    self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+                    if self.tokenizer.pad_token is None:
+                        self.tokenizer.pad_token = self.tokenizer.eos_token
+                except Exception as e:
+                    self.log.warning(f"Tokenizer load failed: {e}")
+                return self.model
+            except ImportError:
+                self.log.warning("autoawq not installed — falling back to transformers AWQ loader")
+                kwargs["low_cpu_mem_usage"] = True
         elif "gptq" in model_name.lower():
             # GPTQ: pre-quantized model — weights are already INT4/INT8.
             # No runtime quantization needed (no BnB, no fp16 transient).
@@ -765,47 +857,86 @@ class HuggingFaceBackend(BaseLLMBackend):
                 except Exception:
                     kwargs["torch_dtype"] = best_dtype
         else:
-            is_quantized = self._should_use_nvfp4()
-            num_gpus = _torch.cuda.device_count() if _HAS_TORCH and _torch.cuda.is_available() else 1
+            quant_mode = self._get_quantization_mode()
+            # Use pipeline's num_gpus decision (respects _auto_select_num_gpus)
+            # rather than torch.cuda.device_count() which ignores single-GPU bypass.
+            if _pipeline_num_gpus is not None:
+                num_gpus = _pipeline_num_gpus
+            else:
+                num_gpus = _torch.cuda.device_count() if _HAS_TORCH and _torch.cuda.is_available() else 1
 
             kwargs["device_map"] = "auto"
 
-            if is_quantized and num_gpus >= 2:
-                # BnB 4-bit multi-GPU: during from_pretrained, weights are
-                # loaded in fp16 onto each GPU BEFORE being quantized to NF4.
-                # infer_auto_device_map plans using NF4 sizes (~0.56 B/param)
-                # but loading uses fp16 (2 B/param) — a ~3.6x mismatch.
-                # If max_memory is too generous, one GPU gets assigned the
-                # entire model in NF4 but can't hold it in fp16 during loading.
+            if quant_mode and num_gpus >= 2:
+                # BnB multi-GPU is broken upstream: accelerate AlignDevicesHook
+                # doesn't handle cross-GPU residual connections with NF4/INT8.
+                # Error: "Expected all tensors on same device, cuda:0 and cuda:1"
+                # (confirmed with raw transformers + accelerate + BnB, no VRAMancer)
                 #
-                # Fix: set max_memory to ~25% of free VRAM.  This ensures the
-                # fp16 equivalent of assigned NF4 modules fits during loading.
-                # Overflow modules go to CPU in fp32, kept functional via
-                # llm_int8_enable_fp32_cpu_offload=True in the BnB config.
-                max_memory = {}
+                # Workaround: force single-GPU placement. With device_map={"": gpu}
+                # + torch_dtype for streaming load, BnB quantizes each layer
+                # in-place without buffering all fp16 weights. A 14B NF4 model
+                # uses only ~10.8 GB final on a 24 GB GPU.
+                best_gpu = 0
+                best_free = 0.0
                 for i in range(num_gpus):
                     free_bytes = _torch.cuda.mem_get_info(i)[0]
-                    free_gb = free_bytes / (1024 ** 3)
-                    # 25% of free: NF4 planned → fp16 actual ≈ 4x → fits in free
-                    budget = max(2.0, free_gb * 0.25)
-                    max_memory[i] = f"{budget:.1f}GiB"
-                max_memory["cpu"] = "48GiB"
-                kwargs["max_memory"] = max_memory
+                    if free_bytes > best_free:
+                        best_free = free_bytes
+                        best_gpu = i
+                kwargs["device_map"] = {"": best_gpu}
                 kwargs["low_cpu_mem_usage"] = True
                 self.log.info(
-                    "BnB 4-bit multi-GPU: max_memory=%s "
-                    "(conservative for fp16 loading transient)",
-                    {k: v for k, v in max_memory.items() if k != "cpu"},
+                    "BnB %s: single-GPU %d (%.1fGiB free) — "
+                    "multi-GPU BnB broken upstream (accelerate hooks)",
+                    quant_mode.upper(), best_gpu, best_free / (1024 ** 3),
                 )
             else:
-                # Non-quantized: compute-aware placement with generous budgets
-                max_memory = self._build_compute_aware_memory_map()
-                if max_memory:
-                    kwargs["max_memory"] = max_memory
+                # Non-quantized OR quantized single-GPU
+                if quant_mode and num_gpus <= 1:
+                    # Quantized single-GPU: use device_map={"": gpu_id}
+                    # to place the ENTIRE model on a single GPU.
+                    # device_map="auto" installs accelerate AlignDevicesHook
+                    # pre_forward hooks that move weights CPU↔GPU during
+                    # inference — these hang with BnB 0.49 + accelerate 1.13.
+                    # With {"": gpu_id}, weights load directly onto GPU,
+                    # no hooks, no CPU offloading. Model must fit in VRAM.
+                    best_gpu = 0
+                    best_free = 0.0
+                    total_gpus = _torch.cuda.device_count()
+                    for i in range(total_gpus):
+                        free_bytes = _torch.cuda.mem_get_info(i)[0]
+                        if free_bytes > best_free:
+                            best_free = free_bytes
+                            best_gpu = i
+                    kwargs["device_map"] = {"": best_gpu}
+                    kwargs["low_cpu_mem_usage"] = True
+                    self.log.info(
+                        "BnB %s single-GPU %d: %.1fGiB free (no CPU offload)",
+                        quant_mode.upper(), best_gpu,
+                        best_free / (1024 ** 3),
+                    )
+                else:
+                    max_memory = self._build_compute_aware_memory_map()
+                    if max_memory:
+                        kwargs["max_memory"] = max_memory
 
-            # NVFP4 quantization: 4-bit NormalFloat for Blackwell GPUs
-            if is_quantized and "quantization_config" not in kwargs:
-                kwargs["quantization_config"] = self._build_bnb_nvfp4_config()
+            # Quantization config
+            if quant_mode == "nf4" and "quantization_config" not in kwargs:
+                self._patch_bnb_for_transformers()
+                kwargs["quantization_config"] = self._build_bnb_nf4_config()
+                # Set torch_dtype (NOT 'dtype') for non-quantized layers.
+                # In transformers 5.3, 'dtype' bypasses BnB quantization
+                # (loads everything in that dtype), while 'torch_dtype'
+                # (deprecated but functional) controls only non-quantized
+                # layers and lets BnB quantize normally.
+                if "torch_dtype" not in kwargs and "dtype" not in kwargs:
+                    kwargs["torch_dtype"] = _torch.float16
+            elif quant_mode == "int8" and "quantization_config" not in kwargs:
+                self._patch_bnb_for_transformers()
+                kwargs["quantization_config"] = self._build_bnb_int8_config()
+                if "torch_dtype" not in kwargs and "dtype" not in kwargs:
+                    kwargs["torch_dtype"] = _torch.float16
             # Auto-select optimal dtype based on best available GPU
             elif "torch_dtype" not in kwargs and "dtype" not in kwargs:
                 best_dtype = self._detect_optimal_dtype()
@@ -1170,20 +1301,29 @@ class HuggingFaceBackend(BaseLLMBackend):
         _seq_len = hidden_states.shape[1]
         _total_len = _step_past_len + _seq_len
         _causal_mask = None
-        try:
-            _causal_mask = pt.full((_total_len, _total_len), float("-inf"), device=hidden_states.device, dtype=hidden_states.dtype)
-            _causal_mask = pt.triu(_causal_mask, diagonal=1)
-            # Slice to [seq_len, total_len] for the current step
-            _causal_mask = _causal_mask[_step_past_len:_step_past_len + _seq_len, :_total_len]
-            # Expand to 4D: [batch, 1, seq_len, total_len]
-            _causal_mask = _causal_mask.unsqueeze(0).unsqueeze(0)
-        except Exception:
-            _causal_mask = None
+        if _seq_len > 1:
+            # Prefill: build full causal mask (only once per generation)
+            try:
+                _causal_mask = pt.full(
+                    (_total_len, _total_len), float("-inf"),
+                    device=hidden_states.device, dtype=hidden_states.dtype,
+                )
+                _causal_mask = pt.triu(_causal_mask, diagonal=1)
+                _causal_mask = _causal_mask[_step_past_len:_step_past_len + _seq_len, :_total_len]
+                _causal_mask = _causal_mask.unsqueeze(0).unsqueeze(0)
+            except Exception:
+                _causal_mask = None
+        # Decode (seq_len=1): single token attends to all prior — no mask needed.
+        # This eliminates an O(N^2) allocation per token.
 
         # 2. Process blocks sequentially
         if "blocks" not in self._comp_devices:
             self._comp_devices["blocks"] = {}
             
+        # Lazily create a transfer stream for async cross-GPU copies
+        if not hasattr(self, '_transfer_streams'):
+            self._transfer_streams = {}
+
         for idx, block in enumerate(self.blocks):
             # Dynamic device resolution for the block
             if idx not in self._comp_devices["blocks"]:
@@ -1194,7 +1334,18 @@ class HuggingFaceBackend(BaseLLMBackend):
             block_dev = self._comp_devices["blocks"][idx]
             
             if block_dev is not None and hidden_states.device != block_dev:
-                hidden_states = hidden_states.to(block_dev)
+                # Async cross-GPU transfer via dedicated stream
+                _dst_idx = block_dev.index if hasattr(block_dev, 'index') else None
+                if _dst_idx is not None and pt.cuda.is_available():
+                    if _dst_idx not in self._transfer_streams:
+                        self._transfer_streams[_dst_idx] = pt.cuda.Stream(device=_dst_idx)
+                    _ts = self._transfer_streams[_dst_idx]
+                    with pt.cuda.stream(_ts):
+                        hidden_states = hidden_states.to(block_dev, non_blocking=True)
+                    # Sync before compute on the target device's default stream
+                    pt.cuda.current_stream(block_dev).wait_stream(_ts)
+                else:
+                    hidden_states = hidden_states.to(block_dev)
             elif self.block_devices and idx > 0:
                 # Fallback to static mapping if dynamic fails
                 prev_gpu = self.block_devices[idx - 1]
@@ -1389,9 +1540,17 @@ class HuggingFaceBackend(BaseLLMBackend):
             return self.tokenizer.decode(new_tokens, skip_special_tokens=True)
 
         # Path 2: Multi-GPU pipeline-parallel with KV-cache
+        do_sample = kwargs.get('do_sample', None)
         temperature = kwargs.get('temperature', 1.0)
-        top_k = kwargs.get('top_k', 50)
+        top_k = kwargs.get('top_k', 0)
         top_p = kwargs.get('top_p', 1.0)
+
+        # Determine if we should sample or use greedy argmax.
+        # Greedy when: do_sample=False explicitly, or no sampling params changed.
+        _greedy = (do_sample is False) or (
+            do_sample is None and temperature == 1.0
+            and top_k == 0 and top_p == 1.0
+        )
 
         generated = input_ids
         past_blocks = None  # KV-cache per block
@@ -1417,27 +1576,32 @@ class HuggingFaceBackend(BaseLLMBackend):
             else:
                 next_logits = logits
 
-            # Sampling
-            if temperature > 0 and temperature != 1.0:
-                next_logits = next_logits / temperature
+            # Sampling (optimized: fused Triton kernel when available)
+            if _greedy:
+                next_token = _torch.argmax(next_logits, dim=-1, keepdim=True)
+            elif _HAS_FUSED_SAMPLE:
+                next_token = _fused_sample(
+                    next_logits, temperature=temperature,
+                    top_k=top_k, top_p=top_p,
+                )
+            else:
+                if temperature > 0 and temperature != 1.0:
+                    next_logits = next_logits / temperature
 
-            if top_k > 0 and top_k < next_logits.size(-1):
-                topk_vals, _ = _torch.topk(next_logits, top_k)
-                threshold = topk_vals[:, -1].unsqueeze(-1)
-                next_logits[next_logits < threshold] = float('-inf')
+                if top_k > 0 and top_k < next_logits.size(-1):
+                    topk_vals, _ = _torch.topk(next_logits, top_k)
+                    threshold = topk_vals[:, -1].unsqueeze(-1)
+                    next_logits[next_logits < threshold] = float('-inf')
 
-            if top_p < 1.0:
-                sorted_logits, sorted_indices = _torch.sort(next_logits, descending=True)
-                cumulative_probs = _torch.softmax(sorted_logits, dim=-1).cumsum(dim=-1)
-                remove_mask = cumulative_probs - _torch.softmax(sorted_logits, dim=-1) >= top_p
-                sorted_logits[remove_mask] = float('-inf')
-                next_logits = sorted_logits.scatter(1, sorted_indices, sorted_logits)
+                if top_p < 1.0:
+                    sorted_logits, sorted_indices = _torch.sort(next_logits, descending=True)
+                    cumulative_probs = _torch.softmax(sorted_logits, dim=-1).cumsum(dim=-1)
+                    remove_mask = cumulative_probs - _torch.softmax(sorted_logits, dim=-1) >= top_p
+                    sorted_logits[remove_mask] = float('-inf')
+                    next_logits = sorted_logits.scatter(1, sorted_indices, sorted_logits)
 
-            if temperature > 0 and (temperature != 1.0 or top_p < 1.0 or top_k > 0):
                 probs = _torch.softmax(next_logits, dim=-1)
                 next_token = _torch.multinomial(probs, num_samples=1)
-            else:
-                next_token = _torch.argmax(next_logits, dim=-1, keepdim=True)
 
             # Move back to first device for concatenation
             next_token = next_token.to(generated.device)

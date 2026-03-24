@@ -1,11 +1,20 @@
 import logging
+
+try:
+    import psutil
+except ImportError:
+    psutil = None
+
 def select_network_interface(mode="auto", preferred=None):
     """
-    Sélectionne une interface réseau :
+    Sélectionne une interface réseau :
     - mode="auto" : choisit la meilleure interface dispo (via select_best_interface)
-    - mode="manual" : demande à l’utilisateur de choisir (via list_interfaces)
-    - preferred : liste d’interfaces à privilégier (optionnel)
+    - mode="manual" : demande à l'utilisateur de choisir (via list_interfaces)
+    - preferred : liste d'interfaces à privilégier (optionnel)
     """
+    if psutil is None:
+        logging.warning("psutil not available — cannot select network interface")
+        return None
     available = list(psutil.net_if_addrs().keys())
     if not available:
         logging.info(" Aucune interface réseau détectée.")
@@ -25,14 +34,19 @@ def select_network_interface(mode="auto", preferred=None):
         return available[0]
     # mode auto
     return select_best_interface(preferred)
-import psutil
+
 
 def list_interfaces():
+    if psutil is None:
+        logging.warning("psutil not available")
+        return
     logging.info(" Interfaces réseau disponibles :")
     for iface, addrs in psutil.net_if_addrs().items():
         logging.info(f" - {iface}")
 
 def select_best_interface(preferred=None):
+    if psutil is None:
+        return None
     if preferred is None:
         preferred = ["enp1s0f0", "eth0", "eno1"]
     available = list(psutil.net_if_addrs().keys())

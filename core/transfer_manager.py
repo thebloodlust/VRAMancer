@@ -39,12 +39,8 @@ except ImportError:
     dist = None  # type: ignore
     _DIST_AVAILABLE = False
 
-# C++ Fastpath (VTP)
-try:
-    import vramancer_vtp_c
-    _VTP_C_AVAILABLE = True
-except ImportError:
-    _VTP_C_AVAILABLE = False
+# C++ Fastpath (VTP) — not yet implemented, reserved for future C extension
+_VTP_C_AVAILABLE = False
 
 # Metrics (optional)
 try:
@@ -170,6 +166,32 @@ class TransferManager:
             "VRM_TRANSFER_P2P", ""
         ).lower() in ("0", "false", "no")
 
+        # Persistent Rust GpuPipeline instances (lazy, per GPU pair)
+        self._gpu_pipelines: Dict[Tuple[int, int], Any] = {}
+
+        # VM detection — VFIO passthrough adds ~10-15% overhead on DMA
+        self._is_vm = False
+        try:
+            for dmi in ("/sys/class/dmi/id/product_name", "/sys/class/dmi/id/sys_vendor"):
+                try:
+                    with open(dmi, "r") as f:
+                        content = f.read().strip().lower()
+                        if any(s in content for s in (
+                            "qemu", "kvm", "virtual", "vmware", "proxmox",
+                            "virtualbox", "xen", "hyper-v", "i440fx", "q35",
+                        )):
+                            self._is_vm = True
+                            break
+                except OSError:
+                    continue
+        except Exception:
+            pass
+        if self._is_vm:
+            log.info(
+                "VM environment detected — VFIO-passthrough adds ~10-15%% PCIe overhead. "
+                "CPU-staged transfers expected ~11 GB/s (vs ~13 GB/s bare metal)."
+            )
+
         if not self._stub_mode and _TORCH_AVAILABLE:
             self._topology = self._detect_topology()
             # Initialize cross-vendor bridge if mixed GPU vendors detected
@@ -266,6 +288,15 @@ class TransferManager:
         if self._topology is None:
             return False
         return self._topology.p2p_matrix.get((src_gpu, dst_gpu), False)
+
+    def _get_gpu_pipeline(self, vramancer_rust, src_gpu: int, dst_gpu: int):
+        """Get or create a persistent GpuPipeline for a GPU pair."""
+        key = (src_gpu, dst_gpu)
+        if key not in self._gpu_pipelines:
+            self._gpu_pipelines[key] = vramancer_rust.GpuPipeline(
+                src_gpu, dst_gpu, 32  # 32 MB chunks (optimal for large transfers)
+            )
+        return self._gpu_pipelines[key]
 
     # ------------------------------------------------------------------
     # NCCL initialization (lazy, thread-safe)
@@ -444,11 +475,12 @@ class TransferManager:
             except Exception as e:
                 log.warning(f"P2P transfer failed ({e}), falling back")
 
-        # --- Strategy 1.5: Rust cuMemcpyDtoD bypass (GIL-released) ---
-        # When PyTorch reports no P2P, the CUDA driver can still do DtoD
-        # copies using internal CPU staging. This is 6-14x faster than
-        # PyTorch .to() for typical activation sizes (10-100 MB) because
-        # it avoids PyTorch stream/device management overhead.
+        # --- Strategy 1.5: Rust GPU transfer (GIL-released) ---
+        # Hybrid: DtoD for small activations (<= 1 MB), persistent async
+        # pipeline (GpuPipeline) for larger transfers (> 1 MB).
+        # DtoD is ~1.7x faster than PyTorch for small data (lower latency).
+        # GpuPipeline overlaps DtoH/HtoD on separate CUDA streams via
+        # pre-allocated pinned buffers → 1.3-1.4x faster for large data.
         try:
             import vramancer_rust
             if hasattr(vramancer_rust, 'direct_vram_copy') and _TORCH_AVAILABLE:
@@ -456,21 +488,37 @@ class TransferManager:
                 with torch.cuda.device(target_gpu):
                     dst_tensor = torch.empty_like(src_tensor, device=f"cuda:{target_gpu}")
                 nbytes = src_tensor.element_size() * src_tensor.nelement()
-                vramancer_rust.direct_vram_copy(
-                    src_tensor.data_ptr(), dst_tensor.data_ptr(), nbytes
-                )
+
+                if nbytes <= 1 * 1024 * 1024:
+                    # Small activations: cuMemcpyDtoD (lowest latency)
+                    vramancer_rust.direct_vram_copy(
+                        src_tensor.data_ptr(), dst_tensor.data_ptr(), nbytes
+                    )
+                    method_name = "DtoD"
+                else:
+                    # Large transfers: persistent async pipeline with overlap
+                    pipe = self._get_gpu_pipeline(
+                        vramancer_rust, source_gpu, target_gpu
+                    )
+                    pipe.transfer(
+                        src_tensor.data_ptr(), dst_tensor.data_ptr(), nbytes
+                    )
+                    method_name = "Pipeline"
+
                 log.debug(
-                    f"Rust DtoD bypass GPU {source_gpu} → GPU {target_gpu}: "
+                    f"Rust {method_name} GPU {source_gpu} → GPU {target_gpu}: "
                     f"{nbytes / 1e6:.1f} MB"
                 )
                 return TransportMethod.CUDA_P2P, dst_tensor
         except Exception as e:
-            log.debug(f"Rust DtoD bypass failed: {e}")
+            log.debug(f"Rust GPU transfer failed: {e}")
 
-        # --- Strategy 2: ReBAR-accelerated pipelined transfer ---
-        # When P2P is blocked (consumer GPUs, mixed architectures) but ReBAR
-        # is enabled, use larger chunk sizes for double-buffered pinned transfer
-        # to maximize PCIe bandwidth (~80% of raw vs ~60% for small chunks).
+        # --- Strategy 2: Pipelined double-buffer transfer ---
+        # When P2P is blocked (consumer GPUs, mixed architectures, VM/IOMMU),
+        # use double-buffered pinned memory transfer for ~2x bandwidth vs
+        # sequential CPU staging (~26 GB/s vs ~12 GB/s measured).
+        # If ReBAR is detected, use larger chunks sized to the BAR window.
+        # Otherwise, use a fixed 8 MB chunk (optimal for PCIe Gen4).
         if not self._can_p2p(source_gpu, target_gpu):
             try:
                 from core.cross_vendor_bridge import detect_rebar, PipelinedTransport
@@ -479,19 +527,21 @@ class TransferManager:
                 if src_rebar or dst_rebar:
                     bar_size = max(src_bar, dst_bar)
                     chunk = min(bar_size // 64, 64 * 1024 * 1024)
-                    chunk = max(chunk, 2 * 1024 * 1024)
-                    pipeline = PipelinedTransport(chunk_bytes=chunk)
-                    output, xv_result = pipeline.transfer(
-                        source_gpu, target_gpu, tensor)
-                    log.info(
-                        f"ReBAR-accelerated GPU {source_gpu} → GPU {target_gpu}: "
-                        f"{xv_result.bytes_transferred / 1e6:.1f} MB, "
-                        f"{xv_result.bandwidth_gbps:.1f} Gbps, "
-                        f"chunk={chunk // (1024*1024)} MB"
-                    )
-                    return TransportMethod.CPU_STAGED, output
+                else:
+                    chunk = 8 * 1024 * 1024  # 8 MB default
+                chunk = max(chunk, 2 * 1024 * 1024)
+                pipeline = PipelinedTransport(chunk_bytes=chunk)
+                output, xv_result = pipeline.transfer(
+                    source_gpu, target_gpu, tensor)
+                log.info(
+                    f"Pipelined GPU {source_gpu} → GPU {target_gpu}: "
+                    f"{xv_result.bytes_transferred / 1e6:.1f} MB, "
+                    f"{xv_result.bandwidth_gbps:.1f} Gbps, "
+                    f"chunk={chunk // (1024*1024)} MB"
+                )
+                return TransportMethod.CPU_STAGED, output
             except Exception as e:
-                log.debug(f"ReBAR pipelined transfer failed: {e}")
+                log.debug(f"Pipelined transfer failed: {e}")
 
         # --- Strategy 3: NCCL send/recv ---
         if _DIST_AVAILABLE and self._nccl_initialized:
@@ -518,13 +568,6 @@ class TransferManager:
         """
         # Ensure source tensor is on the right device
         src_tensor = tensor.cuda(source_gpu) if not tensor.is_cuda else tensor
-
-        if _VTP_C_AVAILABLE:
-            # Use C++ extension to bypass Python GIL during async transfer
-            dst_tensor = vramancer_vtp_c.fast_p2p_transfer(src_tensor, target_gpu)
-            if not self.async_transfers:
-                torch.cuda.synchronize(target_gpu)
-            return TransportMethod.CUDA_P2P, dst_tensor
 
         if stream is not None:
             with torch.cuda.stream(stream):

@@ -58,3 +58,12 @@ validation_report.json
 .pytest_cache/
 .coverage.*
 membership.jsonl
+
+# Rust build artifacts
+rust_core/target/
+
+# Temporary working files
+cache_base.txt
+sc_source.txt
+sl_source.txt
+=0.43.0

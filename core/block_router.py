@@ -84,13 +84,13 @@ class RemoteExecutor:
             import io
 
             # ---------------------------------------------------------
-            # ZERO-COPY PATH (Niveau 2) : Bypass Pickle
+            # BINARY SERIALIZATION PATH (safetensors/JSON)
             # ---------------------------------------------------------
             is_safetensor = False
             try:
                 from safetensors.torch import save
                 
-                # Si x est un Tenseur ou un Dict de Tenseurs, on utilise Safetensors (Zero-Copy)
+                # Si x est un Tenseur ou un Dict de Tenseurs, on utilise Safetensors
                 if isinstance(x, torch.Tensor):
                     if getattr(x, "is_cuda", False):
                         # Fix P2P Rust : point de synchronisation dur CUDA préréglé
@@ -115,7 +115,7 @@ class RemoteExecutor:
                 data = buffer.getvalue()
 
             # Prefix de métadonnées rapide (1 octet) pour dire au récepteur comment décoder
-            # 0x01 = JSON/Torch (Secure), 0x02 = Safetensors (Zero-Copy)
+            # 0x01 = JSON/Torch (Secure), 0x02 = Safetensors (Binary)
             header_type = b'\x02' if is_safetensor else b'\x01'
             data = header_type + data
 

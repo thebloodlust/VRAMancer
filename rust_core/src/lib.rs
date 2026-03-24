@@ -153,9 +153,9 @@ mod cuda_ffi {
         }
     }
 
-    /// Double-buffered CPU-staged GPU-to-GPU transfer.
-    /// Bypasses P2P restriction by routing through pinned host memory
-    /// with overlapped DMA in two directions simultaneously.
+    /// Double-buffered CPU-staged GPU-to-GPU transfer (synchronous version).
+    /// Bypasses P2P restriction by routing through pinned host memory.
+    /// NOTE: This version does NOT overlap DtoH/HtoD. Use async_staged_transfer instead.
     pub fn staged_copy_double_buffered(
         src_dev_ptr: u64,
         dst_dev_ptr: u64,
@@ -164,39 +164,374 @@ mod cuda_ffi {
         dst_gpu: i32,
         chunk_bytes: usize,
     ) -> Result<(), String> {
-        // Allocate two pinned host buffers for double-buffering
         let buf_a = mem_alloc_host(chunk_bytes)?;
         let buf_b = mem_alloc_host(chunk_bytes)?;
-
-        // Get contexts for both GPUs
         let src_ctx = device_primary_ctx_retain(src_gpu)?;
         let dst_ctx = device_primary_ctx_retain(dst_gpu)?;
 
         let mut offset: usize = 0;
-        let mut bufs = [buf_a, buf_b];
         let mut buf_idx = 0;
+        let bufs = [buf_a, buf_b];
 
         while offset < total_bytes {
             let chunk = std::cmp::min(chunk_bytes, total_bytes - offset);
             let cur_buf = bufs[buf_idx];
-
-            // Step 1: DtoH — source GPU context
             ctx_set_current(src_ctx)?;
             memcpy_dtoh(cur_buf, src_dev_ptr + offset as u64, chunk)?;
-
-            // Step 2: HtoD — destination GPU context
             ctx_set_current(dst_ctx)?;
             memcpy_htod(dst_dev_ptr + offset as u64, cur_buf, chunk)?;
-
             offset += chunk;
-            buf_idx = 1 - buf_idx; // alternate buffers
+            buf_idx = 1 - buf_idx;
         }
 
-        // Cleanup
         let _ = mem_free_host(buf_a);
         let _ = mem_free_host(buf_b);
+        Ok(())
+    }
+
+    // =======================================================================
+    // CUDA Async primitives: streams, events, async memcpy
+    // =======================================================================
+
+    pub fn stream_create() -> Result<u64, String> {
+        unsafe {
+            let sym: libloading::Symbol<unsafe extern "C" fn(*mut u64, u32) -> CUresult> =
+                lib().get(b"cuStreamCreate\0")
+                    .map_err(|e| format!("cuStreamCreate not found: {e}"))?;
+            let mut stream: u64 = 0;
+            let res = sym(&mut stream, 0); // default stream flags
+            if res != 0 { return Err(format!("cuStreamCreate returned {res}")); }
+            Ok(stream)
+        }
+    }
+
+    pub fn stream_synchronize(stream: u64) -> Result<(), String> {
+        unsafe {
+            let sym: libloading::Symbol<unsafe extern "C" fn(u64) -> CUresult> =
+                lib().get(b"cuStreamSynchronize\0")
+                    .map_err(|e| format!("cuStreamSynchronize not found: {e}"))?;
+            let res = sym(stream);
+            if res != 0 { return Err(format!("cuStreamSynchronize returned {res}")); }
+            Ok(())
+        }
+    }
+
+    pub fn stream_destroy(stream: u64) -> Result<(), String> {
+        unsafe {
+            let sym: libloading::Symbol<unsafe extern "C" fn(u64) -> CUresult> =
+                lib().get(b"cuStreamDestroy_v2\0")
+                    .map_err(|e| format!("cuStreamDestroy_v2 not found: {e}"))?;
+            let res = sym(stream);
+            if res != 0 { return Err(format!("cuStreamDestroy returned {res}")); }
+            Ok(())
+        }
+    }
+
+    pub fn event_create() -> Result<u64, String> {
+        unsafe {
+            let sym: libloading::Symbol<unsafe extern "C" fn(*mut u64, u32) -> CUresult> =
+                lib().get(b"cuEventCreate\0")
+                    .map_err(|e| format!("cuEventCreate not found: {e}"))?;
+            let mut event: u64 = 0;
+            let res = sym(&mut event, 0x02); // CU_EVENT_DISABLE_TIMING
+            if res != 0 { return Err(format!("cuEventCreate returned {res}")); }
+            Ok(event)
+        }
+    }
+
+    pub fn event_record(event: u64, stream: u64) -> Result<(), String> {
+        unsafe {
+            let sym: libloading::Symbol<unsafe extern "C" fn(u64, u64) -> CUresult> =
+                lib().get(b"cuEventRecord\0")
+                    .map_err(|e| format!("cuEventRecord not found: {e}"))?;
+            let res = sym(event, stream);
+            if res != 0 { return Err(format!("cuEventRecord returned {res}")); }
+            Ok(())
+        }
+    }
+
+    pub fn event_destroy(event: u64) -> Result<(), String> {
+        unsafe {
+            let sym: libloading::Symbol<unsafe extern "C" fn(u64) -> CUresult> =
+                lib().get(b"cuEventDestroy_v2\0")
+                    .map_err(|e| format!("cuEventDestroy_v2 not found: {e}"))?;
+            let res = sym(event);
+            if res != 0 { return Err(format!("cuEventDestroy returned {res}")); }
+            Ok(())
+        }
+    }
+
+    pub fn stream_wait_event(stream: u64, event: u64) -> Result<(), String> {
+        unsafe {
+            let sym: libloading::Symbol<unsafe extern "C" fn(u64, u64, u32) -> CUresult> =
+                lib().get(b"cuStreamWaitEvent\0")
+                    .map_err(|e| format!("cuStreamWaitEvent not found: {e}"))?;
+            let res = sym(stream, event, 0);
+            if res != 0 { return Err(format!("cuStreamWaitEvent returned {res}")); }
+            Ok(())
+        }
+    }
+
+    /// cuMemcpyDtoHAsync_v2(dstHost, srcDevice, ByteCount, hStream)
+    pub fn memcpy_dtoh_async(dst_host: *mut u8, src_dev: u64, bytes: usize, stream: u64) -> Result<(), String> {
+        unsafe {
+            let sym: libloading::Symbol<unsafe extern "C" fn(*mut u8, u64, usize, u64) -> CUresult> =
+                lib().get(b"cuMemcpyDtoHAsync_v2\0")
+                    .map_err(|e| format!("cuMemcpyDtoHAsync_v2 not found: {e}"))?;
+            let res = sym(dst_host, src_dev, bytes, stream);
+            if res != 0 { return Err(format!("cuMemcpyDtoHAsync returned {res}")); }
+            Ok(())
+        }
+    }
+
+    /// cuMemcpyHtoDAsync_v2(dstDevice, srcHost, ByteCount, hStream)
+    pub fn memcpy_htod_async(dst_dev: u64, src_host: *const u8, bytes: usize, stream: u64) -> Result<(), String> {
+        unsafe {
+            let sym: libloading::Symbol<unsafe extern "C" fn(u64, *const u8, usize, u64) -> CUresult> =
+                lib().get(b"cuMemcpyHtoDAsync_v2\0")
+                    .map_err(|e| format!("cuMemcpyHtoDAsync_v2 not found: {e}"))?;
+            let res = sym(dst_dev, src_host, bytes, stream);
+            if res != 0 { return Err(format!("cuMemcpyHtoDAsync returned {res}")); }
+            Ok(())
+        }
+    }
+
+    /// True async double-buffered GPU-to-GPU transfer.
+    /// Uses cuMemcpyDtoHAsync + cuMemcpyHtoDAsync on separate streams with
+    /// event-based synchronization to overlap DtoH and HtoD DMA operations.
+    /// This achieves near-theoretical PCIe bandwidth by keeping both DMA
+    /// engines busy simultaneously.
+    pub fn async_staged_transfer(
+        src_dev_ptr: u64,
+        dst_dev_ptr: u64,
+        total_bytes: usize,
+        src_gpu: i32,
+        dst_gpu: i32,
+        chunk_bytes: usize,
+    ) -> Result<(), String> {
+        let n_bufs = 2usize;
+        let src_ctx = device_primary_ctx_retain(src_gpu)?;
+        let dst_ctx = device_primary_ctx_retain(dst_gpu)?;
+
+        // Allocate pinned host buffers
+        let mut host_bufs = Vec::with_capacity(n_bufs);
+        for _ in 0..n_bufs {
+            host_bufs.push(mem_alloc_host(chunk_bytes)?);
+        }
+
+        // Create stream on src GPU context for DtoH
+        ctx_set_current(src_ctx)?;
+        let s_dtoh = stream_create()?;
+        let ev_dtoh = event_create()?;
+
+        // Create stream on dst GPU context for HtoD
+        ctx_set_current(dst_ctx)?;
+        let s_htod = stream_create()?;
+        let ev_htod = event_create()?;
+
+        let n_chunks = (total_bytes + chunk_bytes - 1) / chunk_bytes;
+
+        for i in 0..n_chunks {
+            let buf_idx = i % n_bufs;
+            let offset = i * chunk_bytes;
+            let chunk = std::cmp::min(chunk_bytes, total_bytes - offset);
+
+            // If this buffer is still being used by a previous HtoD, wait
+            if i >= n_bufs {
+                ctx_set_current(src_ctx)?;
+                stream_wait_event(s_dtoh, ev_htod)?;
+            }
+
+            // DtoH: GPU_src -> pinned buffer (async on s_dtoh)
+            ctx_set_current(src_ctx)?;
+            memcpy_dtoh_async(host_bufs[buf_idx], src_dev_ptr + offset as u64, chunk, s_dtoh)?;
+            event_record(ev_dtoh, s_dtoh)?;
+
+            // HtoD: pinned buffer -> GPU_dst (async on s_htod, after DtoH done)
+            ctx_set_current(dst_ctx)?;
+            stream_wait_event(s_htod, ev_dtoh)?;
+            memcpy_htod_async(dst_dev_ptr + offset as u64, host_bufs[buf_idx] as *const u8, chunk, s_htod)?;
+            event_record(ev_htod, s_htod)?;
+        }
+
+        // Synchronize both streams
+        ctx_set_current(src_ctx)?;
+        stream_synchronize(s_dtoh)?;
+        ctx_set_current(dst_ctx)?;
+        stream_synchronize(s_htod)?;
+
+        // Cleanup
+        ctx_set_current(src_ctx)?;
+        let _ = stream_destroy(s_dtoh);
+        let _ = event_destroy(ev_dtoh);
+        ctx_set_current(dst_ctx)?;
+        let _ = stream_destroy(s_htod);
+        let _ = event_destroy(ev_htod);
+        for buf in host_bufs {
+            let _ = mem_free_host(buf);
+        }
 
         Ok(())
+    }
+}
+
+// =========================================================================
+// GpuPipeline: Persistent async pipeline with pre-allocated resources
+// =========================================================================
+
+/// Persistent GPU-to-GPU transfer pipeline.
+/// Pre-allocates CUDA streams, events, and pinned buffers on init.
+/// Reuses them for every transfer call, avoiding the ~4ms setup overhead.
+#[cfg(feature = "cuda")]
+#[pyclass]
+struct GpuPipeline {
+    src_gpu: i32,
+    dst_gpu: i32,
+    src_ctx: u64,
+    dst_ctx: u64,
+    s_dtoh: u64,
+    s_htod: u64,
+    ev_dtoh: u64,
+    ev_htod: u64,
+    host_bufs: Vec<*mut u8>,
+    chunk_bytes: usize,
+}
+
+// SAFETY: The raw pointers (host_bufs) are pinned CUDA host memory that is
+// only accessed from the thread calling transfer(). CUDA contexts and streams
+// are thread-safe when used with cuCtxSetCurrent.
+#[cfg(feature = "cuda")]
+unsafe impl Send for GpuPipeline {}
+
+#[cfg(feature = "cuda")]
+#[pymethods]
+impl GpuPipeline {
+    /// Create a new persistent pipeline between two GPUs.
+    /// Pre-allocates all CUDA resources (streams, events, pinned buffers).
+    ///
+    /// Args:
+    ///   src_gpu: source GPU ordinal
+    ///   dst_gpu: destination GPU ordinal
+    ///   chunk_mb: chunk size in MiB (default 16)
+    #[new]
+    fn new(src_gpu: i32, dst_gpu: i32, chunk_mb: Option<usize>) -> PyResult<Self> {
+        let chunk_bytes = chunk_mb.unwrap_or(16) * 1024 * 1024;
+        let n_bufs = 2usize;
+
+        let src_ctx = cuda_ffi::device_primary_ctx_retain(src_gpu)
+            .map_err(|e| PyValueError::new_err(format!("src ctx: {e}")))?;
+        let dst_ctx = cuda_ffi::device_primary_ctx_retain(dst_gpu)
+            .map_err(|e| PyValueError::new_err(format!("dst ctx: {e}")))?;
+
+        // Allocate pinned host buffers
+        let mut host_bufs = Vec::with_capacity(n_bufs);
+        for i in 0..n_bufs {
+            let buf = cuda_ffi::mem_alloc_host(chunk_bytes)
+                .map_err(|e| PyValueError::new_err(format!("pinned buf {i}: {e}")))?;
+            host_bufs.push(buf);
+        }
+
+        // Create streams
+        cuda_ffi::ctx_set_current(src_ctx)
+            .map_err(|e| PyValueError::new_err(e))?;
+        let s_dtoh = cuda_ffi::stream_create()
+            .map_err(|e| PyValueError::new_err(format!("stream DtoH: {e}")))?;
+        let ev_dtoh = cuda_ffi::event_create()
+            .map_err(|e| PyValueError::new_err(format!("event DtoH: {e}")))?;
+
+        cuda_ffi::ctx_set_current(dst_ctx)
+            .map_err(|e| PyValueError::new_err(e))?;
+        let s_htod = cuda_ffi::stream_create()
+            .map_err(|e| PyValueError::new_err(format!("stream HtoD: {e}")))?;
+        let ev_htod = cuda_ffi::event_create()
+            .map_err(|e| PyValueError::new_err(format!("event HtoD: {e}")))?;
+
+        Ok(GpuPipeline {
+            src_gpu, dst_gpu, src_ctx, dst_ctx,
+            s_dtoh, s_htod, ev_dtoh, ev_htod,
+            host_bufs, chunk_bytes,
+        })
+    }
+
+    /// Transfer data between GPUs using the pre-allocated async pipeline.
+    /// GIL is released during the entire transfer.
+    fn transfer(&self, py: Python, src_ptr: u64, dst_ptr: u64, size_bytes: usize) -> PyResult<bool> {
+        let s_dtoh = self.s_dtoh;
+        let s_htod = self.s_htod;
+        let ev_dtoh = self.ev_dtoh;
+        let ev_htod = self.ev_htod;
+        let src_ctx = self.src_ctx;
+        let dst_ctx = self.dst_ctx;
+        let chunk_bytes = self.chunk_bytes;
+        let n_bufs = self.host_bufs.len();
+        // Convert raw pointers to usize for Send safety
+        let host_buf_addrs: Vec<usize> = self.host_bufs.iter().map(|p| *p as usize).collect();
+
+        py.allow_threads(move || {
+            let n_chunks = (size_bytes + chunk_bytes - 1) / chunk_bytes;
+
+            for i in 0..n_chunks {
+                let buf_idx = i % n_bufs;
+                let buf_ptr = host_buf_addrs[buf_idx] as *mut u8;
+                let offset = i * chunk_bytes;
+                let chunk = std::cmp::min(chunk_bytes, size_bytes - offset);
+
+                // Wait for buffer to be free (previous HtoD using it)
+                if i >= n_bufs {
+                    cuda_ffi::ctx_set_current(src_ctx)
+                        .map_err(|e| PyValueError::new_err(e))?;
+                    cuda_ffi::stream_wait_event(s_dtoh, ev_htod)
+                        .map_err(|e| PyValueError::new_err(e))?;
+                }
+
+                // DtoH: GPU_src -> pinned buffer
+                cuda_ffi::ctx_set_current(src_ctx)
+                    .map_err(|e| PyValueError::new_err(e))?;
+                cuda_ffi::memcpy_dtoh_async(
+                    buf_ptr, src_ptr + offset as u64, chunk, s_dtoh,
+                ).map_err(|e| PyValueError::new_err(e))?;
+                cuda_ffi::event_record(ev_dtoh, s_dtoh)
+                    .map_err(|e| PyValueError::new_err(e))?;
+
+                // HtoD: pinned buffer -> GPU_dst
+                cuda_ffi::ctx_set_current(dst_ctx)
+                    .map_err(|e| PyValueError::new_err(e))?;
+                cuda_ffi::stream_wait_event(s_htod, ev_dtoh)
+                    .map_err(|e| PyValueError::new_err(e))?;
+                cuda_ffi::memcpy_htod_async(
+                    dst_ptr + offset as u64, buf_ptr as *const u8, chunk, s_htod,
+                ).map_err(|e| PyValueError::new_err(e))?;
+                cuda_ffi::event_record(ev_htod, s_htod)
+                    .map_err(|e| PyValueError::new_err(e))?;
+            }
+
+            // Synchronize
+            cuda_ffi::ctx_set_current(src_ctx)
+                .map_err(|e| PyValueError::new_err(e))?;
+            cuda_ffi::stream_synchronize(s_dtoh)
+                .map_err(|e| PyValueError::new_err(e))?;
+            cuda_ffi::ctx_set_current(dst_ctx)
+                .map_err(|e| PyValueError::new_err(e))?;
+            cuda_ffi::stream_synchronize(s_htod)
+                .map_err(|e| PyValueError::new_err(e))?;
+
+            Ok(true)
+        })
+    }
+}
+
+#[cfg(feature = "cuda")]
+impl Drop for GpuPipeline {
+    fn drop(&mut self) {
+        let _ = cuda_ffi::ctx_set_current(self.src_ctx);
+        let _ = cuda_ffi::stream_destroy(self.s_dtoh);
+        let _ = cuda_ffi::event_destroy(self.ev_dtoh);
+        let _ = cuda_ffi::ctx_set_current(self.dst_ctx);
+        let _ = cuda_ffi::stream_destroy(self.s_htod);
+        let _ = cuda_ffi::event_destroy(self.ev_htod);
+        for buf in &self.host_bufs {
+            let _ = cuda_ffi::mem_free_host(*buf);
+        }
     }
 }
 
@@ -656,13 +991,60 @@ fn staged_gpu_transfer(
     Err(PyValueError::new_err("Compilé sans feature CUDA."))
 }
 
+/// True async double-buffered GPU-to-GPU transfer with overlapped DMA.
+/// Uses cuMemcpyDtoHAsync + cuMemcpyHtoDAsync on separate CUDA streams
+/// with event-based synchronization. DtoH (GPU→CPU) and HtoD (CPU→GPU)
+/// overlap on different DMA engines, achieving near-theoretical PCIe bandwidth.
+///
+/// Args:
+///   src_ptr: source tensor device pointer
+///   dst_ptr: destination tensor device pointer
+///   size_bytes: total bytes to transfer
+///   src_gpu: source GPU ordinal
+///   dst_gpu: destination GPU ordinal
+///   chunk_bytes: chunk size for pipelining (default 16 MiB)
+///
+/// Returns: True on success
+#[cfg(feature = "cuda")]
+#[pyfunction]
+fn async_gpu_transfer(
+    py: Python,
+    src_ptr: u64,
+    dst_ptr: u64,
+    size_bytes: usize,
+    src_gpu: i32,
+    dst_gpu: i32,
+    chunk_bytes: Option<usize>,
+) -> PyResult<bool> {
+    let chunk = chunk_bytes.unwrap_or(16 * 1024 * 1024); // 16 MiB default
+    py.allow_threads(move || {
+        cuda_ffi::async_staged_transfer(
+            src_ptr, dst_ptr, size_bytes, src_gpu, dst_gpu, chunk,
+        )
+        .map(|()| true)
+        .map_err(|e| PyValueError::new_err(format!("Async staged transfer failed: {e}")))
+    })
+}
+
+#[cfg(not(feature = "cuda"))]
+#[pyfunction]
+fn async_gpu_transfer(
+    _py: Python, _src_ptr: u64, _dst_ptr: u64, _size_bytes: usize,
+    _src_gpu: i32, _dst_gpu: i32, _chunk_bytes: Option<usize>,
+) -> PyResult<bool> {
+    Err(PyValueError::new_err("Compilé sans feature CUDA."))
+}
+
 #[pymodule]
 fn vramancer_rust(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<TransportTier>()?;
+    #[cfg(feature = "cuda")]
+    m.add_class::<GpuPipeline>()?;
     m.add_function(wrap_pyfunction!(detect_best_transport, m)?)?;
     m.add_function(wrap_pyfunction!(direct_vram_load, m)?)?;
     m.add_function(wrap_pyfunction!(direct_vram_copy, m)?)?;
     m.add_function(wrap_pyfunction!(staged_gpu_transfer, m)?)?;
+    m.add_function(wrap_pyfunction!(async_gpu_transfer, m)?)?;
     m.add_function(wrap_pyfunction!(sign_payload_fast, m)?)?;
     m.add_function(wrap_pyfunction!(verify_hmac_fast, m)?)?;
     m.add_function(wrap_pyfunction!(verify_hmac_batch, m)?)?;

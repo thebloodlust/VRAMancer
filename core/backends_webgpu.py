@@ -29,37 +29,17 @@ class WebGPUBackend(BaseLLMBackend):
         self.model_name = None
         self.tokenizer = None
         
-        self.log.info(" Initializing WebGPU Orchestrator (Production Mode)...")
+        self.log.info("Initializing WebGPU Orchestrator...")
         self.node_manager = WebGPUNodeManager(port=8081)
-        self.node_manager.start = self._start_node_manager
+        # Start the node manager (creates event loop, WebSocket server, dispatcher)
+        self.node_manager.start()
         
-        self._loop = None
-        self._thread = threading.Thread(target=self._run_event_loop, daemon=True)
-        self._thread.start()
-        
-        while self._loop is None:
+        # Wait for the event loop to be ready
+        for _ in range(100):
+            if self.node_manager._loop is not None:
+                break
             time.sleep(0.01)
-
-    def _run_event_loop(self):
-        self._loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(self._loop)
-        
-        if hasattr(self.node_manager, "is_running"):
-            self.node_manager.is_running = True
-            
-        try:
-            import websockets
-            start_server = websockets.serve(self.node_manager._handler, "0.0.0.0", self.node_manager.port)
-            self._loop.run_until_complete(start_server)
-        except ImportError:
-            self.log.error("websockets is not installed. WebGPU clients will not connect.")
-            
-        self._loop.create_task(self.node_manager._task_dispatcher())
-        self.log.info(f"WebGPU WebSocket Server listening on 0.0.0.0:{self.node_manager.port}")
-        self._loop.run_forever()
-
-    def _start_node_manager(self):
-        pass
+        self._loop = self.node_manager._loop
 
     def load_model(self, model_name: str, **kwargs):
         self.model_name = model_name

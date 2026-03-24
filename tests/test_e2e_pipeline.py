@@ -151,6 +151,83 @@ class TestOllamaBackendStub:
                 os.environ.pop("OLLAMA_HOST", None)
 
 
+class TestLlamaCppBackendStub:
+    """Test llama.cpp backend in stub mode."""
+
+    def test_select_llamacpp(self):
+        from core.backends import select_backend
+        b = select_backend("test-model.gguf", backend="llamacpp")
+        assert b.__class__.__name__ == "LlamaCppBackend"
+
+    def test_load_model_stub(self):
+        from core.backends_llamacpp import LlamaCppBackend
+        b = LlamaCppBackend("test-model.gguf")
+        result = b.load_model("test-model.gguf")
+        assert result is not None
+        assert b.model_name == "test-model.gguf"
+        assert b.is_loaded
+
+    def test_generate_stub(self):
+        from core.backends_llamacpp import LlamaCppBackend
+        b = LlamaCppBackend("test-model.gguf")
+        b.load_model("test-model.gguf")
+        text = b.generate("Hello world")
+        assert isinstance(text, str)
+        assert len(text) > 0
+        assert "llamacpp" in text.lower() or "stub" in text.lower()
+
+    def test_generate_stream_stub(self):
+        from core.backends_llamacpp import LlamaCppBackend
+        b = LlamaCppBackend("test-model.gguf")
+        b.load_model("test-model.gguf")
+        tokens = list(b.generate_stream("Hello world"))
+        assert len(tokens) > 0
+        assert all(isinstance(t, str) for t in tokens)
+
+    def test_split_model_stub(self):
+        from core.backends_llamacpp import LlamaCppBackend
+        b = LlamaCppBackend("test-model.gguf")
+        b.load_model("test-model.gguf")
+        blocks = b.split_model(2)
+        assert len(blocks) == 1  # llama.cpp handles GPU split internally
+
+    def test_infer_stub(self):
+        from core.backends_llamacpp import LlamaCppBackend
+        b = LlamaCppBackend("test-model.gguf")
+        b.load_model("test-model.gguf")
+        result = b.infer("test input")
+        assert result is not None
+
+    def test_infer_no_model_raises(self):
+        from core.backends_llamacpp import LlamaCppBackend
+        b = LlamaCppBackend("test-model.gguf")
+        with pytest.raises(RuntimeError, match="non chargé"):
+            b.infer("test")
+
+    def test_tokenizer_proxy_stub(self):
+        from core.backends_llamacpp import LlamaCppBackend
+        b = LlamaCppBackend("test-model.gguf")
+        b.load_model("test-model.gguf")
+        assert b.tokenizer is not None
+        tokens = b.tokenizer.encode("hello world")
+        assert isinstance(tokens, list)
+        text = b.tokenizer.decode(tokens)
+        assert isinstance(text, str)
+
+    def test_backend_type(self):
+        from core.backends_llamacpp import LlamaCppBackend
+        b = LlamaCppBackend("test-model.gguf")
+        assert b.backend_type == "llamacpp"
+
+    def test_generate_batch_stub(self):
+        from core.backends_llamacpp import LlamaCppBackend
+        b = LlamaCppBackend("test-model.gguf")
+        b.load_model("test-model.gguf")
+        results = b.generate_batch(["Hello", "World"], max_new_tokens=10)
+        assert len(results) == 2
+        assert all(isinstance(r, str) for r in results)
+
+
 class TestHuggingFaceBackendUnit:
     """Test HuggingFace backend structure (no model loading)."""
 

@@ -32,16 +32,16 @@ if __name__ == "__main__":
     # Require secret from environment — never use a hardcoded default
     secret = os.environ.get("VRM_API_TOKEN")
     if not secret:
-        logging.info("ERROR: Set VRM_API_TOKEN environment variable before running.", file=sys.stderr)
+        logging.error("Set VRM_API_TOKEN environment variable before running.")
         sys.exit(1)
     node_key = generate_node_key(secret)
     known_keys = [node_key]
-    logging.info("Authentifié :", authenticate_node(node_key, known_keys))
+    logging.info(f"Authentifié : {authenticate_node(node_key, known_keys)}")
 
-    # Chiffrement d’un socket (exemple)
+    # Chiffrement d'un socket (exemple)
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         ssock = secure_socket(s)
         logging.info("Socket sécurisé (TLS)")
     except Exception as e:
-        logging.info("Erreur SSL :", e)
+        logging.info(f"Erreur SSL : {e}")

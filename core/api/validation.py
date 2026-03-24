@@ -1,7 +1,20 @@
 """Input validation helpers for VRAMancer API endpoints."""
 from __future__ import annotations
 
+import os
 from typing import Optional, Tuple
+
+# Max prompt length in characters (configurable via env var)
+_MAX_PROMPT_LENGTH = int(os.environ.get('VRM_MAX_PROMPT_LENGTH', '100000'))
+
+
+def validate_prompt(prompt: str) -> Optional[Tuple[str, int]]:
+    """Validate prompt text. Returns error tuple or None on success."""
+    if not prompt or not prompt.strip():
+        return ('prompt is required', 400)
+    if len(prompt) > _MAX_PROMPT_LENGTH:
+        return (f'prompt too long ({len(prompt)} chars, max {_MAX_PROMPT_LENGTH})', 413)
+    return None
 
 
 def validate_generation_params(data: dict) -> Tuple[dict, Optional[Tuple[str, int]]]:
@@ -58,4 +71,4 @@ def count_tokens(text: str, tokenizer=None) -> int:
     return len(text.split())
 
 
-__all__ = ["validate_generation_params", "count_tokens"]
+__all__ = ["validate_generation_params", "validate_prompt", "count_tokens"]

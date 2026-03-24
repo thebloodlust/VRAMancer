@@ -101,6 +101,17 @@ class TestRustCoreFunctions:
         assert hasattr(vr, 'direct_vram_copy')
 
     @needs_rust
+    def test_async_gpu_transfer_registered(self):
+        """async_gpu_transfer function exists in module."""
+        assert hasattr(vr, 'async_gpu_transfer')
+
+    @needs_rust
+    def test_gpu_pipeline_registered(self):
+        """GpuPipeline class exists in module."""
+        assert hasattr(vr, 'GpuPipeline')
+        assert hasattr(vr, 'direct_vram_copy')
+
+    @needs_rust
     def test_inject_to_vram_ptr_registered(self):
         """inject_to_vram_ptr function exists in module."""
         assert hasattr(vr, 'inject_to_vram_ptr')
@@ -200,6 +211,44 @@ class TestRustGPUTransfer:
         torch.cuda.synchronize()
 
         assert torch.allclose(a.cpu(), b.cpu())
+
+    @needs_rust
+    @needs_gpu
+    def test_gpu_pipeline_transfer(self):
+        """GpuPipeline persistent async pipeline: correct data."""
+        import torch
+        # Ensure CUDA context initialized on both GPUs
+        _ = torch.zeros(1, device='cuda:0')
+        _ = torch.zeros(1, device='cuda:1')
+        torch.cuda.synchronize()
+
+        pipe = vr.GpuPipeline(0, 1, 4)  # 4 MB chunks
+        n = 5 * 1024 * 1024 // 4  # 5 MB of float32
+        src = torch.randn(n, device='cuda:0')
+        dst = torch.empty(n, device='cuda:1')
+        torch.cuda.synchronize()
+
+        pipe.transfer(src.data_ptr(), dst.data_ptr(), n * 4)
+        torch.cuda.synchronize()
+
+        assert torch.allclose(src.cpu(), dst.cpu())
+
+    @needs_rust
+    @needs_gpu
+    def test_async_gpu_transfer_correctness(self):
+        """async_gpu_transfer non-persistent: correct data."""
+        import torch
+        n = 2 * 1024 * 1024 // 4  # 2 MB of float32
+        src = torch.randn(n, device='cuda:0')
+        dst = torch.empty(n, device='cuda:1')
+        torch.cuda.synchronize()
+
+        vr.async_gpu_transfer(
+            src.data_ptr(), dst.data_ptr(), n * 4, 0, 1, 1 * 1024 * 1024
+        )
+        torch.cuda.synchronize()
+
+        assert torch.allclose(src.cpu(), dst.cpu())
 
 
 # ---------------------------------------------------------------------------

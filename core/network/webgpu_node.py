@@ -52,6 +52,47 @@ class WebGPUTask:
         self.future = asyncio.Future()
         self.created_at = time.time()
 
+
+# ── Inline XOR parity (replaces holographic_memory dependency) ──────
+def _xor_bytes(b1: bytes, b2: bytes) -> bytes:
+    """XOR two equal-length byte strings."""
+    return bytes(a ^ b for a, b in zip(b1, b2))
+
+
+def _encode_parity(tensor_blob: bytes, num_shards: int):
+    """Split tensor into num_shards data shards + 1 XOR parity shard."""
+    shard_size = len(tensor_blob) // num_shards
+    shards = []
+    for i in range(num_shards):
+        start = i * shard_size
+        end = start + shard_size if i < num_shards - 1 else len(tensor_blob)
+        shards.append(tensor_blob[start:end])
+    max_len = max(len(s) for s in shards)
+    padded = [s.ljust(max_len, b'\x00') for s in shards]
+    parity = bytearray(max_len)
+    for shard in padded:
+        parity = _xor_bytes(parity, shard)
+    return padded, bytes(parity)
+
+
+def _heal_parity(shards, parity: bytes) -> bytes:
+    """Reconstruct a single missing shard using XOR parity."""
+    missing_index = -1
+    for i, shard in enumerate(shards):
+        if shard is None:
+            if missing_index != -1:
+                return b""  # Can't heal >1 missing shard
+            missing_index = i
+    if missing_index == -1:
+        return b"".join(shards)
+    reconstructed = bytearray(len(parity))
+    for i, shard in enumerate(shards):
+        if i != missing_index and shard is not None:
+            reconstructed = _xor_bytes(reconstructed, shard)
+    reconstructed = _xor_bytes(reconstructed, parity)
+    shards[missing_index] = bytes(reconstructed)
+    return b"".join(shards)
+
 class WebGPUNodeManager:
     def __init__(self, port: int = 8560, heartbeat_interval: int = 15):
         self.port = port
@@ -326,8 +367,7 @@ class WebGPUNodeManager:
         use_hologram = num_data_nodes > 1 and len(available_clients) > num_data_nodes
         
         if use_hologram:
-            from core.holographic_memory import hive_memory
-            shards, parity = hive_memory.encode_hologram(kv_tensor, num_data_nodes)
+            shards, parity = _encode_parity(kv_tensor, num_data_nodes)
             _log.info(f" Swarm Hologram: Déploiement distribué sur {num_data_nodes} noeuds + 1 noeud Parité (Self-Healing).")
         else:
             num_data_nodes = len(available_clients)
@@ -387,7 +427,7 @@ class WebGPUNodeManager:
                 try:
                     parity_result = parity_future.result()
                     _log.warning(" [Swarm] Intrusion/Straggler détecté ! Activation du Cortex Holographique...")
-                    aggregated_result = hive_memory.heal_hologram(valid_results, parity_result)
+                    aggregated_result = _heal_parity(valid_results, parity_result)
                     return aggregated_result
                 except Exception:
                     pass # Parity also failed

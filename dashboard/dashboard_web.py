@@ -95,8 +95,27 @@ def set_memory_manager(hm):
 
 @app.route("/")
 def dashboard():
-    # Bypass heavy GPU/Memory init that might stall load
-    gpus = [{"name": "Cluster-L1 Orchestrator", "total_vram_mb": 24576, "used_vram_mb": 4096, "is_available": True}]
+    gpus = []
+    try:
+        import torch
+        if torch.cuda.is_available():
+            for i in range(torch.cuda.device_count()):
+                try:
+                    props = torch.cuda.get_device_properties(i)
+                    alloc = torch.cuda.memory_allocated(i)
+                    total = props.total_memory
+                    gpus.append({
+                        "name": props.name,
+                        "total_vram_mb": total // (1024 * 1024),
+                        "used_vram_mb": alloc // (1024 * 1024),
+                        "is_available": True,
+                    })
+                except Exception:
+                    gpus.append({"name": f"GPU {i}", "total_vram_mb": 0, "used_vram_mb": 0, "is_available": False})
+    except ImportError:
+        pass
+    if not gpus:
+        gpus = [{"name": "No GPU detected", "total_vram_mb": 0, "used_vram_mb": 0, "is_available": False}]
     memory = None
     return render_template("dashboard.html", gpus=gpus, memory=memory)
 
@@ -169,7 +188,7 @@ def api_swarm_status():
         "activeNodes": clients,
         "flopsProcessed": flops,
         "tensorsProcessed": tensors,
-        "bandwidth": round(clients * 1.5, 1) # simple fake proxy for visuals if nodes exist
+        "bandwidth": 0.0
     })
 
 @app.route("/api/memory")

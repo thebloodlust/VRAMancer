@@ -127,7 +127,9 @@ class InferencePipeline:
         self.continuous_batcher = None
         self.paged_kv = None
         self.lending_pool = None
+        self.hierarchical_memory = None
         self.fault_manager: Optional[Any] = None
+        self.turbo_engine: Optional[Any] = None  # TurboEngine for compiled decode
 
         # Dynamic rebalancing
         self._rebalance_thread: Optional[threading.Thread] = None
@@ -190,6 +192,12 @@ class InferencePipeline:
             self.num_gpus = min(num_gpus, len(gpus))
             _logger.info("GPUs: %d available, using %d", len(gpus), self.num_gpus)
 
+            # 1b. Auto single-GPU bypass: skip multi-GPU overhead when model fits
+            if self.num_gpus > 1:
+                self.num_gpus = self._auto_select_num_gpus(
+                    model_name, self.num_gpus, model_kwargs,
+                )
+
             # 2. Select backend
             from core.backends import select_backend
             self.backend = select_backend(model_name, backend=self.backend_name, num_gpus=self.num_gpus)
@@ -217,7 +225,7 @@ class InferencePipeline:
 
             # 5. Load model via backend
             try:
-                self.backend.load_model(model_name, **model_kwargs)
+                self.backend.load_model(model_name, num_gpus=self.num_gpus, **model_kwargs)
             except Exception as e:
                 _logger.error("Model load failed: %s", e)
                 raise
@@ -274,15 +282,21 @@ class InferencePipeline:
             self._init_continuous_batching()
 
             # 13. Init VRAM Lending Pool (cooperative GPU memory)
-            # Skip when vLLM manages its own VRAM (it pre-allocates KV cache)
+            # Skip when vLLM/llama.cpp manage their own VRAM
             _backend_type = getattr(self.backend, 'backend_type', '')
-            if self.num_gpus > 1 and _backend_type != 'vllm':
+            if self.num_gpus > 1 and _backend_type not in ('vllm', 'llamacpp'):
                 self._init_lending_pool()
+
+            # 13b. Init Hierarchical Memory Manager (L1-L6 tiered memory)
+            self._init_hierarchical_memory()
 
             # 14. Init GPU Fault Tolerance
             self._init_fault_tolerance()
-            
-            # 15. Awaken the Connectome (Neuroplasticity Engine)
+
+            # 15. Init TurboEngine (compiled decode — ~2x speedup)
+            self._init_turbo_engine()
+
+            # 16. Awaken the Connectome (Neuroplasticity Engine)
             try:
                 from core.network.connectome import global_connectome
                 global_connectome.start_heartbeat()
@@ -375,19 +389,49 @@ class InferencePipeline:
                 if temperature != 1.0:
                     gen_kwargs["do_sample"] = True
 
-                # --- The Swarm Speculative Brain ---
-                if enable_speculative and draft_model_callable:
-                    from core.speculative_decoding import SwarmSpeculativeDecoder
-                    decoder = SwarmSpeculativeDecoder(
-                        draft_model_callable=draft_model_callable,
-                        swarm_verify_callable=self.infer,
-                        gamma=5,
-                        temperature=temperature
+                # --- Speculative Decoding ---
+                if enable_speculative:
+                    from core.speculative_decoding import (
+                        SwarmSpeculativeDecoder, create_draft_callable,
                     )
-                    # We tokenize the prompt manually
-                    input_ids = self.backend.tokenizer.encode(prompt, return_tensors="pt")
-                    out_ids = decoder.generate(input_ids, max_new_tokens)
-                    result = self.backend.tokenizer.decode(out_ids[0], skip_special_tokens=True)
+                    # Auto-create draft callable from backend if not provided
+                    _draft = draft_model_callable
+                    if _draft is None:
+                        draft_name = os.environ.get("VRM_DRAFT_MODEL")
+                        _draft = create_draft_callable(
+                            self.backend, draft_model_name=draft_name,
+                        )
+                    if _draft is not None:
+                        decoder = SwarmSpeculativeDecoder(
+                            draft_model_callable=_draft,
+                            swarm_verify_callable=self.infer,
+                            gamma=int(os.environ.get("VRM_SPEC_GAMMA", "5")),
+                            temperature=temperature,
+                        )
+                        input_ids = self.backend.tokenizer.encode(
+                            prompt, return_tensors="pt",
+                        )
+                        out_ids = decoder.generate(input_ids, max_new_tokens)
+                        result = self.backend.tokenizer.decode(
+                            out_ids[0], skip_special_tokens=True,
+                        )
+                    else:
+                        _logger.debug("Speculative decoding requested but no draft model available")
+                        result = self._protected_generate(prompt, gen_kwargs)
+                elif (self.continuous_batcher is not None
+                      and self.continuous_batcher._running):
+                    # Route through continuous batcher for automatic
+                    # request batching when multiple requests are in flight
+                    future = self.continuous_batcher.submit(
+                        prompt,
+                        max_new_tokens=gen_kwargs.get("max_new_tokens", max_new_tokens),
+                        temperature=gen_kwargs.get("temperature", temperature),
+                        top_k=gen_kwargs.get("top_k", top_k),
+                        top_p=gen_kwargs.get("top_p", top_p),
+                    )
+                    result = future.result(
+                        timeout=float(os.environ.get("VRM_GENERATE_TIMEOUT", "300"))
+                    )
                 else:
                     # Execute with fault tolerance protection
                     result = self._protected_generate(prompt, gen_kwargs)
@@ -473,9 +517,23 @@ class InferencePipeline:
     def _protected_generate(self, prompt: str, gen_kwargs: dict) -> str:
         """Execute generate() with GPU fault protection.
 
-        If the fault manager is active, wraps the call with protected_call()
-        which handles OOM retry, GPU isolation and fallback to alternate GPUs.
+        Prefers TurboEngine (compiled decode, ~2x speedup) when available.
+        Falls back to backend.generate() otherwise.
         """
+        # TurboEngine path: compiled Inductor decode (fastest)
+        if self.turbo_engine is not None:
+            try:
+                return self.turbo_engine.generate(
+                    prompt,
+                    max_new_tokens=gen_kwargs.get("max_new_tokens", 128),
+                    temperature=gen_kwargs.get("temperature", 1.0),
+                    top_k=gen_kwargs.get("top_k", 0),
+                    top_p=gen_kwargs.get("top_p", 1.0),
+                    do_sample=gen_kwargs.get("do_sample", False),
+                )
+            except Exception as e:
+                _logger.warning("TurboEngine generate failed (%s), falling back", e)
+
         if self.fault_manager and _FAULT_TOLERANCE:
             # Determine primary GPU (device 0 for single-GPU, or first healthy)
             primary_gpu = self._get_primary_gpu()
@@ -584,6 +642,43 @@ class InferencePipeline:
             )
         except Exception as e:
             _logger.warning("Fault tolerance init failed: %s", e)
+
+    def _init_turbo_engine(self) -> None:
+        """Initialize TurboEngine for compiled decode (~2x speedup).
+
+        Uses torch.compile with Inductor kernel fusion on the model body.
+        Skipped for vLLM/Ollama backends (they have own optimized runtimes).
+        """
+        if os.environ.get("VRM_MINIMAL_TEST") or os.environ.get("VRM_DISABLE_TURBO"):
+            return
+
+        backend_type = getattr(self.backend, 'backend_type', 'huggingface')
+        if backend_type in ('vllm', 'ollama', 'llamacpp'):
+            _logger.debug("TurboEngine skipped for %s backend", backend_type)
+            return
+
+        model = getattr(self.backend, 'model', None)
+        tokenizer = getattr(self.backend, 'tokenizer', None)
+        if model is None or tokenizer is None:
+            return
+
+        try:
+            from core.turbo_engine import create_turbo_engine
+            self.turbo_engine = create_turbo_engine(
+                model,
+                tokenizer,
+                transfer_manager=self.transfer_manager,
+                max_seq_len=int(os.environ.get("VRM_TURBO_MAX_SEQ", "2048")),
+            )
+            # Warmup triggers torch.compile JIT (slow first time, fast after)
+            self.turbo_engine.warmup()
+            _logger.info(
+                "TurboEngine active: compiled=%s",
+                getattr(self.turbo_engine, '_compiled', False),
+            )
+        except Exception as e:
+            _logger.warning("TurboEngine init failed (%s), using standard decode", e)
+            self.turbo_engine = None
             self.fault_manager = None
 
     def _migrate_blocks(self, source_gpu: int, target_gpu: int) -> int:
@@ -712,6 +807,159 @@ class InferencePipeline:
 
     def is_loaded(self) -> bool:
         return self._loaded
+
+    # ------------------------------------------------------------------
+    # Auto single-GPU bypass
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _estimate_model_vram_gb(model_name: str, model_kwargs: dict) -> Optional[float]:
+        """Estimate model VRAM footprint (GB) from HuggingFace config.
+
+        Returns None if estimation fails (safe fallback: use multi-GPU).
+        Uses local cache first, then a quick network fetch.
+        """
+        if _MINIMAL:
+            return None
+        try:
+            from transformers import AutoConfig
+        except ImportError:
+            return None
+
+        config = None
+        # Try local cache first (no network = fast)
+        try:
+            config = AutoConfig.from_pretrained(
+                model_name, trust_remote_code=True, local_files_only=True,
+            )
+        except Exception:
+            pass
+        # Fallback: quick network fetch (only config.json, small file)
+        if config is None:
+            try:
+                config = AutoConfig.from_pretrained(model_name, trust_remote_code=True)
+            except Exception:
+                return None
+
+        # Extract parameter count hints
+        num_params = None
+        # Some configs expose it directly
+        if hasattr(config, 'num_parameters'):
+            num_params = config.num_parameters
+        # Otherwise estimate from architecture
+        if num_params is None:
+            # Handle different config styles (Llama/Mistral vs GPT-2 vs others)
+            hidden = (
+                getattr(config, 'hidden_size', None)
+                or getattr(config, 'n_embd', None)
+                or getattr(config, 'd_model', None)
+            )
+            n_layers = (
+                getattr(config, 'num_hidden_layers', None)
+                or getattr(config, 'n_layer', None)
+                or getattr(config, 'num_layers', None)
+            )
+            vocab = getattr(config, 'vocab_size', None)
+            intermediate = (
+                getattr(config, 'intermediate_size', None)
+                or getattr(config, 'n_inner', None)
+                or getattr(config, 'd_ff', None)
+            )
+            if hidden and n_layers and vocab:
+                if intermediate is None:
+                    intermediate = hidden * 4
+                # Rough transformer param estimate:
+                # Each layer: 4*h^2 (attn) + 2*h*ff (mlp) + small
+                # Embeddings: vocab * h
+                per_layer = 4 * hidden * hidden + 2 * hidden * intermediate
+                embeddings = vocab * hidden
+                num_params = per_layer * n_layers + embeddings
+
+        if num_params is None:
+            return None
+
+        # Bytes per parameter depends on quantization
+        quant = os.environ.get("VRM_QUANTIZATION", "").lower()
+        name_lower = model_name.lower()
+        if quant in ("nvfp4", "nf4") or "nvfp4" in name_lower:
+            # NF4: final weights are ~0.56 B/param.  With device_map={"":gpu}
+            # + streaming load, BnB quantizes layer-by-layer in-place without
+            # buffering all fp16.  14B NF4 → ~10.8 GB final on GPU.
+            # Use 0.8 to account for quantization state + overhead.
+            bytes_per_param = 0.8
+        elif quant in ("int4", "gptq", "awq") or any(
+            q in name_lower for q in ("gptq", "awq", "4bit", "int4")
+        ):
+            bytes_per_param = 0.6
+        elif quant in ("int8", "fp8") or any(
+            q in name_lower for q in ("int8", "fp8", "8bit")
+        ):
+            # INT8: final ~1 B/param + outlier columns in fp16 + absmax state.
+            # With streaming load, peak is ~1.5 B/param (not full fp16).
+            bytes_per_param = 1.5
+        else:
+            bytes_per_param = 2.0  # fp16/bf16 default
+
+        model_gb = (num_params * bytes_per_param) / (1024 ** 3)
+        # Add ~25% for KV cache + activations + overhead
+        total_gb = model_gb * 1.25
+        _logger.debug(
+            "Model size estimate: %s → %.1f B params, %.1f GB weights, "
+            "%.1f GB total (%.1f B/param)",
+            model_name, num_params / 1e9, model_gb, total_gb, bytes_per_param,
+        )
+        return total_gb
+
+    def _auto_select_num_gpus(
+        self,
+        model_name: str,
+        num_gpus: int,
+        model_kwargs: dict,
+    ) -> int:
+        """Reduce num_gpus to 1 when the model fits on the largest single GPU.
+
+        Cross-GPU transfers add latency (~10-15 GB/s in VM environments).
+        Avoiding them gives a significant speedup for models that fit.
+        """
+        if os.environ.get("VRM_FORCE_MULTI_GPU") == "1":
+            _logger.info("VRM_FORCE_MULTI_GPU=1, keeping %d GPUs", num_gpus)
+            return num_gpus
+
+        estimated_gb = self._estimate_model_vram_gb(model_name, model_kwargs)
+        if estimated_gb is None:
+            _logger.info(
+                "Could not estimate model size for %s — using %d GPUs (safe default)",
+                model_name, num_gpus,
+            )
+            return num_gpus
+
+        # Find largest GPU's free VRAM
+        max_free_gb = 0.0
+        best_gpu = 0
+        if _TORCH and torch.cuda.is_available():
+            for i in range(torch.cuda.device_count()):
+                free_bytes, total_bytes = torch.cuda.mem_get_info(i)
+                free_gb = free_bytes / (1024 ** 3)
+                if free_gb > max_free_gb:
+                    max_free_gb = free_gb
+                    best_gpu = i
+
+        # Safety margin: 90% of free VRAM (leave room for driver/runtime)
+        usable_gb = max_free_gb * 0.90
+        if estimated_gb <= usable_gb:
+            _logger.info(
+                "Model %s fits on single GPU %d (estimated %.1f GB, "
+                "GPU has %.1f GB free → skipping multi-GPU overhead)",
+                model_name, best_gpu, estimated_gb, max_free_gb,
+            )
+            return 1
+        else:
+            _logger.info(
+                "Model %s needs multi-GPU (estimated %.1f GB, "
+                "largest GPU has %.1f GB free)",
+                model_name, estimated_gb, max_free_gb,
+            )
+            return num_gpus
 
     # ------------------------------------------------------------------
     # Discovery
@@ -977,6 +1225,22 @@ class InferencePipeline:
         except Exception as e:
             _logger.debug("VRAM Lending init skipped: %s", e)
             self.lending_pool = None
+
+    def _init_hierarchical_memory(self) -> None:
+        """Initialize the 6-level Hierarchical Memory Manager.
+
+        Connects to the VRAMLendingPool (if available) for cooperative
+        L1↔L2 GPU memory lending with auto-reclaim.
+        """
+        try:
+            from core.hierarchical_memory import HierarchicalMemoryManager
+            self.hierarchical_memory = HierarchicalMemoryManager(
+                lending_pool=self.lending_pool,
+            )
+            _logger.info("Hierarchical Memory Manager active (L1-L6)")
+        except Exception as e:
+            _logger.debug("Hierarchical Memory init skipped: %s", e)
+            self.hierarchical_memory = None
 
     def submit(self, prompt: str, max_new_tokens: int = 128, **kwargs):
         """Submit a request to the continuous batcher (non-blocking).

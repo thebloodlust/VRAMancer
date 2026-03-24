@@ -244,7 +244,7 @@ def _validate(cfg: Dict[str, Any]) -> Dict[str, Any]:
         errors.append(f"compression_strategy={cfg['compression_strategy']!r} invalide")
 
     # quantization
-    valid_quant = {None, "int8", "int4", "gptq", "awq", "nvfp4"}
+    valid_quant = {None, "int8", "int4", "gptq", "awq", "nvfp4", "nf4"}
     if cfg["quantization"] not in valid_quant:
         errors.append(f"quantization={cfg['quantization']!r} invalide")
 
