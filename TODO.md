@@ -17,9 +17,9 @@
 
 ## ⚠️ À corriger (dette technique)
 
-- ❌ **aitp_fec.py — Faux Reed-Solomon** : Le module prétend implémenter Cauchy Reed-Solomon en GF(2^8) mais fait un simple XOR avec des blocs de parité identiques. `decode()` est un stub (`# ... Logique GF256 omise ...`). **Soit implémenter un vrai RS (via `reedsolo` ou `galois`), soit renommer honnêtement en "XOR parity (single fault tolerance)".**
-- ❌ **speculative_decoding.py — Non câblé** : L'algorithme draft+verify est correct mais assume des callables magiques non fournis. Aucune intégration avec HuggingFaceBackend. **Câbler `draft_model` à un vrai petit modèle (GPT-2) et `swarm_verify` au backend principal.**
-- ❌ **holographic_memory.py — Nom trompeur** : Le code fonctionne (XOR parity + reconstruction) mais "holographique" est du buzzword. **Renommer en `parity_memory.py` ou `erasure_memory.py`.**
+- ✅ **aitp_fec.py — Vrai Reed-Solomon GF(2^8)** : L'ancien audit prétendait "faux RS / simple XOR" mais le code implémente un *vrai* Cauchy RS sur GF(2^8) avec tables exp/log, matrice de Cauchy, et élimination de Gauss. La fast-path `decode()` est correcte (non-contiguous indices gérés). **Résolu — rien à changer.**
+- ✅ **speculative_decoding.py — Câblé au pipeline** : `swarm_verify_callable` câblé à `pipeline.infer()` (forward brut → logits). Draft model : auto-mapping par famille (Qwen→0.5B, Llama→1B, GPT-2→distilgpt2) + env `VRM_DRAFT_MODEL`. Self-drafting supprimé (pas de speedup). Device placement corrigé.
+- ✅ **holographic_memory.py → parity_memory.py** : Renommé honnêtement en `core/parity_memory.py`. Classe `ParityKVManager` avec alias backward-compat `HolographicKVManager`. Méthodes `encode()`/`heal()` + alias `encode_hologram()`/`heal_hologram()`. Docstring pointe vers `aitp_fec.FastFEC` pour multi-fault. `_deprecated/holographic_memory.py` redirige vers le nouveau module.
 
 ## 🔴 Manquant (bloque la crédibilité)
 

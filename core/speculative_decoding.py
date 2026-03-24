@@ -64,52 +64,69 @@ def _init_spec_metrics():
         pass
 
 
+# ── Draft model mapping ───────────────────────────────────────────────
+# Maps main model family prefixes to recommended small draft models.
+# Used when VRM_DRAFT_MODEL is not set — picks the best small model
+# from the same family so the tokenizer is compatible.
+_DRAFT_MODEL_MAP = {
+    "Qwen/Qwen2.5-": "Qwen/Qwen2.5-0.5B-Instruct",
+    "Qwen/Qwen2-": "Qwen/Qwen2-0.5B-Instruct",
+    "meta-llama/Llama-3": "meta-llama/Llama-3.2-1B",
+    "meta-llama/Llama-2": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+    "mistralai/": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+    "gpt2": "distilbert/distilgpt2",
+    "openai-community/gpt2": "distilbert/distilgpt2",
+    "TinyLlama/": "distilbert/distilgpt2",
+}
+
+
+def _guess_draft_model(main_model_name: str) -> Optional[str]:
+    """Return a sensible draft model name for a given main model, or None."""
+    if not main_model_name:
+        return None
+    for prefix, draft in _DRAFT_MODEL_MAP.items():
+        if main_model_name.startswith(prefix):
+            return draft
+    return None
+
+
 # ── Draft model factory ───────────────────────────────────────────────
 
 def create_draft_callable(
     backend: Any,
     draft_model_name: Optional[str] = None,
+    main_model_name: Optional[str] = None,
 ) -> Optional[Callable]:
     """Create a draft_model_callable from a loaded HuggingFaceBackend.
 
     If *draft_model_name* is provided, loads that model as the drafter
     (e.g. ``"distilgpt2"`` for a GPT-2 main model).
 
-    Otherwise, reuses the backend's own model in a lightweight greedy
-    mode (still faster than full generate() because we skip sampling
-    and only run ``gamma`` forward steps).
+    If not provided, tries to auto-detect a suitable small draft model
+    from ``_DRAFT_MODEL_MAP`` based on *main_model_name*.
+
+    Self-drafting (reusing the main model) is NOT used — it provides
+    no speedup since the draft phase runs the full model N times.
 
     Returns ``None`` when no suitable drafter can be built.
     """
     if _MINIMAL or not _HAS_TORCH:
         return None
 
+    # Resolve draft model name
+    if not draft_model_name and main_model_name:
+        draft_model_name = _guess_draft_model(main_model_name)
+        if draft_model_name:
+            logger.info("Auto-selected draft model: %s for main model: %s",
+                        draft_model_name, main_model_name)
+
     if draft_model_name:
         return _load_external_draft_model(draft_model_name, backend)
 
-    # Reuse the backend model for self-drafting (greedy argmax, no sampling)
-    if getattr(backend, "model", None) is None:
-        return None
-    if getattr(backend, "tokenizer", None) is None:
-        return None
-
-    model_ref = backend.model
-    tok_ref = backend.tokenizer
-
-    def _self_draft(input_ids: "torch.Tensor", num_tokens: int) -> "torch.Tensor":
-        """Greedy auto-regressive draft using the main model."""
-        ids = input_ids.clone()
-        tokens = []
-        for _ in range(num_tokens):
-            with torch.no_grad():
-                out = model_ref(ids)
-                logits = out.logits if hasattr(out, "logits") else out[0]
-                next_id = logits[:, -1, :].argmax(dim=-1, keepdim=True)
-                tokens.append(next_id)
-                ids = torch.cat([ids, next_id], dim=-1)
-        return torch.cat(tokens, dim=-1)
-
-    return _self_draft
+    # No draft model available — self-drafting (same model) gives no speedup
+    logger.debug("No draft model specified and no auto-mapping found — "
+                 "speculative decoding disabled")
+    return None
 
 
 def _load_external_draft_model(

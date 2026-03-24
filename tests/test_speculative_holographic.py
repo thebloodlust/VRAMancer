@@ -1,4 +1,4 @@
-"""Tests for speculative_decoding and holographic_memory modules.
+"""Tests for speculative_decoding and parity_memory modules.
 
 Uses VRM_MINIMAL_TEST=1 from conftest.  Mocks torch where needed.
 """
@@ -11,25 +11,15 @@ os.environ.setdefault("VRM_API_TOKEN", "testtoken")
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# Holographic Memory (pure Python — no torch needed)
+# Parity Memory (XOR erasure coding — pure Python, no torch needed)
 # ═══════════════════════════════════════════════════════════════════════
 
-class TestHolographicMemory:
+class TestParityMemory:
     """XOR parity encode/heal tests."""
 
     def _make_kv(self):
-        try:
-            from core.holographic_memory import HolographicKVManager
-        except ImportError:
-            # Module moved to _deprecated/
-            import sys, importlib.util
-            spec = importlib.util.spec_from_file_location(
-                "holographic_memory",
-                os.path.join(os.path.dirname(__file__), '..', '_deprecated', 'holographic_memory.py'))
-            mod = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(mod)
-            HolographicKVManager = mod.HolographicKVManager
-        return HolographicKVManager()
+        from core.parity_memory import ParityKVManager
+        return ParityKVManager()
 
     def test_encode_decode_no_loss(self):
         kv = self._make_kv()
@@ -99,6 +89,23 @@ class TestHolographicMemory:
         assert len(shards) == 1
         # Parity of 1 shard = the shard itself
         assert parity == shards[0]
+
+    def test_backward_compat_alias(self):
+        """HolographicKVManager alias works."""
+        from core.parity_memory import HolographicKVManager
+        kv = HolographicKVManager()
+        data = b"backcompat"
+        shards, parity = kv.encode_hologram(data, num_shards=2)
+        assert len(shards) == 2
+
+    def test_new_api_names(self):
+        """New encode/heal method names work."""
+        kv = self._make_kv()
+        data = os.urandom(64)
+        shards, parity = kv.encode(data, num_shards=2)
+        shards[0] = None
+        result = kv.heal(shards, parity)
+        assert result[:len(data)] == data
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -196,3 +203,18 @@ class TestSpeculativeDecoding:
     def test_metrics_init(self):
         from core.speculative_decoding import _init_spec_metrics
         _init_spec_metrics()  # should not raise
+
+    def test_guess_draft_model_mapping(self):
+        """Auto-mapping picks sensible draft models."""
+        from core.speculative_decoding import _guess_draft_model
+        assert _guess_draft_model("Qwen/Qwen2.5-14B-Instruct") == "Qwen/Qwen2.5-0.5B-Instruct"
+        assert _guess_draft_model("meta-llama/Llama-3.1-70B") == "meta-llama/Llama-3.2-1B"
+        assert _guess_draft_model("gpt2-xl") == "distilbert/distilgpt2"
+        assert _guess_draft_model("unknown-model/foo") is None
+        assert _guess_draft_model("") is None
+
+    def test_create_draft_callable_with_model_name(self):
+        """In minimal mode, factory returns None even with main_model_name."""
+        from core.speculative_decoding import create_draft_callable
+        result = create_draft_callable(backend=None, main_model_name="Qwen/Qwen2.5-14B")
+        assert result is None  # minimal mode

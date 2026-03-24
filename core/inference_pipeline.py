@@ -401,7 +401,9 @@ class InferencePipeline:
                     if _draft is None:
                         draft_name = os.environ.get("VRM_DRAFT_MODEL")
                         _draft = create_draft_callable(
-                            self.backend, draft_model_name=draft_name,
+                            self.backend,
+                            draft_model_name=draft_name,
+                            main_model_name=self.model_name,
                         )
                     if _draft is not None:
                         decoder = SwarmSpeculativeDecoder(
@@ -413,6 +415,12 @@ class InferencePipeline:
                         input_ids = self.backend.tokenizer.encode(
                             prompt, return_tensors="pt",
                         )
+                        # Move input_ids to model device
+                        _model = getattr(self.backend, "model", None)
+                        if _model is not None and hasattr(_model, "device"):
+                            input_ids = input_ids.to(_model.device)
+                        elif torch is not None and torch.cuda.is_available():
+                            input_ids = input_ids.to(f"cuda:{torch.cuda.current_device()}")
                         out_ids = decoder.generate(input_ids, max_new_tokens)
                         result = self.backend.tokenizer.decode(
                             out_ids[0], skip_special_tokens=True,

@@ -98,7 +98,7 @@ python -m build
 - `dashboard/cli_dashboard.py` — appelle `/api/gpu` et `/api/status` qui n'existent pas dans production_api.py.
 - `dashboard/dashboard_web.py` — donnees GPU hardcodees, swarm status bidon, security fallback no-op.
 - `network/interface_selector.py` — **corrige** (import psutil fixe). `network/resource_aggregator.py` — **deplace vers `_deprecated/`**. `network/security.py` — **corrige** (logging fixe).
-- `speculative_decoding.py` — algorithme correct mais `swarm_verify_callable` inexistant = impossible a integrer.
+- `speculative_decoding.py` — cable au pipeline via `self.infer()`. Auto-mapping draft models par famille (Qwen→0.5B, Llama→1B). Self-drafting supprime.
 - `backends_webgpu.py` — POC/template. Nodes jamais peuplees. "Speculative Decoding" = batching optimiste sans verification. Pas un vrai backend.
 - **BnB multi-GPU upstream bug** (accelerate 1.13.0 + BnB 0.49.2 + transformers 5.3.0) : `AlignDevicesHook` ne gere pas les residual connections cross-device avec des couches quantifiees. VRAMancer force single-GPU pour les loads BnB. INT8 14B ne tient pas sur un seul 24 GB GPU.
 - **transformers 5.3 `dtype` bypasse BnB** : le nouveau parametre `dtype` ignore completement la quantification BnB (charge en full precision). Toujours utiliser `torch_dtype=torch.float16` pour les loads BnB.
@@ -172,8 +172,8 @@ python -m build
 
 | Module | LOC | Statut | Raison |
 |---|---|---|---|
-| `speculative_decoding.py` | 380 | ORPHELIN | Algorithme correct mais `swarm_verify_callable` inexistant. Impossible a integrer. |
-| `holographic_memory.py` | 190 | ORPHELIN | RAID-5 XOR renomme "holographique". Singleton jamais appele. |
+| `speculative_decoding.py` | 380 | CABLE | Algorithme correct. `swarm_verify_callable` = `pipeline.infer()`. Auto-mapping draft models par famille (Qwen→0.5B, Llama→1B). Self-drafting supprime (pas de speedup). |
+| `holographic_memory.py` | 190 | RENOMME | Renomme en `core/parity_memory.py` (XOR parity, pas "holographique"). `_deprecated/holographic_memory.py` redirige. |
 | `swarm_ledger.py` | 300 | DECONNECTE | Ledger SQLite complet mais orchestrateur l'ignore. Pas de routing vers contributeurs. |
 | `telemetry.py` | 115 | INUTILISE | Format binaire custom. Aucun consommateur. mDNS prefere. |
 | `network/interface_selector.py` | 35 | **CASSE** | Import psutil avant def. Fonctions appelees avant definition. |
