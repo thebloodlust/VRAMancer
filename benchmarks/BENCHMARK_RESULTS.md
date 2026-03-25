@@ -260,8 +260,47 @@ At memory-bandwidth saturation (which is the bottleneck for all LLM decode), rea
 - [ ] INT8 14B (needs GPU with >24 GB, or upstream multi-GPU BnB fix)
 - [x] ~~Custom CUDA fused kernel for NF4~~ — Triton GEMV kernel correct but 0.44-0.89x vs BnB (memory-bandwidth bound, can't beat tuned CUDA)
 - [x] ~~CUDA graphs / reduce-overhead~~ — converges at same ~49 tok/s as torch.compile default (bandwidth ceiling)
-- [x] ~~GGUF/llama.cpp vs BnB NF4~~ — **5.4x speedup** (see below)
+- [x] ~~GGUF/llama.cpp vs BnB NF4~~ — **5.4x speedup** (see above)
+- [x] ~~NVFP4 Blackwell native FP4~~ — **real cublas FP4 kernel working** (see below)
 - [ ] GGUF/llama.cpp comparison (Ollama's backend — likely the 60-100 tok/s reference)
+
+## NVFP4 Blackwell — Native FP4 Quantization (RTX 5070 Ti)
+
+Native Blackwell FP4 quantization via `torchao.prototype.mx_formats` (torchao 0.16.0). Uses `torch._scaled_mm` with `float4_e2m1fn_x2` dtype — the real cublas Blackwell FP4 kernel on sm100+ GPUs.
+
+### Results (Qwen2.5-7B-Instruct, 128 new tokens, RTX 5070 Ti CC 12.0)
+
+| Method | tok/s | VRAM (GB) | vs BF16 | Notes |
+|---|---|---|---|---|
+| **BF16 (baseline)** | 36.4 | 15.25 | 100.0% | Standard bfloat16 inference |
+| **NVFP4 Dynamic W+A** | **11.0** | **5.87** | 30.2% | Real cublas FP4 kernel (torch._scaled_mm) |
+| **BnB NF4** | 17.5 | 14.77 | 48.0% | BnB kgemm_4bit_inference_naive |
+| **BnB INT8** | 7.9 | 14.76 | 21.7% | LLM.int8() with outlier decomposition |
+| NVFP4 Weight-Only | 0.9 | 7.91 | 2.5% | Dequantizes every pass (prototype limitation) |
+
+### Key Findings
+
+1. **NVFP4 Dynamic W+A saves 62% VRAM** vs BF16 (5.87 GB vs 15.25 GB). This is the most VRAM-efficient method, using 2.5x less VRAM than BnB NF4.
+2. **NVFP4 is slower than BnB NF4** (11.0 vs 17.5 tok/s). The torchao 0.16.0 NVFP4 implementation is still **prototype**: Python dispatch overhead + per-token dynamic activation quantization adds latency. This should improve significantly in stable torchao releases.
+3. **NVFP4 Weight-Only is unusable** (0.9 tok/s) — the prototype implementation dequantizes weights at every forward pass (`weight_tensor.dequantize(orig_dtype)` at line 538 of nvfp4_tensor.py) instead of using native FP4 compute.
+4. **torch.compile on NVFP4**: Compilation hangs indefinitely due to custom tensor subclass overhead in Inductor. Not viable with prototype NVFP4 tensors.
+5. **NVFP4 requires Blackwell (CC >= 10.0)**: The `torch._scaled_mm` FP4 kernel is only available on sm100+ GPUs. VRAMancer auto-detects and falls back to BnB NF4 on older GPUs.
+
+### How NVFP4 Works
+
+NVFP4 Dynamic W+A mode quantizes both weights and activations to 4-bit:
+- **Weights**: Quantized offline to `float4_e2m1fn_x2` with blocked FP8 scales
+- **Activations**: Quantized dynamically per-token at each layer
+- **Computation**: `torch._scaled_mm(a.view(float4_e2m1fn_x2), b.view(float4_e2m1fn_x2), a_scale.view(float8_e4m3fn), b_scale.view(float8_e4m3fn))` — real cublas Blackwell FP4 kernel
+- **lm_head excluded**: `aten.expand` not implemented for NVFP4Tensor — excluded via filter_fn
+
+### VRAMancer Integration
+
+VRAMancer automatically selects NVFP4 when `VRM_QUANTIZATION=nvfp4` is set:
+- Auto-detects Blackwell GPU (CC >= 10.0) and torchao >= 0.16 availability
+- Falls back to BnB NF4 on non-Blackwell GPUs or missing torchao
+- Post-load quantization: loads BF16 on CPU → `quantize_(model, NVFP4DynamicActivationNVFP4WeightConfig(), filter_fn)` → moves to best Blackwell GPU
+- Excludes lm_head and embedding layers from quantization
 
 ## Reproduction
 
@@ -291,4 +330,7 @@ VRM_QUANTIZATION=int8 python benchmarks/bench_heterogeneous.py --model Qwen/Qwen
 
 # Maximum throughput ceiling test
 CUDA_VISIBLE_DEVICES=0 python benchmarks/bench_max_tps.py
+
+# NVFP4 Blackwell benchmark (requires RTX 50xx)
+CUDA_VISIBLE_DEVICES=1 python benchmarks/bench_nvfp4.py
 ```

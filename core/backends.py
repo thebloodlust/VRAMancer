@@ -684,16 +684,43 @@ class HuggingFaceBackend(BaseLLMBackend):
     def _get_quantization_mode(self) -> str:
         """Return the active quantization mode.
 
-        Returns one of: 'nf4', 'int8', or '' (no quantization).
-        Checks VRM_QUANTIZATION env var and verifies bitsandbytes is installed.
-        NF4: ~0.5 bytes/param (4-bit NormalFloat), works on all CUDA GPUs.
-        INT8: ~1.0 bytes/param (LLM.int8()), works on all CUDA GPUs with CC>=7.5.
+        Returns one of: 'nvfp4', 'nf4', 'int8', or '' (no quantization).
+        Checks VRM_QUANTIZATION env var and verifies dependencies.
+
+        nvfp4: Native Blackwell FP4 via torchao (CC >= 10.0, sm100+).
+               Uses cublas scaled_mm with float4_e2m1fn_x2 dtype.
+               ~62% VRAM reduction vs BF16. Requires torchao >= 0.16.
+        nf4: ~0.5 bytes/param (4-bit NormalFloat via BnB), all CUDA GPUs.
+        int8: ~1.0 bytes/param (LLM.int8() via BnB), CC >= 7.5.
         """
         quant = os.environ.get("VRM_QUANTIZATION", "").lower()
         if quant not in ("nvfp4", "nf4", "int8"):
             return ""
         if not _HAS_TORCH or not _torch.cuda.is_available():
             return ""
+
+        # NVFP4: real Blackwell FP4 via torchao (not BnB)
+        if quant == "nvfp4":
+            if self._has_blackwell_gpu():
+                try:
+                    from torchao.prototype.mx_formats.nvfp4_tensor import NVFP4Tensor  # noqa: F401
+                    return "nvfp4"
+                except ImportError:
+                    self.log.warning(
+                        "VRM_QUANTIZATION=nvfp4 requested but torchao NVFP4 not available. "
+                        "Install with: pip install torchao>=0.16.0. "
+                        "Falling back to BnB NF4."
+                    )
+            else:
+                self.log.warning(
+                    "VRM_QUANTIZATION=nvfp4 requested but no Blackwell GPU (CC >= 10.0) found. "
+                    "NVFP4 requires sm100+ (RTX 50xx / Blackwell). "
+                    "Falling back to BnB NF4."
+                )
+            # Fallback: nvfp4 -> nf4 on non-Blackwell or missing torchao
+            quant = "nf4"
+
+        # BnB quantization (nf4 / int8)
         try:
             import bitsandbytes  # noqa: F401
         except ImportError:
@@ -702,13 +729,93 @@ class HuggingFaceBackend(BaseLLMBackend):
                 "Install with: pip install bitsandbytes>=0.43.0", quant
             )
             return ""
-        if quant in ("nvfp4", "nf4"):
+        if quant == "nf4":
             return "nf4"
         return "int8"
 
     def _should_use_nvfp4(self) -> bool:
         """Check if NF4 quantization should be used (backward compat)."""
-        return self._get_quantization_mode() == "nf4"
+        return self._get_quantization_mode() in ("nf4", "nvfp4")
+
+    @staticmethod
+    def _has_blackwell_gpu() -> bool:
+        """Check if any visible GPU has Blackwell architecture (CC >= 10.0)."""
+        if not _HAS_TORCH or not _torch.cuda.is_available():
+            return False
+        for i in range(_torch.cuda.device_count()):
+            cc = _torch.cuda.get_device_capability(i)
+            if cc[0] >= 10:
+                return True
+        return False
+
+    @staticmethod
+    def _nvfp4_filter_fn(module, fqn: str) -> bool:
+        """Filter function for torchao quantize_(): exclude lm_head.
+
+        lm_head uses aten.expand which NVFP4Tensor doesn't implement.
+        Only quantize nn.Linear layers that are NOT the output head.
+        """
+        if not _HAS_TORCH:
+            return False
+        if not isinstance(module, _torch.nn.Linear):
+            return False
+        # Exclude lm_head, output projection, and embedding layers
+        excluded = ("lm_head", "embed_tokens", "wte", "wpe")
+        for name in excluded:
+            if name in fqn:
+                return False
+        return True
+
+    def _apply_nvfp4_quantization(self, model):
+        """Apply real NVFP4 Blackwell quantization via torchao.
+
+        Uses NVFP4DynamicActivationNVFP4WeightConfig (Dynamic W+A mode)
+        which calls torch._scaled_mm with float4_e2m1fn_x2 dtype —
+        the real cublas Blackwell FP4 kernel.
+
+        Weight-Only mode is NOT used: it dequantizes every forward pass
+        (prototype limitation in torchao 0.16), giving ~0.9 tok/s vs
+        ~11 tok/s for Dynamic W+A.
+
+        The model must be on CPU before calling this method.
+        After quantization, the model is moved to the best Blackwell GPU.
+        """
+        from torchao.quantization import quantize_
+        from torchao.prototype.mx_formats import (
+            NVFP4DynamicActivationNVFP4WeightConfig,
+        )
+
+        self.log.info(
+            "NVFP4 Blackwell: quantizing with Dynamic W+A mode "
+            "(cublas scaled_mm FP4 kernel, excluding lm_head)"
+        )
+        import time
+        t0 = time.monotonic()
+        nvfp4_config = NVFP4DynamicActivationNVFP4WeightConfig()
+        quantize_(model, nvfp4_config, filter_fn=self._nvfp4_filter_fn)
+        quant_time = time.monotonic() - t0
+        self.log.info("NVFP4 quantization completed in %.1fs", quant_time)
+
+        # Move to best Blackwell GPU
+        best_gpu = 0
+        best_free = 0.0
+        for i in range(_torch.cuda.device_count()):
+            cc = _torch.cuda.get_device_capability(i)
+            if cc[0] >= 10:
+                free_bytes = _torch.cuda.mem_get_info(i)[0]
+                if free_bytes > best_free:
+                    best_free = free_bytes
+                    best_gpu = i
+
+        self.log.info(
+            "NVFP4: moving model to cuda:%d (%.1f GiB free)",
+            best_gpu, best_free / (1024 ** 3),
+        )
+        t0 = time.monotonic()
+        model = model.to(f"cuda:{best_gpu}")
+        move_time = time.monotonic() - t0
+        self.log.info("NVFP4: GPU transfer in %.1fs", move_time)
+        return model
 
     def _build_bnb_nf4_config(self):
         """Build BitsAndBytesConfig for NF4 (4-bit NormalFloat) quantization.
@@ -787,6 +894,7 @@ class HuggingFaceBackend(BaseLLMBackend):
 
         from transformers import AutoModelForCausalLM, AutoTokenizer
         self.model_name = model_name
+        quant_mode = ""  # set properly in else: branch below
         self.log.info(f"Chargement modèle HuggingFace: {model_name}")
         if model_name.endswith("-AWQ") or "-awq" in model_name.lower():
             # AWQ: use autoawq native loader (transformers 5.3 requires gptqmodel
@@ -865,9 +973,20 @@ class HuggingFaceBackend(BaseLLMBackend):
             else:
                 num_gpus = _torch.cuda.device_count() if _HAS_TORCH and _torch.cuda.is_available() else 1
 
-            kwargs["device_map"] = "auto"
-
-            if quant_mode and num_gpus >= 2:
+            # NVFP4 Blackwell: load on CPU, quantize post-load via torchao,
+            # then move to GPU. This is fundamentally different from BnB
+            # which quantizes during from_pretrained.
+            if quant_mode == "nvfp4":
+                kwargs["device_map"] = "cpu"
+                kwargs["low_cpu_mem_usage"] = True
+                if "torch_dtype" not in kwargs and "dtype" not in kwargs:
+                    kwargs["torch_dtype"] = _torch.bfloat16
+                self.log.info(
+                    "NVFP4 Blackwell: loading model on CPU for post-load "
+                    "quantization via torchao"
+                )
+            elif quant_mode and num_gpus >= 2:
+                kwargs["device_map"] = "auto"
                 # BnB multi-GPU is broken upstream: accelerate AlignDevicesHook
                 # doesn't handle cross-GPU residual connections with NF4/INT8.
                 # Error: "Expected all tensors on same device, cuda:0 and cuda:1"
@@ -892,6 +1011,7 @@ class HuggingFaceBackend(BaseLLMBackend):
                     quant_mode.upper(), best_gpu, best_free / (1024 ** 3),
                 )
             else:
+                kwargs["device_map"] = "auto"
                 # Non-quantized OR quantized single-GPU
                 if quant_mode and num_gpus <= 1:
                     # Quantized single-GPU: use device_map={"": gpu_id}
@@ -921,7 +1041,7 @@ class HuggingFaceBackend(BaseLLMBackend):
                     if max_memory:
                         kwargs["max_memory"] = max_memory
 
-            # Quantization config
+            # Quantization config (BnB only — NVFP4 is post-load)
             if quant_mode == "nf4" and "quantization_config" not in kwargs:
                 self._patch_bnb_for_transformers()
                 kwargs["quantization_config"] = self._build_bnb_nf4_config()
@@ -938,7 +1058,8 @@ class HuggingFaceBackend(BaseLLMBackend):
                 if "torch_dtype" not in kwargs and "dtype" not in kwargs:
                     kwargs["torch_dtype"] = _torch.float16
             # Auto-select optimal dtype based on best available GPU
-            elif "torch_dtype" not in kwargs and "dtype" not in kwargs:
+            # (skip for nvfp4 — dtype already set above)
+            elif quant_mode != "nvfp4" and "torch_dtype" not in kwargs and "dtype" not in kwargs:
                 best_dtype = self._detect_optimal_dtype()
                 if best_dtype is not None:
                     # Newer transformers (>= 4.46) use 'dtype', older use 'torch_dtype'
@@ -962,6 +1083,11 @@ class HuggingFaceBackend(BaseLLMBackend):
             import traceback
             self.log.error("from_pretrained failed:\n%s", traceback.format_exc())
             raise
+
+        # NVFP4 post-load quantization: model is on CPU, quantize then move to GPU
+        if quant_mode == "nvfp4":
+            self.model = self._apply_nvfp4_quantization(self.model)
+
         try:
             self.tokenizer = AutoTokenizer.from_pretrained(model_name)
             if self.tokenizer.pad_token is None:

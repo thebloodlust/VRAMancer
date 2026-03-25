@@ -49,7 +49,7 @@ VRAMancer est un orchestrateur multi-GPU Python (~30 000 lignes, ~80 fichiers .p
 | `VRM_PRODUCTION=1` | Mode production (validation stricte, pas de bypasses securite) |
 | `VRM_CONTINUOUS_BATCHING=1` | Active le continuous batcher au chargement du modele via API |
 | `VRM_GENERATE_TIMEOUT=300` | Timeout (secondes) pour les requetes via le batcher |
-| `VRM_QUANTIZATION` | Quantization mode: `nf4` (4-bit NormalFloat), `int8` (LLM.int8), vide = BF16 |
+| `VRM_QUANTIZATION` | Quantization mode: `nvfp4` (Blackwell native FP4, CC>=10.0, torchao), `nf4` (4-bit NormalFloat, BnB), `int8` (LLM.int8, BnB), vide = BF16. `nvfp4` auto-fallback vers `nf4` si pas de GPU Blackwell ou torchao absent. |
 
 ## Commandes de developpement
 
@@ -244,10 +244,21 @@ NF4 est **75% plus rapide** que BF16 pour le 14B car le modele tient sur un seul
 
 GGUF Q4_K_M est **5.4x plus rapide** que BnB NF4 grace aux kernels dp4a INT8 (poids restent quantifies pendant le calcul, 4 MACs/cycle vs fp16 1 MAC/cycle). GGUF utilise aussi 2.2x moins de VRAM et charge 5.7x plus vite.
 
+**NVFP4 Blackwell (Qwen2.5-7B-Instruct, RTX 5070 Ti CC 12.0) :**
+
+| Methode | tok/s | VRAM | vs BF16 |
+|---|---|---|---|
+| BF16 (baseline) | 36.4 | 15.25 GB | 100% |
+| NVFP4 Dynamic W+A (cublas FP4) | **11.0** | **5.87 GB** | 30% |
+| BnB NF4 | 17.5 | 14.77 GB | 48% |
+| BnB INT8 | 7.9 | 14.76 GB | 22% |
+
+NVFP4 Dynamic W+A utilise le vrai kernel cublas Blackwell FP4 (`torch._scaled_mm` avec `float4_e2m1fn_x2`). Economise 62% VRAM vs BF16 mais plus lent que BnB NF4 — torchao 0.16.0 est encore **prototype** (overhead Python dispatch + quantization dynamique des activations). NVFP4 Weight-Only inutilisable (0.9 tok/s — dequantise a chaque pass). `lm_head` exclu de la quantization (aten.expand non implemente pour NVFP4Tensor).
+
 **Contexte VM :** Proxmox VFIO passthrough, P2P bloque (IOMMU), CPU-staged transfers ~11 GB/s, overhead VFIO ~10-15% sur PCIe.
 **Bare metal attendu :** +10-30% sur les transfers si P2P/NVLink disponible.
 
-### Tests : 733 passed, 38 skipped, 0 failed (50s, 55 fichiers test, 10 432 LOC tests)
+### Tests : 764 passed, 34 skipped, 0 failed (56 fichiers test)
 
 ## Structure des tests
 
