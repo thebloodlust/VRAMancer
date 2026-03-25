@@ -300,7 +300,40 @@ VRAMancer automatically selects NVFP4 when `VRM_QUANTIZATION=nvfp4` is set:
 - Auto-detects Blackwell GPU (CC >= 10.0) and torchao >= 0.16 availability
 - Falls back to BnB NF4 on non-Blackwell GPUs or missing torchao
 - Post-load quantization: loads BF16 on CPU → `quantize_(model, NVFP4DynamicActivationNVFP4WeightConfig(), filter_fn)` → moves to best Blackwell GPU
+- **DirectFP4 bypass**: After quantization, NVFP4Tensor layers are replaced with `DirectFP4Linear` (plain buffers + direct `torch._scaled_mm` call) to eliminate `__torch_dispatch__` overhead
 - Excludes lm_head and embedding layers from quantization
+
+### DirectFP4 Bypass — Eliminating torchao Dispatch Overhead
+
+The torchao NVFP4Tensor uses `__torch_dispatch__` to intercept every aten operation, routing through Python before reaching the cuBLAS FP4 kernel. VRAMancer's `DirectFP4Linear` (`core/nvfp4_direct.py`) bypasses this by:
+
+1. Extracting raw FP4 weight data + swizzled scales from NVFP4Tensor as plain buffers
+2. Quantizing activations via fused Triton kernel (no Python loop)
+3. Calling `torch._scaled_mm` directly (no tensor subclass dispatch)
+
+**torchao dispatch chain** (per Linear, per token):
+```
+F.linear → __torch_dispatch__(aten.linear) → nvfp4_linear() →
+NVFP4Tensor.to_nvfp4(activation) → _addmm_nvfp4_dispatch() → _scaled_mm
+```
+
+**DirectFP4 bypass**:
+```
+forward() → triton_quantize_nvfp4(activation) → _scaled_mm
+```
+
+#### Benchmark Results (Qwen2.5-7B-Instruct, 128 new tokens, RTX 5070 Ti)
+
+| Method | tok/s | VRAM (GB) | vs torchao | Notes |
+|---|---|---|---|---|
+| **torchao NVFP4** | 11.2 | 5.46 | 1.00x | Baseline (NVFP4Tensor + __torch_dispatch__) |
+| **DirectFP4 bypass** | **12.0** | **5.46** | **1.07x** | Plain buffers + direct _scaled_mm |
+| DirectFP4 + torch.compile | 12.0 | 5.46 | 1.07x | torch.compile works (no tensor subclass) |
+
+- **7% speedup** with zero extra VRAM
+- **Exact numerical match** with torchao output (same cuBLAS call, same data)
+- **torch.compile works** on DirectFP4Linear (hangs on NVFP4Tensor)
+- Applied automatically after quantization in `_apply_nvfp4_quantization()`
 
 ## Reproduction
 

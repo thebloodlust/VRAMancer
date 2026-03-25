@@ -815,6 +815,24 @@ class HuggingFaceBackend(BaseLLMBackend):
         model = model.to(f"cuda:{best_gpu}")
         move_time = time.monotonic() - t0
         self.log.info("NVFP4: GPU transfer in %.1fs", move_time)
+
+        # Replace NVFP4Tensor layers with DirectFP4Linear to bypass
+        # torchao __torch_dispatch__ overhead (~7% faster inference)
+        try:
+            from core.nvfp4_direct import replace_with_direct_fp4
+            t0 = time.monotonic()
+            n_replaced = replace_with_direct_fp4(model, verbose=False)
+            bypass_time = time.monotonic() - t0
+            if n_replaced > 0:
+                self.log.info(
+                    "NVFP4 DirectFP4 bypass: replaced %d layers in %.2fs",
+                    n_replaced, bypass_time,
+                )
+        except Exception as e:
+            self.log.warning(
+                "NVFP4 DirectFP4 bypass unavailable, using torchao dispatch: %s", e
+            )
+
         return model
 
     def _build_bnb_nf4_config(self):

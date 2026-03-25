@@ -26,6 +26,7 @@ VRAMancer est un orchestrateur multi-GPU Python (~30 000 lignes, ~80 fichiers .p
 - `compute_engine.py` — execution de vrais modules nn.Module (pas de poids aleatoires)
 - `model_splitter.py` — split VRAM-proportionnel (FREE memory) ou profiler-optimise (DP), support MPS, imports defensifs
 - `layer_profiler.py` — profiling par couche (latence, FLOPS, memoire), benchmark GPU (compute, bandwidth), placement DP-optimal
+- `nvfp4_direct.py` — DirectFP4 bypass : remplace les NVFP4Tensor (torchao) par des plain buffers + appel direct `torch._scaled_mm`, eliminant le overhead `__torch_dispatch__` (~7% speedup, 0 VRAM extra). Active automatiquement apres quantization dans `_apply_nvfp4_quantization()`.
 - `transfer_manager.py` — transport GPU-to-GPU : Strategy 0 (cross-vendor bridge) > Strategy 1 (CUDA P2P) > Strategy 1.5 (optional Rust cuMemcpyDtoD bypass via `pip install vramancer_rust[cuda]`, ~1.3-1.6x vs PyTorch .to()) > Strategy 2 (ReBAR pipelined) > Strategy 3 (NCCL distribue) > Strategy 4 (CPU-staged pinned). En VM Proxmox, seule Strategy 4 fonctionne. Stub si `VRM_MINIMAL_TEST=1`.
 - `network/fibre_fastpath.py` — transport reseau : RDMA verbs (ibverbs/RoCE) > Zero-copy TCP > mmap local. Support GPUDirect RDMA si nvidia_peermem charge. DMA-BUF = stub (pas de C extension).
 - `transport_factory.py` — factory unifie : selectionne NCCL (meme noeud) ou RDMA/TCP (reseau) selon la localite (SAME_GPU / SAME_NODE / SAME_RACK / REMOTE).
@@ -196,6 +197,7 @@ python -m build
 | `core/paged_attention_cuda.py` | 200 | FONCTIONNEL | Wrapper JIT Python. Auto-detection arch nvcc. Fallback PyTorch. |
 | `core/tensor_parallel.py` | 500 | FONCTIONNEL | TP column/row-parallel + NCCL all-reduce. GPT-2 + Llama. |
 | `core/triton_sampling.py` | 200 | STUB | Kernel Triton jamais appele en pratique. |
+| `core/nvfp4_direct.py` | 290 | PRODUCTION | DirectFP4 bypass: remplace NVFP4Tensor par plain buffers + `_scaled_mm` direct. 1.07x vs torchao, 0 VRAM extra. torch.compile compatible. |
 
 ### Benchmarks reels (23-24 mars 2026, RTX 3090 + RTX 5070 Ti, Proxmox VM)
 
@@ -254,6 +256,16 @@ GGUF Q4_K_M est **5.4x plus rapide** que BnB NF4 grace aux kernels dp4a INT8 (po
 | BnB INT8 | 7.9 | 14.76 GB | 22% |
 
 NVFP4 Dynamic W+A utilise le vrai kernel cublas Blackwell FP4 (`torch._scaled_mm` avec `float4_e2m1fn_x2`). Economise 62% VRAM vs BF16 mais plus lent que BnB NF4 — torchao 0.16.0 est encore **prototype** (overhead Python dispatch + quantization dynamique des activations). NVFP4 Weight-Only inutilisable (0.9 tok/s — dequantise a chaque pass). `lm_head` exclu de la quantization (aten.expand non implemente pour NVFP4Tensor).
+
+**DirectFP4 Bypass (Qwen2.5-7B-Instruct, RTX 5070 Ti) :**
+
+| Methode | tok/s | VRAM | vs torchao |
+|---|---|---|---|
+| torchao NVFP4 (baseline) | 11.2 | 5.46 GB | 1.00x |
+| **DirectFP4 bypass** | **12.0** | **5.46 GB** | **1.07x** |
+| DirectFP4 + torch.compile | 12.0 | 5.46 GB | 1.07x |
+
+DirectFP4 (`core/nvfp4_direct.py`) remplace les NVFP4Tensor par des plain buffers + appel direct `torch._scaled_mm`, eliminant le overhead `__torch_dispatch__`. 7% speedup, 0 VRAM extra, match numerique exact avec torchao. torch.compile fonctionne (bloque sur NVFP4Tensor). Active automatiquement dans `_apply_nvfp4_quantization()`.
 
 **Contexte VM :** Proxmox VFIO passthrough, P2P bloque (IOMMU), CPU-staged transfers ~11 GB/s, overhead VFIO ~10-15% sur PCIe.
 **Bare metal attendu :** +10-30% sur les transfers si P2P/NVLink disponible.
