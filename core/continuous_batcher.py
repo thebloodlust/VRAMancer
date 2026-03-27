@@ -45,6 +45,11 @@ from concurrent.futures import Future, ThreadPoolExecutor
 _logger = logging.getLogger("vramancer.continuous_batcher")
 _MINIMAL = os.environ.get("VRM_MINIMAL_TEST", "")
 
+
+class BatcherQueueFullError(RuntimeError):
+    """Raised when the batcher waiting queue is at capacity."""
+    pass
+
 # ---------------------------------------------------------------------------
 # Conditional imports
 # ---------------------------------------------------------------------------
@@ -140,6 +145,7 @@ class ContinuousBatcher:
         self._active: List[InferenceRequest] = []
         self._completed: List[InferenceRequest] = []
         self._lock = threading.Lock()
+        self._has_work = threading.Condition(self._lock)
         self._running = False
         self._thread: Optional[threading.Thread] = None
 
@@ -191,12 +197,15 @@ class ContinuousBatcher:
             eos = getattr(self.tokenizer, 'eos_token_id', None)
             req.stop_token_id = eos
 
-        with self._lock:
+        with self._has_work:
             if len(self._waiting) >= self.max_waiting_queue:
-                fut.set_exception(RuntimeError("Waiting queue full"))
+                fut.set_exception(BatcherQueueFullError(
+                    f"Waiting queue full ({self.max_waiting_queue} requests)"
+                ))
                 return fut
             self._waiting.append(req)
             self._total_requests += 1
+            self._has_work.notify()  # wake up the batcher loop
 
         _logger.debug("Request %s submitted (%d waiting)", req.request_id, len(self._waiting))
         return fut
@@ -267,10 +276,12 @@ class ContinuousBatcher:
         Lock scope is narrowed: the lock only covers queue mutations
         (admit/evict), NOT the forward pass or tokenization.
         This allows new requests to be submitted while compute is running.
+
+        Uses threading.Condition for responsive wake-up instead of polling.
         """
         while self._running:
             # Phase 1: Move waiting requests to a staging list under lock
-            with self._lock:
+            with self._has_work:
                 slots = self.max_batch_size - len(self._active)
                 to_prepare: List[InferenceRequest] = []
                 if slots > 0 and self._waiting:
@@ -304,7 +315,7 @@ class ContinuousBatcher:
 
             # Phase 1c: Add prepared requests to active batch under lock
             prepared = [r for r in to_prepare if r.status == RequestStatus.ACTIVE]
-            with self._lock:
+            with self._has_work:
                 self._active.extend(prepared)
                 for req in prepared:
                     _logger.debug("Request %s admitted (batch=%d)",
@@ -312,7 +323,10 @@ class ContinuousBatcher:
                 batch = list(self._active)
 
             if not batch:
-                time.sleep(0.01)  # idle
+                # Wait for new work instead of polling
+                with self._has_work:
+                    if not self._waiting and not self._active:
+                        self._has_work.wait(timeout=0.1)
                 continue
 
             # Phase 2: Forward WITHOUT lock — GPU compute runs free
@@ -326,37 +340,11 @@ class ContinuousBatcher:
                         req.future.set_exception(e)
 
             # Phase 3: Evict under lock (fast)
-            with self._lock:
+            with self._has_work:
                 self._evict_completed()
 
             # Yield CPU — adaptive sleep based on load
             time.sleep(0.0001)  # busy
-
-    def _admit_requests(self) -> None:
-        """Legacy admission — kept for external callers.
-
-        The main _loop() now handles admission with tokenization
-        outside the lock. This method is only called if someone
-        invokes it directly.
-        """
-        slots = self.max_batch_size - len(self._active)
-        if slots <= 0 or not self._waiting:
-            return
-
-        to_admit = self._waiting[:slots]
-        self._waiting = self._waiting[slots:]
-
-        for req in to_admit:
-            try:
-                self._prepare_request(req)
-                req.status = RequestStatus.ACTIVE
-                self._active.append(req)
-                _logger.debug("Request %s admitted (batch=%d)",
-                              req.request_id, len(self._active))
-            except Exception as e:
-                req.status = RequestStatus.ERROR
-                if req.future and not req.future.done():
-                    req.future.set_exception(e)
 
     def _prepare_request(self, req: InferenceRequest) -> None:
         """Tokenize prompt and prepare initial state."""
@@ -885,13 +873,34 @@ class ContinuousBatcher:
         return torch.multinomial(probs, num_samples=1)
 
     def _finish_request_decode(self, req: InferenceRequest) -> None:
-        """Decode and finish a request."""
+        """Decode and finish a request.
+
+        Offloads tokenizer.decode() to the thread pool so it doesn't
+        block the batcher loop while decoding large outputs.
+        """
         if self.tokenizer is None:
             self._finish_request(req, req.prompt)
             return
 
-        text = self.tokenizer.decode(req.generated_ids[0], skip_special_tokens=True)
-        self._finish_request(req, text)
+        if self._tokenizer_pool is not None:
+            gen_ids = req.generated_ids[0].clone()
+            tokenizer = self.tokenizer
+
+            def _decode_and_finish():
+                try:
+                    text = tokenizer.decode(gen_ids, skip_special_tokens=True)
+                    self._finish_request(req, text)
+                except Exception as e:
+                    req.status = RequestStatus.ERROR
+                    if req.future and not req.future.done():
+                        req.future.set_exception(e)
+
+            self._tokenizer_pool.submit(_decode_and_finish)
+        else:
+            text = self.tokenizer.decode(
+                req.generated_ids[0], skip_special_tokens=True
+            )
+            self._finish_request(req, text)
 
     def _finish_request(self, req: InferenceRequest, result: str) -> None:
         """Mark request as finished and resolve its future."""
@@ -934,4 +943,5 @@ __all__ = [
     "ContinuousBatcher",
     "InferenceRequest",
     "RequestStatus",
+    "BatcherQueueFullError",
 ]

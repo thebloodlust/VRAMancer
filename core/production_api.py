@@ -153,7 +153,7 @@ def create_app(model_name: Optional[str] = None,
 
         with queue_lock:
             if queue_depth[0] >= _MAX_QUEUE_SIZE:
-                return None, ("Queue full — server overloaded, try again later", 503)
+                return None, ("Queue full — server overloaded, try again later", 429)
             queue_depth[0] += 1
 
         try:
@@ -168,7 +168,10 @@ def create_app(model_name: Optional[str] = None,
                 if _circuit_breaker:
                     _circuit_breaker.record_failure()
                 return None, ("Inference timeout — request took too long", 504)
-            except Exception:
+            except Exception as exc:
+                # Batcher queue full → 429 Too Many Requests
+                if "queue full" in str(exc).lower() or "Queue full" in str(exc):
+                    return None, (str(exc), 429)
                 if _circuit_breaker:
                     _circuit_breaker.record_failure()
                 raise
@@ -798,6 +801,9 @@ def _register_routes(application: Flask, _run_with_timeout, queue_depth, queue_l
                             top_p=params['top_p'],
                             top_k=params['top_k'],
                         )
+                        # Check if the future was already rejected (queue full)
+                        if future.done() and future.exception() is not None:
+                            raise future.exception()
                         futures[i] = (prompt, future)
 
                     for i in sorted(futures.keys()):
