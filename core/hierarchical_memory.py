@@ -387,15 +387,9 @@ class HierarchicalMemoryManager:
     L1↔L2 : géré par VRAMLendingPool (lease-based, auto-reclaim)
     L2→L3 / L3→L5 : migration physique réelle (tensor.cpu(), NVMe spill)
     """
-    _stub_warned = False
-
     def __init__(self, nvme_dir: str = ".hm_cache", max_nvme_mb: int = 2048,
                  decay_half_life_s: float = 60.0, lending_pool=None):
         self.log = LoggerAdapter("hmem.v2")
-        if not HierarchicalMemoryManager._stub_warned:
-            HierarchicalMemoryManager._stub_warned = True
-            self.log.warning("STUB: hierarchical_memory — eviction moves metadata only, "
-                            "physical tensor offload is incomplete (Grade D+)")
         self.nvme_dir = Path(nvme_dir)
         
         # Override en mode test uniquement si le chemin par defaut est utilise
@@ -457,17 +451,17 @@ class HierarchicalMemoryManager:
             self._lending_pool = None
     
     def _cpu_nvme_balancer_loop(self):
-        """Monitors system RAM (L4) and proactively evicts cold blocks to NVMe (L5) to prevent OOM."""
+        """Monitors system RAM and proactively evicts cold L3 (pinned RAM) blocks to NVMe (L5) to prevent OOM."""
         import psutil
         while self._balancing:
             try:
                 vm = psutil.virtual_memory()
                 # If RAM usage exceeds 85%, start aggressive NVMe spilling
                 if vm.percent > 85.0:
-                    self.log.warning(f"⚠️ [Balancer] Host RAM at {vm.percent}%. Triggering L4 (CPU) -> L5 (NVMe) eviction...")
+                    self.log.warning(f"⚠️ [Balancer] Host RAM at {vm.percent}%. Triggering L3 (CPU) -> L5 (NVMe) eviction...")
                     with self._lock:
-                        # Find coldest L4 blocks
-                        l4_blocks = [bid for bid, data in self.registry.items() if data.get('current_tier') == 'L4']
+                        # Find coldest L3 (pinned CPU RAM) blocks
+                        l4_blocks = [bid for bid, data in self.registry.items() if data.get('tier') == 'L3']
                         if not l4_blocks:
                             pass
                         # Sort by hot score (ascending) and last touch
@@ -558,11 +552,18 @@ class HierarchicalMemoryManager:
         self.registry[block.id]["tier"] = target
         self.registry[block.id]["ts"] = time.time()
 
+        # Auto-lookup tensor from registry if not provided
+        if tensor is None:
+            tensor = self._tensor_registry.get(block.id)
+
         moved_tensor = tensor
 
-        # Physical data movement (when tensor provided)
+        # Physical data movement (when tensor available)
         if tensor is not None:
             moved_tensor = self._execute_physical_move(block, prev, target, tensor)
+            # Update registry — drops old GPU ref, frees VRAM
+            if moved_tensor is not tensor:
+                self._tensor_registry[block.id] = moved_tensor
 
         # Metrics
         if prev and target:
@@ -783,15 +784,20 @@ class HierarchicalMemoryManager:
             try:
                 import vramancer_rust
                 vramancer_rust.cxl_direct_memory_dump(str(path), ptr, num_bytes)
-                self.migrate(block, "L5")
+                self.registry[block.id]["tier"] = "L5"
+                self.registry[block.id]["ts"] = time.time()
+                self._tensor_registry.pop(block.id, None)  # Data on disk — free memory
                 self.log.debug(f"⚡ [Direct I/O] Spill {block.id[:8]} -> NVMe ({num_bytes/1e6:.1f}MB) GIL-bypassed")
+                MEMORY_DEMOTIONS.labels(self.get_tier(block.id) or 'L1', 'L5').inc()
                 return
             except Exception as e:
                 self.log.debug(f"Rust direct I/O unavailable: {e}")
                 
             try:
                 FastNVMeTransfer.save_tensor(path, payload)
-                self.migrate(block, "L5")
+                self.registry[block.id]["tier"] = "L5"
+                self.registry[block.id]["ts"] = time.time()
+                self._tensor_registry.pop(block.id, None)  # Data on disk — free memory
                 self.log.debug(f"⚡ [FastNVMe] Spill {block.id[:8]} -> NVMe")
                 return
             except Exception as e:
@@ -801,7 +807,9 @@ class HierarchicalMemoryManager:
         path = self.nvme_dir / f"{block.id}.json"
         with path.open("w") as f:
             json.dump(payload, f, default=str)
-        self.migrate(block, "L5")
+        self.registry[block.id]["tier"] = "L5"
+        self.registry[block.id]["ts"] = time.time()
+        self._tensor_registry.pop(block.id, None)  # Data on disk — free memory
         self.log.debug(f"Spill bloc {block.id[:8]} vers NVMe (JSON)")
 
     def load_from_nvme(self, block: MemoryBlock) -> Any | None:
@@ -831,8 +839,11 @@ class HierarchicalMemoryManager:
             try:
                 import vramancer_rust
                 vramancer_rust.cxl_direct_memory_load(str(path), ptr, num_bytes)
-                self.migrate(block, "L3")
+                self.registry[block.id]["tier"] = "L3"
+                self.registry[block.id]["ts"] = time.time()
+                self._tensor_registry[block.id] = tensor  # Track loaded tensor
                 self.log.debug(f"⚡ [Direct I/O] Reload {block.id[:8]} from NVMe ({num_bytes/1e6:.1f}MB) GIL-bypassed")
+                MEMORY_PROMOTIONS.labels('L5', 'L3').inc()
                 return tensor
             except Exception as e:
                 self.log.debug(f"Rust direct I/O unavailable: {e}")
@@ -842,7 +853,9 @@ class HierarchicalMemoryManager:
                 tracer = get_tracer()
                 with tracer.start_as_current_span("memory.nvme_fast_load"):
                     tensor = FastNVMeTransfer.load_tensor(path, meta["shape"], meta["dtype_str"])
-                    self.migrate(block, "L3")
+                    self.registry[block.id]["tier"] = "L3"
+                    self.registry[block.id]["ts"] = time.time()
+                    self._tensor_registry[block.id] = tensor  # Track loaded tensor
                     self.log.debug(f"⚡ [FastNVMe] Reload {block.id[:8]} from NVMe")
                     return tensor
             except Exception as e:
@@ -857,8 +870,11 @@ class HierarchicalMemoryManager:
             return None
         with path.open("r") as f:
             data = json.load(f)
-        self.migrate(block, "L3")  # retour RAM
+        self.registry[block.id]["tier"] = "L3"
+        self.registry[block.id]["ts"] = time.time()
+        self._tensor_registry[block.id] = data  # Track loaded data
         self.log.debug(f"Reload bloc {block.id[:8]} depuis NVMe")
+        MEMORY_PROMOTIONS.labels('L5', 'L3').inc()
         return data
 
     # --- Politique simple de tiering ---

@@ -170,6 +170,60 @@ class TestHierarchicalMemory:
         assert hmem._is_promotion("L3", "L2") is True
         assert hmem._is_promotion("L2", "L3") is False
 
+    def test_migrate_auto_lookup_tensor(self, hmem):
+        """migrate() looks up tensor from registry when not provided."""
+        from core.memory_block import MemoryBlock
+        import torch
+        b = MemoryBlock(id="autolookup-1", size_mb=1, gpu_id=0)
+        tensor = torch.randn(4, 4)  # CPU tensor
+        hmem.register_block(b, "L3", tensor=tensor)
+        assert hmem._tensor_registry[b.id] is tensor
+        # Migrate without passing tensor — should auto-lookup
+        result = hmem.migrate(b, "L5")
+        assert hmem.get_tier(b.id) == "L5"
+
+    def test_eviction_cycle_updates_tensor_registry(self, hmem):
+        """eviction_cycle() physically moves tensors (not metadata-only)."""
+        from core.memory_block import MemoryBlock
+        import torch
+        blocks = []
+        for i in range(5):
+            b = MemoryBlock(id=f"evict-real-{i}", size_mb=64, gpu_id=0)
+            tensor = torch.randn(16, 16)  # CPU tensor simulating GPU
+            hmem.register_block(b, "L1", tensor=tensor)
+            blocks.append(b)
+        # Touch last block a lot so it's hot (won't be evicted)
+        for _ in range(20):
+            hmem.touch(blocks[-1])
+        evicted = hmem.eviction_cycle(target_free_pct=10.0)
+        assert len(evicted) > 0
+        # Evicted blocks should have their tier updated in registry
+        for bid, from_tier, to_tier in evicted:
+            assert hmem.get_tier(bid) == to_tier
+
+    def test_spill_to_nvme_clears_tensor_registry(self, hmem, block, tmp_path):
+        """After spilling to NVMe, tensor is removed from memory registry."""
+        import torch
+        tensor = torch.randn(8, 8)
+        hmem.register_block(block, "L3", tensor=tensor)
+        assert hmem._tensor_registry.get(block.id) is tensor
+        hmem.spill_to_nvme(block, tensor)
+        assert hmem.get_tier(block.id) == "L5"
+        # Tensor reference must be cleared to actually free memory
+        assert hmem._tensor_registry.get(block.id) is None
+
+    def test_load_from_nvme_restores_tensor_registry(self, hmem, block, tmp_path):
+        """load_from_nvme() stores loaded data in tensor registry."""
+        payload = {"key": "value", "data": [1, 2, 3]}
+        hmem.register_block(block, "L3")
+        hmem.spill_to_nvme(block, payload)
+        assert hmem.get_tier(block.id) == "L5"
+        loaded = hmem.load_from_nvme(block)
+        assert loaded is not None
+        assert hmem.get_tier(block.id) == "L3"
+        # Loaded data should be tracked in tensor registry
+        assert hmem._tensor_registry.get(block.id) is not None
+
 
 # =====================================================================
 # 2. Block Router
