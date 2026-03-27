@@ -24,8 +24,13 @@ Usage:
     from core.telemetry import encode_packet, decode_stream, format_text_line
 """
 from __future__ import annotations
+import logging
 import struct, time, hashlib
 from typing import Iterable, Dict, Any, Iterator
+
+_logger = logging.getLogger("vramancer.telemetry")
+_logger.warning("STUB: telemetry — binary format has no consumer, "
+                "prefer mDNS discovery (Grade D)")
 
 VERSION = 1
 HEADER_FMT = ">B I H H H H I"  # taille fixe 1+4+2+2+2+2+4 = 17 octets

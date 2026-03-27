@@ -20,3 +20,6 @@ def test_multiprocess_server():
     assert r2.status_code == 200
     p.terminate()
     p.join(timeout=2)
+    if p.is_alive():
+        p.kill()
+        p.join(timeout=1)

@@ -50,8 +50,14 @@ _TIMEOUT_S = float(os.environ.get("VRM_WEBGPU_TIMEOUT", "10.0"))
 class WebGPUBackend(BaseLLMBackend):
     """WebSocket server that dispatches matmul ops to browser WebGPU workers."""
 
+    _stub_warned = False
+
     def __init__(self, host: str = "0.0.0.0", port: int = 8765):
         self.log = LoggerAdapter("backend.webgpu")
+        if not WebGPUBackend._stub_warned:
+            WebGPUBackend._stub_warned = True
+            self.log.warning("STUB: backends_webgpu — POC/template only, "
+                            "not production-ready (Grade D)")
         self.model_name = None
         self.tokenizer = None
         self._host = host

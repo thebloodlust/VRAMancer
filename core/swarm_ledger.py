@@ -22,7 +22,13 @@ class SwarmLedger:
     Système de base de données (Ledger) pour gérer l'économie du Swarm P2P.
     Gère les Clés API (sk-VRAM-xxx), les soldes de crédits VRAM (fournis vs consommés).
     """
+    _stub_warned = False
+
     def __init__(self):
+        if not SwarmLedger._stub_warned:
+            SwarmLedger._stub_warned = True
+            _logger.warning("STUB: swarm_ledger — orphan module, not integrated "
+                           "with orchestrator (Grade D+)")
         self._ensure_tables()
 
     def _get_conn(self):

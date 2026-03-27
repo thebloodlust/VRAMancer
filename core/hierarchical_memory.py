@@ -387,9 +387,15 @@ class HierarchicalMemoryManager:
     L1↔L2 : géré par VRAMLendingPool (lease-based, auto-reclaim)
     L2→L3 / L3→L5 : migration physique réelle (tensor.cpu(), NVMe spill)
     """
+    _stub_warned = False
+
     def __init__(self, nvme_dir: str = ".hm_cache", max_nvme_mb: int = 2048,
                  decay_half_life_s: float = 60.0, lending_pool=None):
         self.log = LoggerAdapter("hmem.v2")
+        if not HierarchicalMemoryManager._stub_warned:
+            HierarchicalMemoryManager._stub_warned = True
+            self.log.warning("STUB: hierarchical_memory — eviction moves metadata only, "
+                            "physical tensor offload is incomplete (Grade D+)")
         self.nvme_dir = Path(nvme_dir)
         
         # Override en mode test uniquement si le chemin par defaut est utilise

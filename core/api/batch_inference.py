@@ -79,6 +79,9 @@ class InferenceBatcher:
     ):
         self.generate_fn = generate_fn
         self.generate_batch_fn = generate_batch_fn
+        if generate_batch_fn is None:
+            _logger.warning("STUB: batch_inference — generate_batch_fn not provided, "
+                           "batching will always fall back to sequential (Grade D)")
         self.max_batch = max_batch
         self.window_ms = window_ms
         self.timeout_s = timeout_s

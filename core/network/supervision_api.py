@@ -107,11 +107,7 @@ if not os.environ.get('VRM_MINIMAL_TEST'):
     except Exception:  # pragma: no cover - environnement minimal sans torch
         pass
 
-NODES = [
-    {"id": "raspberrypi", "type": "edge", "icon": "raspberry.svg", "status": "online", "cpu": "ARM", "ram": 1024, "gpu": "None", "os": "Linux", "conn": "WiFi", "usb4": False, "last_seen": time.time()},
-    {"id": "jetson", "type": "edge", "icon": "jetson.svg", "status": "offline", "cpu": "ARM", "ram": 4096, "gpu": "Nvidia", "os": "Linux", "conn": "Ethernet", "usb4": True, "last_seen": time.time()-3600},
-    {"id": "workstation", "type": "standard", "icon": "standard.svg", "status": "online", "cpu": "x86_64", "ram": 32768, "gpu": "RTX 4090", "os": "Windows", "conn": "USB4", "usb4": True, "last_seen": time.time()},
-]
+NODES = []  # Populated dynamically by heartbeat / cluster discovery
 
 HISTORY = []
 _HEARTBEAT_TIMEOUT = 30  # secondes
