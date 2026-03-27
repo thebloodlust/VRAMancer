@@ -51,10 +51,15 @@ def save_block_to_disk(block, path):
         json.dump({"data": str(block)}, f)
 
 try:
-    from core.network.vramancer_link import send_block, start_client
+    from core.swarm_ledger import ledger as _swarm_ledger
 except ImportError:
-    def send_block(*a, **k): raise RuntimeError("vramancer_link unavailable")
-    def start_client(*a, **k): raise RuntimeError("vramancer_link unavailable")
+    _swarm_ledger = None
+
+try:
+    from core.network.transmission import send_block, start_client
+except ImportError:
+    def send_block(*a, **k): raise RuntimeError("transmission unavailable")
+    def start_client(*a, **k): raise RuntimeError("transmission unavailable")
 
 class MemoryBenchmarker:
     def __init__(self, nvme_dir, remote_nodes=None):
@@ -93,6 +98,8 @@ class BlockOrchestrator:
         self.remote_nodes = remote_nodes or []
         self.remote_connected = False
         self.benchmarker = MemoryBenchmarker(self.nvme_dir, self.remote_nodes)
+        self.ledger = _swarm_ledger
+        self._blocks_processed = 0
     def place_block(self, block, preferred_gpus=None):
         usage = self.monitor.status(); candidates = preferred_gpus or list(usage.keys())
         best_gpu = min(candidates, key=lambda g: float(usage[str(g)].replace('% VRAM','').replace('%','')))
@@ -133,6 +140,13 @@ class BlockOrchestrator:
                         try:
                             send_block(block, target_device=node)
                             self.logger.info(f"[Orchestrator] Bloc {block.id} -> réseau {node}")
+                            self._blocks_processed += 1
+                            # Reward the contributing node via the swarm ledger
+                            if self.ledger:
+                                try:
+                                    self.ledger.reward_node(node, blocks_processed=1)
+                                except Exception as le:
+                                    self.logger.debug(f"Ledger reward failed: {le}")
                             try: ORCH_HIERARCHY_MOVE.labels("network").inc()
                             except Exception as e: logging.debug(f"Ignore err: {e}")
                             break
@@ -163,6 +177,8 @@ class BlockOrchestrator:
             'nvme': os.listdir(self.nvme_dir),
             'loaded': list(self.stream_manager.loaded_layers.keys()),
             'remote_nodes': self.remote_nodes,
+            'blocks_processed': self._blocks_processed,
+            'ledger_available': self.ledger is not None,
         }
 
 __all__ = ["BlockOrchestrator"]

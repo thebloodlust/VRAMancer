@@ -21,6 +21,7 @@
 #include <linux/bpf.h>
 #include <linux/if_ether.h>
 #include <linux/ipv6.h>
+#include <linux/ip.h>
 #include <linux/udp.h>
 #include <linux/in.h>
 #include <bpf/bpf_helpers.h>
@@ -64,18 +65,31 @@ static __always_inline int parse_aitp(struct xdp_md *ctx)
     struct ethhdr *eth = data;
     if ((void *)(eth + 1) > data_end)
         return -1;
-    if (eth->h_proto != bpf_htons(ETH_P_IPV6))
-        return -1;
 
-    /* 2. IPv6 */
-    struct ipv6hdr *ipv6 = (void *)(eth + 1);
-    if ((void *)(ipv6 + 1) > data_end)
+    struct udphdr *udp;
+
+    if (eth->h_proto == bpf_htons(ETH_P_IPV6)) {
+        /* 2a. IPv6 */
+        struct ipv6hdr *ipv6 = (void *)(eth + 1);
+        if ((void *)(ipv6 + 1) > data_end)
+            return -1;
+        if (ipv6->nexthdr != IPPROTO_UDP)
+            return -1;
+        udp = (void *)(ipv6 + 1);
+    } else if (eth->h_proto == bpf_htons(ETH_P_IP)) {
+        /* 2b. IPv4 */
+        struct iphdr *ip4 = (void *)(eth + 1);
+        if ((void *)(ip4 + 1) > data_end)
+            return -1;
+        if (ip4->protocol != IPPROTO_UDP)
+            return -1;
+        /* Variable IHL: skip ip4->ihl * 4 bytes */
+        udp = (void *)ip4 + (ip4->ihl * 4);
+    } else {
         return -1;
-    if (ipv6->nexthdr != IPPROTO_UDP)
-        return -1;
+    }
 
     /* 3. UDP */
-    struct udphdr *udp = (void *)(ipv6 + 1);
     if ((void *)(udp + 1) > data_end)
         return -1;
     if (udp->dest != bpf_htons(AITP_PORT))

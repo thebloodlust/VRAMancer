@@ -81,7 +81,7 @@ def _get_cluster_secret() -> bytes:
 class AITPProtocol:
     """UDP-based tensor transport with HMAC authentication and optional FEC."""
 
-    def __init__(self, port=9109, anycast_ipv6="ff02::vrm"):
+    def __init__(self, port=9109, anycast_ipv6="ff02::vrm:1"):
         self.port = port
         self.anycast_ipv6 = anycast_ipv6
         self._fec = None
@@ -97,6 +97,17 @@ class AITPProtocol:
             logger.info(f"AITP bound on [::]:{self.port} (UDP)")
         except Exception as e:
             logger.error(f"AITP bind failed: {e}")
+
+        # Join IPv6 multicast group for receiving anycast traffic
+        try:
+            mcast_addr = socket.inet_pton(socket.AF_INET6, self.anycast_ipv6)
+            mreq = mcast_addr + struct.pack("@I", 0)  # interface 0 = all
+            self.sock.setsockopt(
+                socket.IPPROTO_IPV6, socket.IPV6_JOIN_GROUP, mreq,
+            )
+            logger.info(f"AITP joined multicast group {self.anycast_ipv6}")
+        except Exception as e:
+            logger.debug(f"AITP multicast join skipped: {e}")
 
     # ── FEC integration ─────────────────────────────────────────────
 
@@ -251,6 +262,62 @@ class AITPProtocol:
     def stop_recv(self):
         """Signal the recv_loop to stop."""
         self._recv_running = False
+
+
+# ── Load-balanced send ─────────────────────────────────────────────────
+
+    def send_balanced(self, layer_id: int, tensor_bytes: bytes, retries: int = 2) -> bool:
+        """Send tensor via anycast load balancer with automatic failover.
+
+        Uses the global AnycastLoadBalancer to pick the best healthy node
+        (based on Connectome synapse weights), with retry on failure.
+        Falls back to ``send_anycast(self.anycast_ipv6, ...)`` if no LB.
+        """
+        try:
+            from core.network.anycast_balancer import get_anycast_balancer
+            lb = get_anycast_balancer()
+            return lb.select_and_send(self, layer_id, tensor_bytes, retries=retries)
+        except ImportError:
+            # Fallback: direct anycast send
+            self.send_anycast(self.anycast_ipv6, layer_id, tensor_bytes)
+            return True
+
+    def send_raid(
+        self,
+        layer_id: int,
+        tensor_bytes: bytes,
+        data_shards: int = None,
+        parity_shards: int = 2,
+    ) -> bool:
+        """Send tensor via Network RAID (striped across nodes + RS parity).
+
+        Stripes the tensor into data_shards fragments, adds RS parity
+        shards, and sends them in parallel to different cluster nodes.
+        Receivers can reconstruct even if up to parity_shards nodes fail.
+
+        Args:
+            layer_id: Layer identifier for AITP packets.
+            tensor_bytes: Raw tensor bytes to distribute.
+            data_shards: Number of data stripes (None = auto from cluster).
+            parity_shards: Number of RS parity stripes (default 2).
+
+        Returns True if all shards were sent (some may fail tolerably).
+        """
+        try:
+            from core.network.network_raid import NetworkRAID
+            from core.network.anycast_balancer import get_anycast_balancer
+            lb = get_anycast_balancer()
+            raid = NetworkRAID(data_shards=data_shards, parity_shards=parity_shards)
+            raid_id = raid.stripe_send(
+                tensor_bytes, layer_id,
+                aitp_protocol=self,
+                balancer=lb,
+            )
+            return raid_id is not None
+        except ImportError as e:
+            logger.warning(f"AITP RAID unavailable: {e}, falling back to direct send")
+            self.send_anycast(self.anycast_ipv6, layer_id, tensor_bytes)
+            return True
 
 
 # ── Singleton ──────────────────────────────────────────────────────────

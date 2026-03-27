@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VRAMancer WebGPU Worker</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: "Fira Code", "Cascadia Code", monospace; background: #0a0a0f; color: #c0c0c0; padding: 20px; }
+        h1 { color: #7b68ee; margin-bottom: 10px; font-size: 1.3em; }
+        .status-bar { background: #1a1a2e; border: 1px solid #333; border-radius: 6px; padding: 12px 16px; margin: 10px 0; }
+        .status-bar .indicator { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 8px; }
+        .indicator.init     { background: #f0ad4e; }
+        .indicator.ready    { background: #5bc0de; }
+        .indicator.connected { background: #5cb85c; }
+        .indicator.compute  { background: #5cb85c; animation: pulse 0.3s; }
+        .indicator.error    { background: #d9534f; }
+        .indicator.reconnecting { background: #f0ad4e; animation: blink 1s infinite; }
+        .indicator.shutdown { background: #888; }
+        @keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.4); } 100% { transform: scale(1); } }
+        @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+        #log { background: #0d0d1a; border: 1px solid #222; border-radius: 6px; padding: 12px; margin-top: 12px;
+               max-height: 400px; overflow-y: auto; font-size: 0.85em; line-height: 1.6; }
+        #log .entry { border-bottom: 1px solid #1a1a2e; padding: 2px 0; }
+        #log .ts { color: #555; }
+        #log .msg { color: #c0c0c0; }
+        #log .compute { color: #5cb85c; }
+        #log .error { color: #d9534f; }
+        .controls { margin: 12px 0; }
+        .controls button { background: #7b68ee; border: none; color: #fff; padding: 8px 18px; border-radius: 4px;
+                           cursor: pointer; font-family: inherit; margin-right: 8px; }
+        .controls button:hover { background: #6a5acd; }
+        .controls button:disabled { background: #444; cursor: not-allowed; }
+        .controls input { background: #1a1a2e; border: 1px solid #333; color: #c0c0c0; padding: 8px 12px;
+                          border-radius: 4px; font-family: inherit; width: 300px; }
+        .stats { color: #888; font-size: 0.85em; margin-top: 8px; }
+    </style>
+</head>
+<body>
+    <h1>⚡ VRAMancer WebGPU Worker</h1>
+    <div class="status-bar">
+        <span id="indicator" class="indicator init"></span>
+        <span id="status-text">Initializing...</span>
+    </div>
+
+    <div class="controls">
+        <input type="text" id="ws-url" value="ws://localhost:8765" placeholder="WebSocket URL">
+        <button id="btn-connect" onclick="startWorker()">Connect</button>
+        <button id="btn-stop" onclick="stopWorker()" disabled>Stop</button>
+        <button id="btn-bench" onclick="runLocalBench()">Local Bench</button>
+    </div>
+    <div class="stats" id="stats"></div>
+
+    <div id="log"></div>
+
+    <script src="worker.js"></script>
+    <script>
+        let workerHandle = null;
+
+        function addLog(status, message) {
+            const log = document.getElementById("log");
+            const ts = new Date().toISOString().slice(11, 23);
+            const cls = (status === "error") ? "error" : (status === "compute") ? "compute" : "msg";
+            const entry = document.createElement("div");
+            entry.className = "entry";
+            entry.innerHTML = `<span class="ts">${ts}</span> <span class="${cls}">${message}</span>`;
+            log.appendChild(entry);
+            log.scrollTop = log.scrollHeight;
+        }
+
+        window.addEventListener("vramancer-status", (e) => {
+            const { status, message } = e.detail;
+            const indicator = document.getElementById("indicator");
+            indicator.className = `indicator ${status}`;
+            document.getElementById("status-text").textContent = message;
+            addLog(status, message);
+        });
+
+        async function startWorker() {
+            const url = document.getElementById("ws-url").value;
+            document.getElementById("btn-connect").disabled = true;
+            document.getElementById("btn-stop").disabled = false;
+            try {
+                workerHandle = await VRAMancerWorker.connectAndServe(url);
+            } catch (e) {
+                addLog("error", e.message);
+                document.getElementById("btn-connect").disabled = false;
+                document.getElementById("btn-stop").disabled = true;
+            }
+        }
+
+        function stopWorker() {
+            if (workerHandle) {
+                workerHandle.stop();
+                workerHandle = null;
+            }
+            document.getElementById("btn-connect").disabled = false;
+            document.getElementById("btn-stop").disabled = true;
+        }
+
+        async function runLocalBench() {
+            addLog("init", "Running local matmul benchmark...");
+            try {
+                await VRAMancerWorker.initWebGPU();
+                // Warm up
+                const warmM = 64, warmN = 64, warmK = 64;
+                const warmA = new Float32Array(warmM * warmK).fill(1.0);
+                const warmB = new Float32Array(warmN * warmK).fill(1.0);
+                await VRAMancerWorker.runMatmul(warmM, warmN, warmK, warmA, warmB);
+
+                // Benchmark different sizes
+                const sizes = [[128, 128, 128], [256, 256, 256], [512, 512, 512], [1024, 1024, 1024]];
+                for (const [M, N, K] of sizes) {
+                    const A = new Float32Array(M * K);
+                    const B = new Float32Array(N * K);
+                    for (let i = 0; i < A.length; i++) A[i] = Math.random() * 2 - 1;
+                    for (let i = 0; i < B.length; i++) B[i] = Math.random() * 2 - 1;
+
+                    const iters = M <= 256 ? 20 : 5;
+                    // warmup
+                    await VRAMancerWorker.runMatmul(M, N, K, A, B);
+
+                    const t0 = performance.now();
+                    for (let i = 0; i < iters; i++) {
+                        await VRAMancerWorker.runMatmul(M, N, K, A, B);
+                    }
+                    const dt = (performance.now() - t0) / iters;
+                    const gflops = (2 * M * N * K) / (dt * 1e6);
+                    addLog("compute", `${M}x${N}x${K}: ${dt.toFixed(2)}ms (${gflops.toFixed(1)} GFLOP/s)`);
+                }
+                addLog("ready", "Benchmark complete");
+            } catch (e) {
+                addLog("error", `Benchmark failed: ${e.message}`);
+            }
+        }
+    </script>
+</body>
+</html>

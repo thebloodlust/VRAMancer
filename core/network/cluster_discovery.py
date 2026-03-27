@@ -174,20 +174,26 @@ def detect_platform_type() -> str:
 
 
 def _get_local_ip() -> str:
-    """Get local IP address reliably."""
-    try:
-        # Connect to external address to determine local IP (no data sent)
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.settimeout(1)
-        s.connect(("8.8.8.8", 80))
-        ip = s.getsockname()[0]
-        s.close()
-        return ip
-    except Exception as e:
+    """Get local IP address reliably (prefers IPv6 if available)."""
+    # Try IPv6 first (global unicast)
+    for af, target in ((socket.AF_INET6, ("2001:4860:4860::8888", 80)),
+                        (socket.AF_INET, ("8.8.8.8", 80))):
         try:
-            return socket.gethostbyname(socket.gethostname())
-        except Exception as e:
-            return "127.0.0.1"
+            s = socket.socket(af, socket.SOCK_DGRAM)
+            s.settimeout(1)
+            s.connect(target)
+            ip = s.getsockname()[0]
+            s.close()
+            # Skip link-local IPv6 (fe80::) — not routable
+            if af == socket.AF_INET6 and ip.startswith("fe80"):
+                continue
+            return ip
+        except Exception:
+            continue
+    try:
+        return socket.gethostbyname(socket.gethostname())
+    except Exception:
+        return "127.0.0.1"
 
 
 def _get_total_ram() -> int:
@@ -453,10 +459,16 @@ class ClusterDiscovery:
             from zeroconf import Zeroconf, ServiceBrowser, ServiceInfo  # type: ignore
 
             self._zeroconf = Zeroconf()
+            # Convert IP to bytes (handle both IPv4 and IPv6)
+            local_ip = self._local_info["ip"]
+            try:
+                addr_bytes = socket.inet_pton(socket.AF_INET6, local_ip)
+            except (OSError, socket.error):
+                addr_bytes = socket.inet_aton(local_ip)
             info = ServiceInfo(
                 self.SERVICE_TYPE,
                 f"vramancer-{self._local_info['hostname']}.{self.SERVICE_TYPE}",
-                addresses=[socket.inet_aton(self._local_info["ip"])],
+                addresses=[addr_bytes],
                 port=self._local_info.get("vramancer_port", 5000),
                 properties={
                     b"version": str(self.PROTOCOL_VERSION).encode(),
@@ -528,47 +540,95 @@ class ClusterDiscovery:
     # ------------------------------------------------------------------
 
     def _udp_listener(self) -> None:
-        """Listen for UDP discovery broadcasts."""
+        """Listen for UDP discovery broadcasts (IPv6 multicast + IPv4 broadcast)."""
+        socks = []
+        # IPv6 multicast listener
         try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s6 = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
+            s6.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             try:
-                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+                s6.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
             except (AttributeError, OSError):
-                pass  # SO_REUSEPORT not available on some platforms
-            sock.bind(("", self.port))
-            sock.settimeout(2.0)
+                pass
+            s6.bind(('::', self.port))
+            # Join the VRAMancer multicast group on all interfaces
+            import struct as _struct
+            mcast_group = socket.inet_pton(socket.AF_INET6, "ff02::vrm:1")
+            mreq = mcast_group + _struct.pack("@I", 0)  # interface 0 = all
+            s6.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_JOIN_GROUP, mreq)
+            s6.settimeout(2.0)
+            socks.append(s6)
         except Exception as exc:
-            _logger.error("UDP listener bind failed: %s", exc)
+            _logger.debug("IPv6 UDP listener failed: %s", exc)
+
+        # IPv4 broadcast listener (fallback)
+        try:
+            s4 = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s4.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                s4.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+            except (AttributeError, OSError):
+                pass
+            s4.bind(("", self.port))
+            s4.settimeout(2.0)
+            socks.append(s4)
+        except Exception as exc:
+            _logger.debug("IPv4 UDP listener failed: %s", exc)
+
+        if not socks:
+            _logger.error("UDP listener: no sockets available")
             return
 
+        import select as _select
         while self._running:
             try:
-                data, addr = sock.recvfrom(8192)
-                try:
-                    node = json.loads(data.decode("utf-8"))
-                except (json.JSONDecodeError, UnicodeDecodeError):
-                    continue
-                node["timestamp"] = time.time()
-                node["discovery"] = "udp"
-                self._register_node(node)
-            except socket.timeout:
-                continue
+                readable, _, _ = _select.select(socks, [], [], 2.0)
+                for sock in readable:
+                    try:
+                        data, addr = sock.recvfrom(8192)
+                        try:
+                            node = json.loads(data.decode("utf-8"))
+                        except (json.JSONDecodeError, UnicodeDecodeError):
+                            continue
+                        node["timestamp"] = time.time()
+                        node["discovery"] = "udp"
+                        self._register_node(node)
+                    except Exception as exc:
+                        self._stats["udp_errors"] += 1
+                        _logger.debug("UDP recv error: %s", exc)
             except Exception as exc:
-                self._stats["udp_errors"] += 1
-                _logger.debug("UDP recv error: %s", exc)
-        sock.close()
+                if self._running:
+                    _logger.debug("UDP select error: %s", exc)
+        for s in socks:
+            s.close()
 
     def _heartbeat_loop(self) -> None:
-        """Periodically broadcast local info via UDP."""
+        """Periodically broadcast local info via IPv6 multicast + IPv4 broadcast."""
         while self._running:
             try:
                 self._local_info["timestamp"] = time.time()
                 msg = json.dumps(self._local_info).encode("utf-8")
-                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-                sock.settimeout(2.0)
-                sock.sendto(msg, ("<broadcast>", self.port))
+
+                # IPv6 multicast heartbeat
+                try:
+                    s6 = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
+                    s6.settimeout(2.0)
+                    # Set multicast hop limit (link-local = 1, site-local = up to 32)
+                    s6.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_HOPS, 32)
+                    s6.sendto(msg, ("ff02::vrm:1", self.port))
+                    s6.close()
+                except Exception as exc:
+                    _logger.debug("IPv6 multicast heartbeat failed: %s", exc)
+
+                # IPv4 broadcast heartbeat (fallback)
+                try:
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                    sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+                    sock.settimeout(2.0)
+                    sock.sendto(msg, ("<broadcast>", self.port))
+                    sock.close()
+                except Exception as exc:
+                    _logger.debug("IPv4 broadcast heartbeat failed: %s", exc)
                 
                 # Envoi direct vers IPs spécifiques (contournement blocage réseaux locaux)
                 peer_ips = os.environ.get("VRM_PEER_IPS", "")
@@ -576,23 +636,26 @@ class ClusterDiscovery:
                     for peer_ip in peer_ips.split(","):
                         peer_ip = peer_ip.strip()
                         if peer_ip:
-                            # 1. UDP Unicast
                             try:
-                                sock.sendto(msg, (peer_ip, self.port))
-                            except Exception as e:
+                                # Detect IPv4 vs IPv6
+                                af = socket.AF_INET6 if ":" in peer_ip else socket.AF_INET
+                                s = socket.socket(af, socket.SOCK_DGRAM)
+                                s.settimeout(2.0)
+                                s.sendto(msg, (peer_ip, self.port))
+                                s.close()
+                            except Exception:
                                 pass
                                 
-                            # 2. HTTP POST fallback (si UDP est bloqué au niveau firewall)
+                            # HTTP POST fallback (si UDP est bloqué au niveau firewall)
                             try:
                                 import requests
                                 target_port = os.environ.get("VRM_API_PORT", "8000")
                                 requests.post(f"http://{peer_ip}:{target_port}/api/nodes", 
                                              json=self._local_info, 
                                              timeout=1.0)
-                            except Exception as e:
+                            except Exception:
                                 pass
 
-                sock.close()
                 self._stats["heartbeats_sent"] += 1
             except Exception as exc:
                 _logger.debug("Heartbeat send error: %s", exc)
@@ -636,12 +699,17 @@ class ClusterDiscovery:
         """Send a TCP probe to confirm if a node is truly unreachable."""
         ip = info.get("ip", "")
         port = info.get("vramancer_port", 5000)
-        if not ip or ip == "127.0.0.1":
+        if not ip or ip in ("127.0.0.1", "::1"):
             return False
         try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            # Resolve address family dynamically
+            infos = socket.getaddrinfo(ip, port, socket.AF_UNSPEC, socket.SOCK_STREAM)
+            if not infos:
+                return False
+            af, socktype, proto, _, sa = infos[0]
+            sock = socket.socket(af, socktype, proto)
             sock.settimeout(2.0)
-            sock.connect((ip, port))
+            sock.connect(sa)
             sock.close()
             return True
         except Exception:

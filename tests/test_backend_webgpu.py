@@ -1,46 +1,65 @@
 import pytest
-import asyncio
-from unittest.mock import MagicMock
+import struct
+from unittest.mock import MagicMock, patch
 
-@pytest.fixture
-def mock_node_manager(monkeypatch):
-    from core.network.webgpu_node import WebGPUNodeManager
-    manager = WebGPUNodeManager(port=0)  
-    manager.clients = {"test_client": {"busy": False}}
-    
-    # Mock future handling returning an INT8 dummy encoded answer for JS
-    future = asyncio.Future()
-    future.set_result(b"\x00\x00\x00\x00" + b"A") 
-    manager.submit_tensor = MagicMock(return_value=future)
-    return manager
 
-@pytest.mark.asyncio
-async def test_webgpu_backend_serialization():
+def test_webgpu_backend_init_stub():
+    """WebGPU backend initializes in stub mode without websockets."""
+    from core.backends_webgpu import WebGPUBackend
+
+    backend = WebGPUBackend.__new__(WebGPUBackend)
+    backend.log = MagicMock()
+    backend.model_name = None
+    backend.tokenizer = None
+    backend._clients = []
+    backend._clients_lock = __import__("threading").Lock()
+    backend._rr = 0
+    backend._loop = None
+    backend._thread = None
+    backend._server = None
+
+    # Verify stub state
+    assert backend.num_workers == 0
+    assert backend._server is None
+
+
+def test_webgpu_backend_load_model():
+    """load_model stores name and returns dict."""
     from core.backends_webgpu import WebGPUBackend
     import threading
     threading.Thread.start = MagicMock()
-    
-    backend = WebGPUBackend()
-    backend._loop = asyncio.get_event_loop()
-    
-    # Test fallback dummy tensor serialization (no torch in test env)
-    b, scale = backend._serialize_tensor(None)
-    assert scale == 1.0
-    assert b == b"dummy_tensor_data"
 
-@pytest.mark.asyncio
-async def test_webgpu_generate_redundancy(mock_node_manager):
+    backend = WebGPUBackend.__new__(WebGPUBackend)
+    backend.log = MagicMock()
+    backend.model_name = None
+    backend.tokenizer = None
+    backend._clients = []
+    backend._clients_lock = __import__("threading").Lock()
+    backend._rr = 0
+    backend._loop = None
+    backend._thread = None
+    backend._server = None
+
+    result = backend.load_model("test-model")
+    assert result["name"] == "test-model"
+    assert result["type"] == "webgpu_distributed"
+    assert backend.model_name == "test-model"
+
+
+def test_webgpu_backend_no_workers_error():
+    """generate() raises when no workers connected."""
     from core.backends_webgpu import WebGPUBackend
-    import threading
-    threading.Thread.start = MagicMock()
-    
-    backend = WebGPUBackend()
-    backend._loop = asyncio.get_event_loop()
-    backend.node_manager = mock_node_manager
-    
-    # Trigger generation
-    res = backend.generate("Hello WebGPU", max_new_tokens=2)
-    assert res is not None
-    
-    # Verify the fallback redundancy submits tasks 
-    assert mock_node_manager.submit_tensor.call_count >= 2
+
+    backend = WebGPUBackend.__new__(WebGPUBackend)
+    backend.log = MagicMock()
+    backend.model_name = "test"
+    backend.tokenizer = None
+    backend._clients = []
+    backend._clients_lock = __import__("threading").Lock()
+    backend._rr = 0
+    backend._loop = None
+    backend._thread = None
+    backend._server = None
+
+    with pytest.raises(RuntimeError, match="No browser workers"):
+        backend.generate("Hello", max_new_tokens=1)

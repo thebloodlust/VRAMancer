@@ -120,7 +120,7 @@ class TransportFactory:
         if _fastpath_channel is None:
             with _lock:
                 if _fastpath_channel is None:
-                    from core.network.fibre_fastpath import open_low_latency_channel
+                    from core.network.network_transport import open_low_latency_channel
                     _fastpath_channel = open_low_latency_channel(
                         remote_host=remote_host,
                         remote_port=remote_port,

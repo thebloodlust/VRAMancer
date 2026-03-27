@@ -18,7 +18,7 @@ import hashlib
 
 logger = logging.getLogger(__name__)
 
-AITP_SENSING_GROUP = "ff12::a1:b2:c3"
+AITP_SENSING_GROUP = "ff02::vrm:1"
 AITP_SENSING_PORT = 9110
 
 # Heartbeat interval (seconds)

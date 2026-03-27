@@ -111,9 +111,11 @@ class LlamaCppBackend(BaseLLMBackend):
         if num_gpus > 1:
             # Auto-detect VRAM proportions for heterogeneous split
             tensor_split = self._compute_tensor_split(num_gpus)
+            # Detect P2P capability — row-split (mode 2) only benefits with P2P
+            split_mode = self._select_split_mode(num_gpus)
             logger.info(
-                "llama.cpp multi-GPU: %d GPUs, split_mode=layer, tensor_split=%s",
-                num_gpus, tensor_split
+                "llama.cpp multi-GPU: %d GPUs, split_mode=%d, tensor_split=%s",
+                num_gpus, split_mode, tensor_split
             )
 
         logger.info(
@@ -307,31 +309,113 @@ class LlamaCppBackend(BaseLLMBackend):
     def _compute_tensor_split(self, num_gpus: int) -> Optional[List[float]]:
         """Compute VRAM-proportional tensor_split for heterogeneous GPUs.
 
-        Returns a list of floats proportional to free VRAM on each GPU.
-        llama.cpp uses these to distribute layers across GPUs.
+        Weights by both free VRAM and compute capability (faster GPUs get
+        more layers). Falls back to torch.cuda.mem_get_info() if
+        hetero_config is unavailable.
         """
+        vram_values = self._get_vram_per_gpu(num_gpus)
+        if vram_values is None:
+            return None
+
+        # Apply compute weight: scale VRAM by relative FP16 throughput
+        compute_weights = self._get_compute_weights(num_gpus)
+        weighted = [v * w for v, w in zip(vram_values, compute_weights)]
+
+        total = sum(weighted)
+        if total <= 0:
+            return None
+
+        tensor_split = [w / total for w in weighted]
+        logger.info("Tensor split (VRAM×compute weighted): %s", tensor_split)
+        return tensor_split
+
+    def _get_vram_per_gpu(self, num_gpus: int) -> Optional[List[float]]:
+        """Get free VRAM per GPU in GB, with fallback chain."""
+        # Try hetero_config first (rich GPU database)
         try:
             from core.hetero_config import auto_configure
             config = auto_configure(strategy="balanced")
-            if len(config.gpus) < num_gpus:
-                return None
-
-            # Use free VRAM proportion
-            vram_values = []
-            for gpu in config.gpus[:num_gpus]:
-                vram = gpu.free_vram_gb if gpu.free_vram_gb > 0 else gpu.total_vram_gb
-                vram_values.append(vram)
-
-            total = sum(vram_values)
-            if total <= 0:
-                return None
-
-            tensor_split = [v / total for v in vram_values]
-            logger.info("Tensor split (VRAM proportional): %s", tensor_split)
-            return tensor_split
+            if config and len(config.gpus) >= num_gpus:
+                vals = []
+                for gpu in config.gpus[:num_gpus]:
+                    v = gpu.free_vram_gb if gpu.free_vram_gb > 0 else gpu.total_vram_gb
+                    vals.append(v)
+                if all(v > 0 for v in vals):
+                    return vals
         except Exception as e:
-            logger.debug("Could not compute tensor_split: %s", e)
-            return None
+            logger.debug("hetero_config unavailable: %s", e)
+
+        # Fallback: direct torch.cuda.mem_get_info
+        try:
+            import torch
+            if torch.cuda.is_available() and torch.cuda.device_count() >= num_gpus:
+                vals = []
+                for i in range(num_gpus):
+                    free, total = torch.cuda.mem_get_info(i)
+                    vals.append(free / (1024 ** 3))
+                return vals
+        except Exception as e:
+            logger.debug("torch.cuda.mem_get_info unavailable: %s", e)
+
+        # Fallback: pynvml
+        try:
+            import pynvml
+            pynvml.nvmlInit()
+            count = pynvml.nvmlDeviceGetCount()
+            if count >= num_gpus:
+                vals = []
+                for i in range(num_gpus):
+                    handle = pynvml.nvmlDeviceGetHandleByIndex(i)
+                    info = pynvml.nvmlDeviceGetMemoryInfo(handle)
+                    vals.append(info.free / (1024 ** 3))
+                return vals
+        except Exception:
+            pass
+
+        logger.warning("Cannot detect GPU VRAM for tensor_split")
+        return None
+
+    def _get_compute_weights(self, num_gpus: int) -> List[float]:
+        """Return relative compute weight per GPU (1.0 = baseline).
+
+        Uses SM count × clock as a proxy for FP16 throughput.
+        Falls back to equal weights if unavailable.
+        """
+        try:
+            import torch
+            if not torch.cuda.is_available():
+                return [1.0] * num_gpus
+            scores = []
+            for i in range(num_gpus):
+                props = torch.cuda.get_device_properties(i)
+                score = props.multi_processor_count * props.clock_rate
+                scores.append(score)
+            # Normalize: fastest GPU = 1.0
+            max_s = max(scores) if scores else 1
+            return [s / max_s for s in scores]
+        except Exception:
+            return [1.0] * num_gpus
+
+    def _select_split_mode(self, num_gpus: int) -> int:
+        """Select llama.cpp split_mode: 1=layer split, 2=row split.
+
+        Row split (mode 2) benefits from P2P/NVLink. Fall back to layer split
+        (mode 1) when P2P is blocked (e.g. Proxmox VM with IOMMU).
+        """
+        if os.environ.get("VRM_TRANSFER_P2P", "").lower() in ("0", "false"):
+            return 1  # forced no-P2P
+
+        try:
+            import torch
+            if torch.cuda.is_available() and torch.cuda.device_count() >= num_gpus:
+                for i in range(num_gpus):
+                    for j in range(num_gpus):
+                        if i != j and torch.cuda.can_device_access_peer(i, j):
+                            logger.info("P2P available between GPU %d and %d → row split", i, j)
+                            return 2
+        except Exception:
+            pass
+        return 1  # default: layer split (safe without P2P)
 
 
 class _LlamaCppTokenizerProxy:

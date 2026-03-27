@@ -100,7 +100,9 @@ class TestDirectFP4Construction:
         """w_qdata, w_scale, w_per_tensor_scale are registered buffers."""
         from core.nvfp4_direct import DirectFP4Linear
         mod = DirectFP4Linear(in_features=128, out_features=64)
-        buffer_names = [n for n, _ in mod.named_buffers()]
+        # PyTorch 2.10+ named_buffers() skips None-valued buffers,
+        # so check _buffers dict directly
+        buffer_names = list(mod._buffers.keys())
         assert 'w_qdata' in buffer_names
         assert 'w_scale' in buffer_names
         assert 'w_per_tensor_scale' in buffer_names

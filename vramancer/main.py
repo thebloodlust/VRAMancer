@@ -25,6 +25,21 @@ def main(argv=None):
     )
     sub = parser.add_subparsers(dest="command", help="Commande")
 
+    # ---- run (star command) ----
+    p_run = sub.add_parser("run", help="Load a model across all GPUs and start generating")
+    p_run.add_argument("model", help="HuggingFace model (e.g. Qwen/Qwen2.5-14B-Instruct)")
+    p_run.add_argument("--prompt", "-p", type=str, default=None,
+                        help="Prompt for one-shot generation (omit for interactive mode)")
+    p_run.add_argument("--max-tokens", type=int, default=256)
+    p_run.add_argument("--temperature", type=float, default=0.7)
+    p_run.add_argument("--backend", type=str, default="auto",
+                        help="Backend: auto, huggingface, llamacpp, vllm, ollama")
+    p_run.add_argument("--gpus", type=int, default=None,
+                        help="Number of GPUs (default: all available)")
+    p_run.add_argument("--quantization", "-q", type=str, default=None,
+                        choices=["nf4", "int8", "nvfp4", "gptq", "awq"],
+                        help="Quantization: nf4, int8, nvfp4 (Blackwell), gptq, awq")
+
     # ---- serve ----
     p_serve = sub.add_parser("serve", help="Lancer le serveur API REST")
     p_serve.add_argument("--model", type=str, default=None,
@@ -93,6 +108,8 @@ def main(argv=None):
 
     if args.command == "version":
         _cmd_version()
+    elif args.command == "run":
+        _cmd_run(args)
     elif args.command == "auth":
         try:
             from vramancer.cli.swarm_cli import ui_auth_generate
@@ -156,6 +173,87 @@ def _cmd_status():
     except ImportError:
         pass
     print("=" * 50)
+
+
+def _cmd_run(args):
+    """Load a model across GPUs and generate text (interactive or one-shot)."""
+    if args.quantization:
+        os.environ['VRM_QUANTIZATION'] = args.quantization
+
+    try:
+        from core.inference_pipeline import InferencePipeline
+    except ImportError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        print("Install: pip install torch transformers", file=sys.stderr)
+        sys.exit(1)
+
+    # Auto-detect GPUs
+    gpus = args.gpus
+    if gpus is None:
+        try:
+            import torch
+            gpus = max(torch.cuda.device_count(), 1)
+        except ImportError:
+            gpus = 1
+
+    # Show loading info
+    q_str = f", quantization={args.quantization}" if args.quantization else ""
+    print(f"Loading {args.model} on {gpus} GPU(s){q_str}...")
+
+    try:
+        pipeline = InferencePipeline(
+            backend_name=args.backend,
+            verbose=True,
+            enable_metrics=False,
+        )
+
+        load_kwargs = {}
+        if args.backend == "vllm":
+            if gpus > 1:
+                load_kwargs["tensor_parallel_size"] = gpus
+            load_kwargs["max_model_len"] = 8192
+            load_kwargs["gpu_memory_utilization"] = 0.65
+
+        pipeline.load(args.model, num_gpus=gpus, **load_kwargs)
+    except Exception as e:
+        print(f"ERROR loading model: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Ready — {len(pipeline.blocks)} blocks across {pipeline.num_gpus} GPU(s)")
+
+    # ── One-shot mode ────────────────────────────────────────
+    if args.prompt:
+        result = pipeline.generate(
+            args.prompt,
+            max_new_tokens=args.max_tokens,
+            temperature=args.temperature,
+        )
+        print(result)
+        pipeline.shutdown()
+        return
+
+    # ── Interactive mode ─────────────────────────────────────
+    print("Type your prompt (or 'quit' to exit):\n")
+    try:
+        while True:
+            try:
+                prompt = input(">>> ")
+            except EOFError:
+                break
+            if not prompt or prompt.strip().lower() in ("quit", "exit", "q"):
+                break
+            result = pipeline.generate(
+                prompt,
+                max_new_tokens=args.max_tokens,
+                temperature=args.temperature,
+            )
+            print(result)
+            print()
+    except KeyboardInterrupt:
+        print()
+    finally:
+        pipeline.shutdown()
+        print("Shutdown complete.")
 
 
 def _cmd_serve(args):

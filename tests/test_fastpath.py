@@ -1,5 +1,5 @@
 def test_fastpath_stub_channel():
-    from core.network.fibre_fastpath import open_low_latency_channel
+    from core.network.network_transport import open_low_latency_channel
     ch = open_low_latency_channel()
     assert ch is not None
     caps = ch.capabilities()
@@ -8,7 +8,7 @@ def test_fastpath_stub_channel():
     assert sent == 5
     data = ch.recv()
     assert data == b"hello"
-from core.network.fibre_fastpath import open_low_latency_channel
+from core.network.network_transport import open_low_latency_channel
 
 def test_fastpath_echo():
     ch = open_low_latency_channel()

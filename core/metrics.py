@@ -67,6 +67,20 @@ PAGED_KV_BORROWED_PAGES = Gauge("vramancer_paged_kv_borrowed_pages", "Borrowed o
 
 _started = False
 
+# All labeled Gauge metrics that accumulate stale label sets on pipeline reset
+_LABELED_GAUGES = []
+# All simple (unlabeled) Gauges that should be zeroed on reset
+_SIMPLE_GAUGES = []
+
+
+def _register_gauge(g, labeled=False):
+    """Track a Gauge for lifecycle cleanup."""
+    if labeled:
+        _LABELED_GAUGES.append(g)
+    else:
+        _SIMPLE_GAUGES.append(g)
+    return g
+
 def metrics_server_start(port: int | None = None):
     global _started
     if _started:
@@ -77,6 +91,40 @@ def metrics_server_start(port: int | None = None):
     t = threading.Thread(target=start_http_server, args=(p,), kwargs={'addr': bind_addr}, daemon=True)
     t.start()
     _started = True
+
+
+# Register gauges for lifecycle tracking
+for _g in [GPU_MEMORY_USED, TASKS_PER_RESOURCE, DEVICE_INFO, BLOCK_HOTNESS,
+           TASK_PCT, FASTPATH_IF_LATENCY, PAGED_KV_USED_PAGES,
+           PAGED_KV_FREE_PAGES]:
+    _register_gauge(_g, labeled=True)
+
+for _g in [TASKS_RUNNING, LENDING_ACTIVE_LEASES, LENDING_BYTES_LENT,
+           LENDING_POOL_CAPACITY_GB, BATCHER_QUEUE_DEPTH, BATCHER_THROUGHPUT,
+           HA_JOURNAL_SIZE, PAGED_KV_BORROWED_PAGES]:
+    _register_gauge(_g, labeled=False)
+
+
+def reset_metrics():
+    """Reset all gauge metrics on pipeline shutdown.
+
+    Labeled gauges: clear all label sets (removes stale GPU/device entries).
+    Simple gauges: set to 0.
+    Counters/Histograms: left as-is (monotonic by Prometheus convention).
+    """
+    for g in _LABELED_GAUGES:
+        try:
+            g._metrics.clear()
+        except Exception:
+            pass
+    for g in _SIMPLE_GAUGES:
+        try:
+            g.set(0)
+        except Exception:
+            try:
+                g._metrics.clear()
+            except Exception:
+                pass
 
 __all__ = [
     "INFER_REQUESTS",
@@ -100,6 +148,7 @@ __all__ = [
     "BLOCK_HOTNESS",
     "TASK_PCT",
     "metrics_server_start",
+    "reset_metrics",
     "ORCH_PLACEMENTS",
     "ORCH_MIGRATIONS",
     "ORCH_REBALANCE",

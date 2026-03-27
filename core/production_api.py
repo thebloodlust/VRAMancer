@@ -783,15 +783,50 @@ def _register_routes(application: Flask, _run_with_timeout, queue_depth, queue_l
 
             def _do_batch():
                 batch_results = []
-                for i, prompt in enumerate(prompts):
-                    text = _registry.generate(
-                        prompt,
-                        max_new_tokens=params['max_tokens'],
-                        temperature=params['temperature'],
-                        top_p=params['top_p'],
-                        top_k=params['top_k'],
-                    )
-                    batch_results.append((i, prompt, text))
+                pipeline = _registry.get()
+                batcher = getattr(pipeline, 'continuous_batcher', None) if pipeline else None
+
+                # Use continuous batcher for concurrent processing when available
+                if batcher is not None and hasattr(batcher, '_running') and batcher._running:
+                    import concurrent.futures as _cf
+                    futures = {}
+                    for i, prompt in enumerate(prompts):
+                        future = batcher.submit(
+                            prompt,
+                            max_new_tokens=params['max_tokens'],
+                            temperature=params['temperature'],
+                            top_p=params['top_p'],
+                            top_k=params['top_k'],
+                        )
+                        futures[i] = (prompt, future)
+
+                    for i in sorted(futures.keys()):
+                        prompt, future = futures[i]
+                        try:
+                            text = future.result(
+                                timeout=float(os.environ.get('VRM_GENERATE_TIMEOUT', '300'))
+                            ) if hasattr(future, 'result') else future
+                        except Exception:
+                            # Fallback to direct generate on failure
+                            text = _registry.generate(
+                                prompt,
+                                max_new_tokens=params['max_tokens'],
+                                temperature=params['temperature'],
+                                top_p=params['top_p'],
+                                top_k=params['top_k'],
+                            )
+                        batch_results.append((i, prompt, text))
+                else:
+                    # Sequential fallback
+                    for i, prompt in enumerate(prompts):
+                        text = _registry.generate(
+                            prompt,
+                            max_new_tokens=params['max_tokens'],
+                            temperature=params['temperature'],
+                            top_p=params['top_p'],
+                            top_k=params['top_k'],
+                        )
+                        batch_results.append((i, prompt, text))
                 return batch_results
 
             batch_results, queue_err = _run_with_timeout(

@@ -67,6 +67,19 @@ rust-build-cuda:
 	pip install rust_core/target/wheels/vramancer_rust-*.whl --force-reinstall
 	@echo "✅ Rust + CUDA extensions built and installed"
 
+native-dmabuf:
+	@echo "🔗 Building DMA-BUF native extension..."
+	gcc -shared -fPIC -O2 -Wall -o csrc/libvrm_dmabuf.so csrc/dmabuf_bridge.c
+	@echo "✅ libvrm_dmabuf.so built in csrc/"
+
+native-rebar:
+	@echo "🔗 Building ReBAR mmap native extension..."
+	gcc -shared -fPIC -O2 -Wall -o csrc/libvrm_rebar.so csrc/rebar_mmap.c
+	@echo "✅ libvrm_rebar.so built in csrc/"
+
+native-all: native-dmabuf native-rebar
+	@echo "✅ All native C extensions built"
+
 rust-test:
 	@echo "🧪 Testing Rust extensions..."
 	python scripts/test_rust_integration.py

@@ -1,6 +1,6 @@
 def test_core_network_imports():
-    from core.network import Transport, select_best_interface
-    assert callable(select_best_interface)
+    from core.network import Transport
+    assert Transport is not None
 
 def test_dashboard_imports():
     from dashboard import launch_cli_dashboard

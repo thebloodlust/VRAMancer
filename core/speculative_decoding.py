@@ -172,12 +172,22 @@ class SwarmSpeculativeDecoder:
         swarm_verify_callable: Callable,
         gamma: int = 5,
         temperature: float = 0.0,
+        adaptive: bool = True,
+        gamma_min: int = 2,
+        gamma_max: int = 12,
     ):
         self.draft_model = draft_model_callable
         self.swarm_verify = swarm_verify_callable
         self.gamma = gamma
         self.temperature = temperature
         self.log = logger
+
+        # Adaptive K: adjust gamma based on rolling acceptance rate
+        self.adaptive = adaptive
+        self.gamma_min = max(1, gamma_min)
+        self.gamma_max = gamma_max
+        self._acceptance_window: list = []  # last N (accepted, drafted) tuples
+        self._window_size = int(os.environ.get("VRM_SPEC_WINDOW", "10"))
 
         self.total_drafted = 0
         self.total_accepted = 0
@@ -192,6 +202,36 @@ class SwarmSpeculativeDecoder:
         scaled = logits / self.temperature
         probs = torch.softmax(scaled, dim=-1)
         return torch.multinomial(probs, num_samples=1).squeeze(-1)
+
+    def _adapt_gamma(self, accepted: int, drafted: int) -> None:
+        """Adjust gamma based on rolling acceptance rate.
+
+        High acceptance (>80%) → increase gamma (speculatively guess more)
+        Low acceptance  (<30%) → decrease gamma (waste less compute)
+        """
+        if not self.adaptive:
+            return
+
+        self._acceptance_window.append((accepted, drafted))
+        if len(self._acceptance_window) > self._window_size:
+            self._acceptance_window.pop(0)
+
+        if len(self._acceptance_window) < 3:
+            return  # need at least 3 rounds of data
+
+        total_a = sum(a for a, _ in self._acceptance_window)
+        total_d = sum(d for _, d in self._acceptance_window)
+        rate = total_a / max(1, total_d)
+
+        old_gamma = self.gamma
+        if rate > 0.80:
+            self.gamma = min(self.gamma + 1, self.gamma_max)
+        elif rate < 0.30:
+            self.gamma = max(self.gamma - 1, self.gamma_min)
+
+        if self.gamma != old_gamma:
+            self.log.debug("[Speculative] Adaptive K: %d → %d (rate=%.0f%%)",
+                           old_gamma, self.gamma, rate * 100)
 
     @torch.no_grad()
     def generate(self, input_ids: "torch.Tensor", max_new_tokens: int) -> "torch.Tensor":
@@ -260,6 +300,9 @@ class SwarmSpeculativeDecoder:
             # Telemetry
             self.total_drafted += self.gamma
             self.total_accepted += accepted_count
+
+            # Adaptive K — adjust gamma for next round
+            self._adapt_gamma(accepted_count, self.gamma)
 
             swarm_elapsed = time.perf_counter() - swarm_start
             naive_time = swarm_elapsed * (accepted_count + 1)

@@ -182,17 +182,31 @@ class Connectome:
 
     def _ping_synapse(self, synapse: Synapse):
         start_time = time.perf_counter()
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(1.0)
         try:
-            sock.connect((synapse.ip_address, synapse.port))
-            latency = (time.perf_counter() - start_time) * 1000
-            synapse.update_latency(latency)
+            # Resolve address family dynamically (IPv4 or IPv6)
+            infos = socket.getaddrinfo(
+                synapse.ip_address, synapse.port,
+                socket.AF_UNSPEC, socket.SOCK_STREAM,
+            )
+            if not infos:
+                synapse.update_latency(5000)
+                synapse.record_transfer(False)
+                return
+            af, socktype, proto, _, sa = infos[0]
+            sock = socket.socket(af, socktype, proto)
+            sock.settimeout(1.0)
+            try:
+                sock.connect(sa)
+                latency = (time.perf_counter() - start_time) * 1000
+                synapse.update_latency(latency)
+            except OSError:
+                synapse.update_latency(5000)
+                synapse.record_transfer(False)
+            finally:
+                sock.close()
         except OSError:
             synapse.update_latency(5000)
             synapse.record_transfer(False)
-        finally:
-            sock.close()
 
 
 # Singleton global (La Matrice Commune)

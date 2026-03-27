@@ -95,6 +95,89 @@ mod cuda_ffi {
         }
     }
 
+    /// cuMemcpyPeerAsync(dstDevice, dstCtx, srcDevice, srcCtx, ByteCount, hStream)
+    /// True P2P copy between GPUs — works on bare metal when P2P is enabled.
+    /// Falls back to implicit CPU staging via the driver if P2P is blocked.
+    pub fn memcpy_peer_async(
+        dst_dev: u64, dst_ctx: u64,
+        src_dev: u64, src_ctx: u64,
+        bytes: usize, stream: u64,
+    ) -> Result<(), String> {
+        unsafe {
+            let sym: libloading::Symbol<
+                unsafe extern "C" fn(u64, u64, u64, u64, usize, u64) -> CUresult,
+            > = lib()
+                .get(b"cuMemcpyPeerAsync\0")
+                .map_err(|e| format!("cuMemcpyPeerAsync not found: {e}"))?;
+            let res = sym(dst_dev, dst_ctx, src_dev, src_ctx, bytes, stream);
+            if res != 0 {
+                return Err(format!("cuMemcpyPeerAsync returned {res}"));
+            }
+            Ok(())
+        }
+    }
+
+    /// cuDeviceCanAccessPeer(&canAccess, dev, peerDev)
+    pub fn can_access_peer(dev: i32, peer_dev: i32) -> Result<bool, String> {
+        unsafe {
+            let sym: libloading::Symbol<
+                unsafe extern "C" fn(*mut i32, i32, i32) -> CUresult,
+            > = lib()
+                .get(b"cuDeviceCanAccessPeer\0")
+                .map_err(|e| format!("cuDeviceCanAccessPeer not found: {e}"))?;
+            let mut can_access: i32 = 0;
+            let res = sym(&mut can_access, dev, peer_dev);
+            if res != 0 {
+                return Err(format!("cuDeviceCanAccessPeer returned {res}"));
+            }
+            Ok(can_access != 0)
+        }
+    }
+
+    /// cuCtxEnablePeerAccess(peerCtx, flags)
+    pub fn ctx_enable_peer_access(peer_ctx: u64) -> Result<(), String> {
+        unsafe {
+            let sym: libloading::Symbol<unsafe extern "C" fn(u64, u32) -> CUresult> =
+                lib().get(b"cuCtxEnablePeerAccess\0")
+                    .map_err(|e| format!("cuCtxEnablePeerAccess not found: {e}"))?;
+            let res = sym(peer_ctx, 0);
+            // CUDA_ERROR_PEER_ACCESS_ALREADY_ENABLED = 704
+            if res != 0 && res != 704 {
+                return Err(format!("cuCtxEnablePeerAccess returned {res}"));
+            }
+            Ok(())
+        }
+    }
+
+    /// cuMemAlloc_v2(dptr, bytesize) — allocate device memory
+    pub fn mem_alloc_device(bytes: usize) -> Result<u64, String> {
+        unsafe {
+            let sym: libloading::Symbol<unsafe extern "C" fn(*mut u64, usize) -> CUresult> =
+                lib().get(b"cuMemAlloc_v2\0")
+                    .map_err(|e| format!("cuMemAlloc_v2 not found: {e}"))?;
+            let mut dptr: u64 = 0;
+            let res = sym(&mut dptr, bytes);
+            if res != 0 {
+                return Err(format!("cuMemAlloc returned {res}"));
+            }
+            Ok(dptr)
+        }
+    }
+
+    /// cuMemFree_v2(dptr) — free device memory
+    pub fn mem_free_device(dptr: u64) -> Result<(), String> {
+        unsafe {
+            let sym: libloading::Symbol<unsafe extern "C" fn(u64) -> CUresult> =
+                lib().get(b"cuMemFree_v2\0")
+                    .map_err(|e| format!("cuMemFree_v2 not found: {e}"))?;
+            let res = sym(dptr);
+            if res != 0 {
+                return Err(format!("cuMemFree returned {res}"));
+            }
+            Ok(())
+        }
+    }
+
     /// cuMemAllocHost_v2(pp, bytesize) — page-locked (pinned) host memory
     pub fn mem_alloc_host(bytes: usize) -> Result<*mut u8, String> {
         unsafe {
@@ -382,6 +465,11 @@ mod cuda_ffi {
 /// Persistent GPU-to-GPU transfer pipeline.
 /// Pre-allocates CUDA streams, events, and pinned buffers on init.
 /// Reuses them for every transfer call, avoiding the ~4ms setup overhead.
+///
+/// Supports:
+/// - P2P direct copy (cuMemcpyPeerAsync) when topology allows
+/// - Triple-buffered CPU-staged transfer with overlapped DMA when P2P blocked
+/// - Auto chunk size tuning based on transfer size
 #[cfg(feature = "cuda")]
 #[pyclass]
 struct GpuPipeline {
@@ -391,10 +479,13 @@ struct GpuPipeline {
     dst_ctx: u64,
     s_dtoh: u64,
     s_htod: u64,
+    s_p2p: u64,          // Dedicated stream for P2P transfers
     ev_dtoh: u64,
     ev_htod: u64,
+    ev_buf_free: Vec<u64>,  // Per-buffer "done consuming" events
     host_bufs: Vec<*mut u8>,
     chunk_bytes: usize,
+    p2p_enabled: bool,    // True if cuDeviceCanAccessPeer succeeds
 }
 
 // SAFETY: The raw pointers (host_bufs) are pinned CUDA host memory that is
@@ -408,6 +499,7 @@ unsafe impl Send for GpuPipeline {}
 impl GpuPipeline {
     /// Create a new persistent pipeline between two GPUs.
     /// Pre-allocates all CUDA resources (streams, events, pinned buffers).
+    /// Probes P2P accessibility and enables peer access if available.
     ///
     /// Args:
     ///   src_gpu: source GPU ordinal
@@ -416,28 +508,50 @@ impl GpuPipeline {
     #[new]
     fn new(src_gpu: i32, dst_gpu: i32, chunk_mb: Option<usize>) -> PyResult<Self> {
         let chunk_bytes = chunk_mb.unwrap_or(16) * 1024 * 1024;
-        let n_bufs = 2usize;
+        let n_bufs = 3usize;  // Triple-buffering for full overlap
 
         let src_ctx = cuda_ffi::device_primary_ctx_retain(src_gpu)
             .map_err(|e| PyValueError::new_err(format!("src ctx: {e}")))?;
         let dst_ctx = cuda_ffi::device_primary_ctx_retain(dst_gpu)
             .map_err(|e| PyValueError::new_err(format!("dst ctx: {e}")))?;
 
-        // Allocate pinned host buffers
+        // Probe P2P and enable if available
+        let p2p_enabled = if src_gpu != dst_gpu {
+            match cuda_ffi::can_access_peer(src_gpu, dst_gpu) {
+                Ok(true) => {
+                    // Enable bidirectional P2P access
+                    cuda_ffi::ctx_set_current(src_ctx).ok();
+                    let fwd = cuda_ffi::ctx_enable_peer_access(dst_ctx).is_ok();
+                    cuda_ffi::ctx_set_current(dst_ctx).ok();
+                    let rev = cuda_ffi::ctx_enable_peer_access(src_ctx).is_ok();
+                    fwd && rev
+                }
+                _ => false,
+            }
+        } else {
+            false
+        };
+
+        // Allocate pinned host buffers (only needed if no P2P)
         let mut host_bufs = Vec::with_capacity(n_bufs);
-        for i in 0..n_bufs {
-            let buf = cuda_ffi::mem_alloc_host(chunk_bytes)
-                .map_err(|e| PyValueError::new_err(format!("pinned buf {i}: {e}")))?;
-            host_bufs.push(buf);
+        if !p2p_enabled {
+            for i in 0..n_bufs {
+                let buf = cuda_ffi::mem_alloc_host(chunk_bytes)
+                    .map_err(|e| PyValueError::new_err(format!("pinned buf {i}: {e}")))?;
+                host_bufs.push(buf);
+            }
         }
 
-        // Create streams
+        // Create streams on src context
         cuda_ffi::ctx_set_current(src_ctx)
             .map_err(|e| PyValueError::new_err(e))?;
         let s_dtoh = cuda_ffi::stream_create()
             .map_err(|e| PyValueError::new_err(format!("stream DtoH: {e}")))?;
         let ev_dtoh = cuda_ffi::event_create()
             .map_err(|e| PyValueError::new_err(format!("event DtoH: {e}")))?;
+        // P2P stream lives on src context
+        let s_p2p = cuda_ffi::stream_create()
+            .map_err(|e| PyValueError::new_err(format!("stream P2P: {e}")))?;
 
         cuda_ffi::ctx_set_current(dst_ctx)
             .map_err(|e| PyValueError::new_err(e))?;
@@ -446,16 +560,56 @@ impl GpuPipeline {
         let ev_htod = cuda_ffi::event_create()
             .map_err(|e| PyValueError::new_err(format!("event HtoD: {e}")))?;
 
+        // Per-buffer completion events (created on dst context)
+        let mut ev_buf_free = Vec::with_capacity(n_bufs);
+        for i in 0..n_bufs {
+            let ev = cuda_ffi::event_create()
+                .map_err(|e| PyValueError::new_err(format!("event buf_free {i}: {e}")))?;
+            ev_buf_free.push(ev);
+        }
+
         Ok(GpuPipeline {
             src_gpu, dst_gpu, src_ctx, dst_ctx,
-            s_dtoh, s_htod, ev_dtoh, ev_htod,
-            host_bufs, chunk_bytes,
+            s_dtoh, s_htod, s_p2p, ev_dtoh, ev_htod,
+            ev_buf_free, host_bufs, chunk_bytes, p2p_enabled,
         })
     }
 
-    /// Transfer data between GPUs using the pre-allocated async pipeline.
+    /// Transfer data between GPUs using the pre-allocated pipeline.
     /// GIL is released during the entire transfer.
+    ///
+    /// If P2P is available: uses cuMemcpyPeerAsync (single stream, zero CPU staging).
+    /// Otherwise: triple-buffered async CPU-staged transfer with overlapped DMA.
     fn transfer(&self, py: Python, src_ptr: u64, dst_ptr: u64, size_bytes: usize) -> PyResult<bool> {
+        if self.p2p_enabled {
+            return self._transfer_p2p(py, src_ptr, dst_ptr, size_bytes);
+        }
+        self._transfer_staged(py, src_ptr, dst_ptr, size_bytes)
+    }
+
+    /// P2P direct transfer via cuMemcpyPeerAsync. Zero CPU staging.
+    fn _transfer_p2p(&self, py: Python, src_ptr: u64, dst_ptr: u64, size_bytes: usize) -> PyResult<bool> {
+        let src_ctx = self.src_ctx;
+        let dst_ctx = self.dst_ctx;
+        let s_p2p = self.s_p2p;
+
+        py.allow_threads(move || {
+            cuda_ffi::ctx_set_current(src_ctx)
+                .map_err(|e| PyValueError::new_err(e))?;
+            cuda_ffi::memcpy_peer_async(
+                dst_ptr, dst_ctx, src_ptr, src_ctx, size_bytes, s_p2p,
+            ).map_err(|e| PyValueError::new_err(format!("P2P transfer: {e}")))?;
+            cuda_ffi::stream_synchronize(s_p2p)
+                .map_err(|e| PyValueError::new_err(format!("P2P sync: {e}")))?;
+            Ok(true)
+        })
+    }
+
+    /// Triple-buffered CPU-staged transfer with overlapped DMA.
+    /// Buffer N: DtoH in flight on s_dtoh
+    /// Buffer N-1: HtoD in flight on s_htod
+    /// Buffer N-2: free (just finished HtoD)
+    fn _transfer_staged(&self, py: Python, src_ptr: u64, dst_ptr: u64, size_bytes: usize) -> PyResult<bool> {
         let s_dtoh = self.s_dtoh;
         let s_htod = self.s_htod;
         let ev_dtoh = self.ev_dtoh;
@@ -464,8 +618,8 @@ impl GpuPipeline {
         let dst_ctx = self.dst_ctx;
         let chunk_bytes = self.chunk_bytes;
         let n_bufs = self.host_bufs.len();
-        // Convert raw pointers to usize for Send safety
         let host_buf_addrs: Vec<usize> = self.host_bufs.iter().map(|p| *p as usize).collect();
+        let ev_buf_free: Vec<u64> = self.ev_buf_free.clone();
 
         py.allow_threads(move || {
             let n_chunks = (size_bytes + chunk_bytes - 1) / chunk_bytes;
@@ -476,11 +630,11 @@ impl GpuPipeline {
                 let offset = i * chunk_bytes;
                 let chunk = std::cmp::min(chunk_bytes, size_bytes - offset);
 
-                // Wait for buffer to be free (previous HtoD using it)
+                // Wait for this buffer to be free (previous HtoD using it must complete)
                 if i >= n_bufs {
                     cuda_ffi::ctx_set_current(src_ctx)
                         .map_err(|e| PyValueError::new_err(e))?;
-                    cuda_ffi::stream_wait_event(s_dtoh, ev_htod)
+                    cuda_ffi::stream_wait_event(s_dtoh, ev_buf_free[buf_idx])
                         .map_err(|e| PyValueError::new_err(e))?;
                 }
 
@@ -493,7 +647,7 @@ impl GpuPipeline {
                 cuda_ffi::event_record(ev_dtoh, s_dtoh)
                     .map_err(|e| PyValueError::new_err(e))?;
 
-                // HtoD: pinned buffer -> GPU_dst
+                // HtoD: pinned buffer -> GPU_dst (after DtoH done)
                 cuda_ffi::ctx_set_current(dst_ctx)
                     .map_err(|e| PyValueError::new_err(e))?;
                 cuda_ffi::stream_wait_event(s_htod, ev_dtoh)
@@ -501,11 +655,12 @@ impl GpuPipeline {
                 cuda_ffi::memcpy_htod_async(
                     dst_ptr + offset as u64, buf_ptr as *const u8, chunk, s_htod,
                 ).map_err(|e| PyValueError::new_err(e))?;
-                cuda_ffi::event_record(ev_htod, s_htod)
+                // Record per-buffer completion so we know when this buf is free
+                cuda_ffi::event_record(ev_buf_free[buf_idx], s_htod)
                     .map_err(|e| PyValueError::new_err(e))?;
             }
 
-            // Synchronize
+            // Synchronize both streams
             cuda_ffi::ctx_set_current(src_ctx)
                 .map_err(|e| PyValueError::new_err(e))?;
             cuda_ffi::stream_synchronize(s_dtoh)
@@ -518,6 +673,22 @@ impl GpuPipeline {
             Ok(true)
         })
     }
+
+    /// Returns whether this pipeline uses P2P or CPU-staged transfers.
+    fn is_p2p(&self) -> bool {
+        self.p2p_enabled
+    }
+
+    /// Returns pipeline info as a dict.
+    fn info(&self) -> PyResult<std::collections::HashMap<String, String>> {
+        let mut m = std::collections::HashMap::new();
+        m.insert("src_gpu".into(), self.src_gpu.to_string());
+        m.insert("dst_gpu".into(), self.dst_gpu.to_string());
+        m.insert("p2p_enabled".into(), self.p2p_enabled.to_string());
+        m.insert("n_buffers".into(), self.host_bufs.len().to_string());
+        m.insert("chunk_bytes".into(), self.chunk_bytes.to_string());
+        Ok(m)
+    }
 }
 
 #[cfg(feature = "cuda")]
@@ -526,9 +697,13 @@ impl Drop for GpuPipeline {
         let _ = cuda_ffi::ctx_set_current(self.src_ctx);
         let _ = cuda_ffi::stream_destroy(self.s_dtoh);
         let _ = cuda_ffi::event_destroy(self.ev_dtoh);
+        let _ = cuda_ffi::stream_destroy(self.s_p2p);
         let _ = cuda_ffi::ctx_set_current(self.dst_ctx);
         let _ = cuda_ffi::stream_destroy(self.s_htod);
         let _ = cuda_ffi::event_destroy(self.ev_htod);
+        for ev in &self.ev_buf_free {
+            let _ = cuda_ffi::event_destroy(*ev);
+        }
         for buf in &self.host_bufs {
             let _ = cuda_ffi::mem_free_host(*buf);
         }
@@ -1035,6 +1210,95 @@ fn async_gpu_transfer(
     Err(PyValueError::new_err("Compilé sans feature CUDA."))
 }
 
+/// Benchmark GPU-to-GPU transfer using GpuPipeline.
+/// Allocates temporary GPU memory, runs warmup + timed iterations,
+/// returns dict with bandwidth_gbps, avg_ms, method (p2p/staged), etc.
+///
+/// Args:
+///   src_gpu: source GPU ordinal
+///   dst_gpu: destination GPU ordinal
+///   size_mb: transfer size in MiB (default 100)
+///   chunk_mb: chunk size in MiB (default 16)
+///   warmup: warmup iterations (default 3)
+///   iterations: timed iterations (default 10)
+#[cfg(feature = "cuda")]
+#[pyfunction]
+fn bench_gpu_transfer(
+    py: Python,
+    src_gpu: i32,
+    dst_gpu: i32,
+    size_mb: Option<usize>,
+    chunk_mb: Option<usize>,
+    warmup: Option<usize>,
+    iterations: Option<usize>,
+) -> PyResult<std::collections::HashMap<String, String>> {
+    use std::time::Instant;
+
+    let size = size_mb.unwrap_or(100) * 1024 * 1024;
+    let chunk = chunk_mb.unwrap_or(16);
+    let n_warmup = warmup.unwrap_or(3);
+    let n_iter = iterations.unwrap_or(10);
+
+    // Create pipeline
+    let pipe = GpuPipeline::new(src_gpu, dst_gpu, Some(chunk))?;
+
+    // Allocate GPU memory via cuMemAlloc
+    let (src_ptr, dst_ptr) = py.allow_threads(|| -> Result<(u64, u64), String> {
+        cuda_ffi::ctx_set_current(pipe.src_ctx)?;
+        let src = cuda_ffi::mem_alloc_device(size)?;
+        cuda_ffi::ctx_set_current(pipe.dst_ctx)?;
+        let dst = cuda_ffi::mem_alloc_device(size)?;
+        Ok((src, dst))
+    }).map_err(|e| PyValueError::new_err(format!("GPU alloc: {e}")))?;
+
+    // Warmup
+    for _ in 0..n_warmup {
+        pipe.transfer(py, src_ptr, dst_ptr, size)?;
+    }
+
+    // Timed iterations
+    let start = Instant::now();
+    for _ in 0..n_iter {
+        pipe.transfer(py, src_ptr, dst_ptr, size)?;
+    }
+    let elapsed = start.elapsed();
+
+    // Free GPU memory
+    py.allow_threads(|| {
+        cuda_ffi::ctx_set_current(pipe.src_ctx).ok();
+        cuda_ffi::mem_free_device(src_ptr).ok();
+        cuda_ffi::ctx_set_current(pipe.dst_ctx).ok();
+        cuda_ffi::mem_free_device(dst_ptr).ok();
+    });
+
+    let avg_s = elapsed.as_secs_f64() / n_iter as f64;
+    let bw_gbps = (size as f64 * 8.0) / (avg_s * 1e9);
+    let bw_gbs = (size as f64) / (avg_s * 1e9);
+
+    let mut m = std::collections::HashMap::new();
+    m.insert("src_gpu".into(), src_gpu.to_string());
+    m.insert("dst_gpu".into(), dst_gpu.to_string());
+    m.insert("size_mb".into(), (size / (1024 * 1024)).to_string());
+    m.insert("chunk_mb".into(), chunk.to_string());
+    m.insert("method".into(), if pipe.p2p_enabled { "p2p" } else { "staged" }.into());
+    m.insert("n_buffers".into(), pipe.host_bufs.len().to_string());
+    m.insert("avg_ms".into(), format!("{:.3}", avg_s * 1000.0));
+    m.insert("bandwidth_gbps".into(), format!("{:.2}", bw_gbps));
+    m.insert("bandwidth_gbs".into(), format!("{:.2}", bw_gbs));
+    m.insert("iterations".into(), n_iter.to_string());
+    Ok(m)
+}
+
+#[cfg(not(feature = "cuda"))]
+#[pyfunction]
+fn bench_gpu_transfer(
+    _py: Python, _src_gpu: i32, _dst_gpu: i32,
+    _size_mb: Option<usize>, _chunk_mb: Option<usize>,
+    _warmup: Option<usize>, _iterations: Option<usize>,
+) -> PyResult<std::collections::HashMap<String, String>> {
+    Err(PyValueError::new_err("Compilé sans feature CUDA."))
+}
+
 #[pymodule]
 fn vramancer_rust(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<TransportTier>()?;
@@ -1045,6 +1309,7 @@ fn vramancer_rust(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(direct_vram_copy, m)?)?;
     m.add_function(wrap_pyfunction!(staged_gpu_transfer, m)?)?;
     m.add_function(wrap_pyfunction!(async_gpu_transfer, m)?)?;
+    m.add_function(wrap_pyfunction!(bench_gpu_transfer, m)?)?;
     m.add_function(wrap_pyfunction!(sign_payload_fast, m)?)?;
     m.add_function(wrap_pyfunction!(verify_hmac_fast, m)?)?;
     m.add_function(wrap_pyfunction!(verify_hmac_batch, m)?)?;

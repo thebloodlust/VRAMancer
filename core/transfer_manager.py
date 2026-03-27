@@ -70,6 +70,7 @@ class TransportMethod(Enum):
     """How a tensor transfer was performed."""
     NCCL = auto()        # torch.distributed NCCL backend
     CUDA_P2P = auto()    # Direct cudaMemcpyPeer
+    REBAR_PIPELINE = auto()  # ReBAR full-window (> 4 GB) with BAR-optimal chunks
     CPU_STAGED = auto()  # GPU -> CPU -> GPU (no P2P, no NCCL)
     CPU_ONLY = auto()    # Pure CPU (no GPU)
     CROSS_VENDOR = auto()  # AMD ↔ NVIDIA via CrossVendorBridge
@@ -153,6 +154,9 @@ class TransferManager:
         # Cross-vendor bridge (AMD ↔ NVIDIA)
         self._xvendor_bridge: Optional[Any] = None
 
+        # ReBAR full-window transport (BAR > 4 GB)
+        self._rebar_transport: Optional[Any] = None
+
         # Stats
         self._transfer_count = 0
         self._total_bytes = 0
@@ -194,6 +198,27 @@ class TransferManager:
 
         if not self._stub_mode and _TORCH_AVAILABLE:
             self._topology = self._detect_topology()
+            # Initialize ReBAR full-window transport (BAR > 4 GB)
+            if _XVENDOR_AVAILABLE:
+                try:
+                    from core.cross_vendor_bridge import ReBarTransport
+                    self._rebar_transport = ReBarTransport()
+                    if self._rebar_transport.available:
+                        rebar_info = self._rebar_transport.info()
+                        gpu_list = ", ".join(
+                            f"GPU {g}: {d['bar_mb']} MB"
+                            for g, d in rebar_info.get("gpus", {}).items()
+                        )
+                        log.info(
+                            "ReBAR full-window active (> 4 GB): %s",
+                            gpu_list or "(none)",
+                        )
+                    else:
+                        self._rebar_transport = None
+                except Exception as e:
+                    log.debug("ReBAR transport init: %s", e)
+                    self._rebar_transport = None
+
             # Initialize cross-vendor bridge if mixed GPU vendors detected
             if _XVENDOR_AVAILABLE:
                 try:
@@ -476,34 +501,40 @@ class TransferManager:
                 log.warning(f"P2P transfer failed ({e}), falling back")
 
         # --- Strategy 1.5: Rust GPU transfer (GIL-released) ---
-        # Hybrid: DtoD for small activations (<= 1 MB), persistent async
-        # pipeline (GpuPipeline) for larger transfers (> 1 MB).
-        # DtoD is ~1.7x faster than PyTorch for small data (lower latency).
-        # GpuPipeline overlaps DtoH/HtoD on separate CUDA streams via
-        # pre-allocated pinned buffers → 1.3-1.4x faster for large data.
+        # Uses persistent GpuPipeline for all transfers regardless of size.
+        # GpuPipeline auto-selects P2P (cuMemcpyPeerAsync) or triple-buffered
+        # CPU-staged transfer based on topology probed at init.
+        # For small data (< 1 MB), DtoD is attempted first (lowest latency).
         try:
             import vramancer_rust
-            if hasattr(vramancer_rust, 'direct_vram_copy') and _TORCH_AVAILABLE:
+            if hasattr(vramancer_rust, 'GpuPipeline') and _TORCH_AVAILABLE:
                 src_tensor = tensor.cuda(source_gpu) if not tensor.is_cuda else tensor
                 with torch.cuda.device(target_gpu):
                     dst_tensor = torch.empty_like(src_tensor, device=f"cuda:{target_gpu}")
                 nbytes = src_tensor.element_size() * src_tensor.nelement()
 
-                if nbytes <= 1 * 1024 * 1024:
-                    # Small activations: cuMemcpyDtoD (lowest latency)
-                    vramancer_rust.direct_vram_copy(
-                        src_tensor.data_ptr(), dst_tensor.data_ptr(), nbytes
-                    )
-                    method_name = "DtoD"
-                else:
-                    # Large transfers: persistent async pipeline with overlap
-                    pipe = self._get_gpu_pipeline(
-                        vramancer_rust, source_gpu, target_gpu
-                    )
-                    pipe.transfer(
-                        src_tensor.data_ptr(), dst_tensor.data_ptr(), nbytes
-                    )
-                    method_name = "Pipeline"
+                if nbytes <= 1 * 1024 * 1024 and hasattr(vramancer_rust, 'direct_vram_copy'):
+                    # Small activations: try cuMemcpyDtoD (lowest latency)
+                    try:
+                        vramancer_rust.direct_vram_copy(
+                            src_tensor.data_ptr(), dst_tensor.data_ptr(), nbytes
+                        )
+                        log.debug(
+                            f"Rust DtoD GPU {source_gpu} → GPU {target_gpu}: "
+                            f"{nbytes / 1e6:.1f} MB"
+                        )
+                        return TransportMethod.CUDA_P2P, dst_tensor
+                    except Exception:
+                        pass  # DtoD failed (P2P blocked), fall through to pipeline
+
+                # Persistent async pipeline with P2P auto-detection
+                pipe = self._get_gpu_pipeline(
+                    vramancer_rust, source_gpu, target_gpu
+                )
+                pipe.transfer(
+                    src_tensor.data_ptr(), dst_tensor.data_ptr(), nbytes
+                )
+                method_name = "P2P" if pipe.is_p2p() else "Pipeline"
 
                 log.debug(
                     f"Rust {method_name} GPU {source_gpu} → GPU {target_gpu}: "
@@ -513,35 +544,50 @@ class TransferManager:
         except Exception as e:
             log.debug(f"Rust GPU transfer failed: {e}")
 
-        # --- Strategy 2: Pipelined double-buffer transfer ---
+        # --- Strategy 1.7: ReBAR full-window accelerated transfer ---
+        # When BAR > 4 GB (full VRAM mapped), use BAR-proportional chunk
+        # sizes (up to 64 MB) for Rust async or PipelinedTransport.
+        # This sits between the Rust DtoD bypass (1.5) and plain CPU-staged (4).
+        if (self._rebar_transport is not None
+                and (source_gpu in self._rebar_transport._gpu_bars
+                     or target_gpu in self._rebar_transport._gpu_bars)):
+            try:
+                output, xv_result = self._rebar_transport.transfer(
+                    source_gpu, target_gpu, tensor)
+                log.info(
+                    "ReBAR full-window GPU %d → GPU %d: "
+                    "%.1f MB, %.1f Gbps, %d chunk(s)",
+                    source_gpu, target_gpu,
+                    xv_result.bytes_transferred / 1e6,
+                    xv_result.bandwidth_gbps,
+                    xv_result.chunks_used,
+                )
+                return TransportMethod.REBAR_PIPELINE, output
+            except Exception as e:
+                log.debug("ReBAR transfer failed: %s", e)
+
+        # --- Strategy 2: Pipelined double-buffer transfer (non-ReBAR) ---
         # When P2P is blocked (consumer GPUs, mixed architectures, VM/IOMMU),
         # use double-buffered pinned memory transfer for ~2x bandwidth vs
         # sequential CPU staging (~26 GB/s vs ~12 GB/s measured).
-        # If ReBAR is detected, use larger chunks sized to the BAR window.
-        # Otherwise, use a fixed 8 MB chunk (optimal for PCIe Gen4).
         if not self._can_p2p(source_gpu, target_gpu):
             try:
-                from core.cross_vendor_bridge import detect_rebar, PipelinedTransport
-                src_rebar, src_bar = detect_rebar(source_gpu)
-                dst_rebar, dst_bar = detect_rebar(target_gpu)
-                if src_rebar or dst_rebar:
-                    bar_size = max(src_bar, dst_bar)
-                    chunk = min(bar_size // 64, 64 * 1024 * 1024)
-                else:
-                    chunk = 8 * 1024 * 1024  # 8 MB default
-                chunk = max(chunk, 2 * 1024 * 1024)
+                from core.cross_vendor_bridge import PipelinedTransport
+                chunk = 8 * 1024 * 1024  # 8 MB default (no ReBAR)
                 pipeline = PipelinedTransport(chunk_bytes=chunk)
                 output, xv_result = pipeline.transfer(
                     source_gpu, target_gpu, tensor)
                 log.info(
-                    f"Pipelined GPU {source_gpu} → GPU {target_gpu}: "
-                    f"{xv_result.bytes_transferred / 1e6:.1f} MB, "
-                    f"{xv_result.bandwidth_gbps:.1f} Gbps, "
-                    f"chunk={chunk // (1024*1024)} MB"
+                    "Pipelined GPU %d → GPU %d: "
+                    "%.1f MB, %.1f Gbps, chunk=%d MB",
+                    source_gpu, target_gpu,
+                    xv_result.bytes_transferred / 1e6,
+                    xv_result.bandwidth_gbps,
+                    chunk // (1024 * 1024),
                 )
                 return TransportMethod.CPU_STAGED, output
             except Exception as e:
-                log.debug(f"Pipelined transfer failed: {e}")
+                log.debug("Pipelined transfer failed: %s", e)
 
         # --- Strategy 3: NCCL send/recv ---
         if _DIST_AVAILABLE and self._nccl_initialized:
@@ -795,10 +841,15 @@ class TransferManager:
                 ),
             },
             "nccl_initialized": self._nccl_initialized,
-            "method_preference": ["CROSS_VENDOR", "CUDA_P2P", "NCCL", "CPU_STAGED"],
+            "method_preference": [
+                "CROSS_VENDOR", "CUDA_P2P", "REBAR_PIPELINE",
+                "NCCL", "CPU_STAGED",
+            ],
         }
         if self._xvendor_bridge is not None:
             result["cross_vendor"] = self._xvendor_bridge.stats()
+        if self._rebar_transport is not None:
+            result["rebar"] = self._rebar_transport.info()
         return result
 
     def benchmark(

@@ -53,6 +53,23 @@ except ImportError:
 logger = logging.getLogger("vramancer.nvfp4_direct")
 
 
+def _from_blocked(blocked_flat: "torch.Tensor", rows: int, cols: int) -> "torch.Tensor":
+    """Inverse of torchao's to_blocked() — unswizzle scales to [rows, cols]."""
+    import math as _math
+    data = blocked_flat.float().flatten()
+    n_row_blocks = _math.ceil(rows / 128)
+    n_col_blocks = _math.ceil(cols / 4)
+    total_blocks = n_row_blocks * n_col_blocks
+
+    data = data.view(total_blocks, 32, 16)
+    data = data.view(total_blocks, 32, 4, 4)
+    data = data.transpose(1, 2)                                       # → [B, 4, 32, 4]
+    data = data.reshape(n_row_blocks, n_col_blocks, 128, 4)
+    data = data.permute(0, 2, 1, 3)                                   # → [R, 128, C, 4]
+    data = data.reshape(n_row_blocks * 128, n_col_blocks * 4)
+    return data[:rows, :cols].contiguous()
+
+
 class DirectFP4Linear(nn.Module):
     """
     Direct FP4 Linear that bypasses torchao's __torch_dispatch__ overhead.
@@ -76,6 +93,7 @@ class DirectFP4Linear(nn.Module):
         self.register_buffer('w_qdata', None)          # [N, K//2] uint8 packed FP4
         self.register_buffer('w_scale', None)           # swizzled scales for [N, K//16]
         self.register_buffer('w_per_tensor_scale', None)  # scalar float32
+        self.register_buffer('w_scale_row', None)       # [N, K//16] float32 unswizzled (for GEMV)
 
         if bias_data is not None:
             self.register_buffer('bias', bias_data)
@@ -122,6 +140,20 @@ class DirectFP4Linear(nn.Module):
         if nvfp4_weight.per_tensor_scale is not None:
             mod.w_per_tensor_scale = nvfp4_weight.per_tensor_scale.detach()
 
+        # Compute unswizzled row-major scales for GEMV bypass
+        try:
+            N, K = out_features, in_features
+            if nvfp4_weight.is_swizzled_scales:
+                scale_flat = nvfp4_weight.scale.detach().flatten()
+                unswizzled = _from_blocked(scale_flat, N, K // 16)
+            else:
+                unswizzled = nvfp4_weight.scale.reshape(N, K // 16).float()
+            if nvfp4_weight.per_tensor_scale is not None:
+                unswizzled = unswizzled * nvfp4_weight.per_tensor_scale.float()
+            mod.w_scale_row = unswizzled
+        except Exception:
+            pass  # w_scale_row stays None, GEMV bypass disabled
+
         mod._init_views()
         return mod
 
@@ -157,13 +189,43 @@ class DirectFP4Linear(nn.Module):
         if device:
             mod.w_scale = mod.w_scale.to(device)
 
+        # Unswizzled float32 scales for GEMV bypass (pre-multiply per_tensor_scale)
+        row_scale = blockwise_scales.view(out_features, in_features // 16).float()
+        if mod.w_per_tensor_scale is not None:
+            row_scale = row_scale * mod.w_per_tensor_scale.float()
+        mod.w_scale_row = row_scale
+        if device:
+            mod.w_scale_row = mod.w_scale_row.to(device)
+
         mod._init_views()
         return mod
 
     def _quantize_activation_triton(self, x_2d: torch.Tensor):
-        """Fused Triton activation quantization — 1 kernel vs 6+ Python ops."""
+        """Fused Triton activation quantization — 1 kernel vs 6+ Python ops.
+
+        Tries VRAMancer's single-kernel fused quantizer first (core/triton_fused_nvfp4_quant.py),
+        falls back to torchao's triton_quantize_nvfp4.
+        """
         M, K = x_2d.shape
 
+        # --- Fast path: VRAMancer fused single-kernel quantizer ---
+        try:
+            from core.triton_fused_nvfp4_quant import fused_nvfp4_quantize
+            a_qdata, a_scale_raw, act_per_tensor_scale = fused_nvfp4_quantize(x_2d)
+
+            # Convert scales to FP8 and swizzle for cuBLAS
+            a_scale_fp8 = a_scale_raw.to(torch.float8_e4m3fn)
+            scale_view = a_scale_fp8.view(M, K // 16)
+            a_scale = to_blocked(scale_view)
+
+            sM, sK = hp_data_dims_to_swizzled_scale_dims_nvfp4(M, K)
+            a_scale = a_scale.view(sM, sK)
+
+            return a_qdata, a_scale, act_per_tensor_scale
+        except Exception:
+            pass  # Fall through to torchao path
+
+        # --- Standard path: torchao's triton_quantize_nvfp4 ---
         # Per-tensor scale
         tensor_amax = torch.max(torch.abs(x_2d))
         act_per_tensor_scale = per_tensor_amax_to_scale(tensor_amax)
@@ -211,9 +273,19 @@ class DirectFP4Linear(nn.Module):
         """
         Direct FP4 forward — bypasses torchao __torch_dispatch__.
 
-        Flow: quantize activation → torch._scaled_mm → apply scales → bias
-        Matches _addmm_nvfp4_dispatch exactly, without the dispatch overhead.
+        For M=1 (decode): uses Triton GEMV with LUT (no Tensor Core dispatch).
+        For M>1 (prefill): uses torch._scaled_mm via cuBLAS FP4.
         """
+        # --- M=1 GEMV bypass (Triton LUT kernel) ---
+        if x.dim() == 2 and x.shape[0] == 1 and self.w_scale_row is not None:
+            try:
+                from core.triton_gemv_nvfp4 import nvfp4_gemv
+                result = nvfp4_gemv(x, self.w_qdata, self.w_scale_row)
+                if self.bias is not None:
+                    result = result + self.bias.to(result.dtype)
+                return result
+            except Exception:
+                pass  # Fall through to cuBLAS path
         if self._w_fp4_t is None:
             self._init_views()
 

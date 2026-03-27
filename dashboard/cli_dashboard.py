@@ -19,38 +19,55 @@ def launch():
     print("=" * 80)
     print()
     
-    port = os.environ.get("VRM_API_PORT", "8000")
+    port = os.environ.get("VRM_API_PORT", "5030")
+    token = os.environ.get("VRM_API_TOKEN", "")
     api_url = f"http://localhost:{port}"
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
     
     while True:
         try:
             # Test connexion API
-            response = requests.get(f"{api_url}/health", timeout=5)
+            response = requests.get(f"{api_url}/health", headers=headers, timeout=5)
             if response.status_code == 200:
+                health_data = response.json() if response.headers.get('content-type', '').startswith('application/json') else {}
                 print(f" API VRAMancer connectee ({datetime.now().strftime('%H:%M:%S')})")
                 
-                # Infos GPU
+                # Infos GPU — /api/gpu returns {cuda_available, device_count, devices: [...]}
                 try:
-                    gpu_response = requests.get(f"{api_url}/api/gpu", timeout=5)
+                    gpu_response = requests.get(f"{api_url}/api/gpu", headers=headers, timeout=5)
                     if gpu_response.status_code == 200:
                         gpu_data = gpu_response.json()
-                        print(f" GPUs detectes: {len(gpu_data.get('devices', []))}")
-                        for gpu in gpu_data.get('devices', []):
+                        devices = gpu_data.get('devices', [])
+                        print(f" GPUs detectes: {len(devices)}")
+                        for gpu in devices:
                             used_mb = int(gpu.get('memory_used', 0) / (1024**2))
                             total_mb = int(gpu.get('memory_total', 0) / (1024**2))
-                            print(f"   - {gpu.get('name', 'GPU')} ({used_mb}MB/{total_mb}MB)")
-                except Exception as e:
+                            usage = gpu.get('memory_usage_percent', 0)
+                            print(f"   - {gpu.get('name', 'GPU')} ({used_mb}MB/{total_mb}MB, {usage}%)")
+                except Exception:
                     print("  Impossible de recuperer les infos GPU")
                 
-                # Status systeme
+                # Status systeme — /api/status returns {backend, version, endpoints, ...}
                 try:
-                    status_response = requests.get(f"{api_url}/api/status", timeout=5)
+                    status_response = requests.get(f"{api_url}/api/status", headers=headers, timeout=5)
                     if status_response.status_code == 200:
                         status_data = status_response.json()
-                        print(f" Status: {status_data.get('status', 'inconnu')}")
-                        print(f"  Uptime: {status_data.get('uptime', 0):.1f}s")
-                except Exception as e:
+                        print(f" Backend: {status_data.get('backend', 'inconnu')}")
+                        print(f" Version: {status_data.get('version', '?')}")
+                except Exception:
                     print("  Impossible de recuperer le status")
+
+                # Pipeline status — /api/pipeline/status
+                try:
+                    pipe_response = requests.get(f"{api_url}/api/pipeline/status", headers=headers, timeout=5)
+                    if pipe_response.status_code == 200:
+                        pipe_data = pipe_response.json()
+                        model = pipe_data.get('model') or '(aucun)'
+                        n_gpus = pipe_data.get('num_gpus', 0)
+                        mode = pipe_data.get('parallel_mode', 'pp')
+                        print(f" Modele: {model} ({n_gpus} GPU, mode={mode})")
+                except Exception:
+                    pass
                     
             else:
                 print(f" API VRAMancer non accessible (Status: {response.status_code})")

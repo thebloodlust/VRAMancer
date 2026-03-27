@@ -1,16 +1,36 @@
 """WebGPU Distributed Backend for VRAMancer.
 
-This backend acts as a bridge. Instead of computing tensors locally, 
-it serializes them and sends them to remote web browsers (WebGPU Workers) 
-using WebSockets. It uses Speculative Network Decoding and Holographic Parity (Swarm Attention) to hide latency.
+Bridges Python inference to browser WebGPU workers via WebSocket.
+The browser runs a real WGSL tiled matmul shader (dashboard/worker/).
+
+Binary protocol (matching worker.js):
+  Request:  [op:u8] [M:u32le] [N:u32le] [K:u32le] [A:f32*M*K] [B:f32*N*K]
+  Response: [op:u8] [M:u32le] [N:u32le] [C:f32*M*N]
+  op=0x01: matmul, op=0x02: ping, op=0xFF: shutdown
 """
 
 import threading
-import asyncio
-import json
-import time
 import struct
+import time
+import os
 from typing import Any, List, Optional
+
+try:
+    import asyncio
+except ImportError:
+    asyncio = None
+
+try:
+    import websockets
+    import websockets.server
+except ImportError:
+    websockets = None
+
+try:
+    import numpy as np
+except ImportError:
+    np = None
+
 try:
     import torch
 except ImportError:
@@ -18,247 +38,250 @@ except ImportError:
 
 from core.backends import BaseLLMBackend
 from core.logger import LoggerAdapter
-from core.network.webgpu_node import WebGPUNodeManager
+
+OP_MATMUL = 0x01
+OP_PING = 0x02
+OP_SHUTDOWN = 0xFF
+
+# Default timeout for a single matmul RPC (ms)
+_TIMEOUT_S = float(os.environ.get("VRM_WEBGPU_TIMEOUT", "10.0"))
+
 
 class WebGPUBackend(BaseLLMBackend):
-    # Number of tokens to speculate ahead (draft-verify pattern)
-    SPECULATION_WINDOW = 4
+    """WebSocket server that dispatches matmul ops to browser WebGPU workers."""
 
-    def __init__(self):
+    def __init__(self, host: str = "0.0.0.0", port: int = 8765):
         self.log = LoggerAdapter("backend.webgpu")
         self.model_name = None
         self.tokenizer = None
-        
-        self.log.info("Initializing WebGPU Orchestrator...")
-        self.node_manager = WebGPUNodeManager(port=8081)
-        # Start the node manager (creates event loop, WebSocket server, dispatcher)
-        self.node_manager.start()
-        
-        # Wait for the event loop to be ready
-        for _ in range(100):
-            if self.node_manager._loop is not None:
+        self._host = host
+        self._port = port
+
+        # Connected worker websockets
+        self._clients: list = []
+        self._clients_lock = threading.Lock()
+
+        # Round-robin index
+        self._rr = 0
+
+        # Event loop runs in a background thread
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._thread: Optional[threading.Thread] = None
+        self._server = None
+
+        if websockets is None:
+            self.log.warning(
+                "websockets package not installed — WebGPU backend will "
+                "operate in stub mode.  pip install websockets"
+            )
+        else:
+            self._start_server()
+
+    # ------------------------------------------------------------------
+    # Server lifecycle
+    # ------------------------------------------------------------------
+
+    def _start_server(self):
+        self._loop = asyncio.new_event_loop()
+        self._thread = threading.Thread(
+            target=self._run_loop, daemon=True, name="webgpu-ws"
+        )
+        self._thread.start()
+        # Wait for the server to be ready
+        for _ in range(200):
+            if self._server is not None:
                 break
             time.sleep(0.01)
-        self._loop = self.node_manager._loop
+        self.log.info(f"WebSocket server listening on ws://{self._host}:{self._port}")
+
+    def _run_loop(self):
+        asyncio.set_event_loop(self._loop)
+        self._loop.run_until_complete(self._serve())
+
+    async def _serve(self):
+        async def handler(ws):
+            addr = ws.remote_address
+            self.log.info(f"WebGPU worker connected: {addr}")
+            with self._clients_lock:
+                self._clients.append(ws)
+            try:
+                # Keep connection alive — we send requests, worker sends responses
+                async for _ in ws:
+                    pass  # responses handled by _rpc_matmul
+            finally:
+                with self._clients_lock:
+                    if ws in self._clients:
+                        self._clients.remove(ws)
+                self.log.info(f"WebGPU worker disconnected: {addr}")
+
+        self._server = await websockets.server.serve(
+            handler, self._host, self._port
+        )
+        await self._server.wait_closed()
+
+    def shutdown(self):
+        """Send shutdown to all workers and stop the server."""
+        if self._loop and self._server:
+            async def _do():
+                with self._clients_lock:
+                    for ws in list(self._clients):
+                        try:
+                            await ws.send(struct.pack("B", OP_SHUTDOWN))
+                        except Exception:
+                            pass
+                self._server.close()
+            asyncio.run_coroutine_threadsafe(_do(), self._loop)
+
+    # ------------------------------------------------------------------
+    # Worker RPC
+    # ------------------------------------------------------------------
+
+    def _pick_worker(self):
+        """Round-robin worker selection."""
+        with self._clients_lock:
+            if not self._clients:
+                return None
+            ws = self._clients[self._rr % len(self._clients)]
+            self._rr += 1
+            return ws
+
+    @property
+    def num_workers(self) -> int:
+        with self._clients_lock:
+            return len(self._clients)
+
+    async def _rpc_matmul(self, M: int, N: int, K: int,
+                          data_a: bytes, data_b: bytes,
+                          timeout: float = _TIMEOUT_S):
+        """Send a matmul request to a worker, return C as bytes."""
+        ws = self._pick_worker()
+        if ws is None:
+            raise RuntimeError("No WebGPU workers connected")
+
+        header = struct.pack("<BIII", OP_MATMUL, M, N, K)
+        frame = header + data_a + data_b
+
+        await ws.send(frame)
+
+        # Wait for response (binary)
+        resp = await asyncio.wait_for(ws.recv(), timeout=timeout)
+        if isinstance(resp, str):
+            resp = resp.encode()
+
+        # Parse: [op:u8] [M:u32le] [N:u32le] [C:f32*M*N]
+        resp_op = resp[0]
+        if resp_op != OP_MATMUL:
+            raise RuntimeError(f"Unexpected response op: 0x{resp_op:02x}")
+        resp_M = struct.unpack_from("<I", resp, 1)[0]
+        resp_N = struct.unpack_from("<I", resp, 5)[0]
+        c_data = resp[9:]
+        expected = resp_M * resp_N * 4
+        if len(c_data) < expected:
+            raise RuntimeError(
+                f"Incomplete matmul response: got {len(c_data)}, "
+                f"expected {expected}"
+            )
+        return c_data[:expected], resp_M, resp_N
+
+    def matmul_sync(self, A, B, timeout: float = _TIMEOUT_S):
+        """Synchronous matmul: A @ B^T via WebGPU worker.
+
+        A: [M, K] tensor or numpy array
+        B: [N, K] tensor or numpy array (transposed layout)
+        Returns: [M, N] tensor or numpy array
+        """
+        if self._loop is None:
+            raise RuntimeError("WebGPU server not running (missing websockets?)")
+
+        # Convert to contiguous float32 bytes
+        if torch is not None and isinstance(A, torch.Tensor):
+            a_np = A.detach().cpu().float().contiguous().numpy()
+            b_np = B.detach().cpu().float().contiguous().numpy()
+            return_torch = True
+        elif np is not None:
+            a_np = np.ascontiguousarray(A, dtype=np.float32)
+            b_np = np.ascontiguousarray(B, dtype=np.float32)
+            return_torch = False
+        else:
+            raise RuntimeError("Neither torch nor numpy available")
+
+        M, K = a_np.shape
+        N = b_np.shape[0]
+        assert b_np.shape[1] == K, f"K mismatch: A={a_np.shape}, B={b_np.shape}"
+
+        fut = asyncio.run_coroutine_threadsafe(
+            self._rpc_matmul(M, N, K, a_np.tobytes(), b_np.tobytes(), timeout),
+            self._loop,
+        )
+        c_data, _, _ = fut.result(timeout=timeout + 1.0)
+
+        c_np = np.frombuffer(c_data, dtype=np.float32).reshape(M, N)
+        if return_torch:
+            return torch.from_numpy(c_np.copy())
+        return c_np.copy()
+
+    # ------------------------------------------------------------------
+    # BaseLLMBackend interface
+    # ------------------------------------------------------------------
 
     def load_model(self, model_name: str, **kwargs):
         self.model_name = model_name
-        self.log.info(f"Model {model_name} mapped to WebGPU Distributed Backend.")
-        
+        self.log.info(f"Model {model_name} mapped to WebGPU backend "
+                      f"({self.num_workers} workers connected)")
+
         try:
             from transformers import AutoTokenizer
             self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         except Exception as e:
-            self.log.warning(f"Could not load AutoTokenizer natively, falling back: {e}")
-            
+            self.log.warning(f"Could not load tokenizer: {e}")
+
         return {"name": model_name, "type": "webgpu_distributed"}
 
     def split_model(self, num_gpus: int, vram_per_gpu: List[int] = None):
         return [self]
 
-    def _serialize_tensor(self, tensor) -> tuple[bytes, float]:
-        if torch is None:
-            return b"dummy_tensor_data", 1.0
-        if not isinstance(tensor, torch.Tensor):
-            return b"", 1.0
-        try:
-            import numpy as np
-            # 8-bit Quantization (Symmetric Q8_0)
-            np_arr = tensor.detach().cpu().to(torch.float32).numpy()
-            max_val = float(np.max(np.abs(np_arr))) if np_arr.size > 0 else 0.0
-            if max_val == 0:
-                scale = 1.0
-                quantized = np_arr.astype(np.int8)
-            else:
-                scale = max_val / 127.0
-                quantized = np.round(np_arr / scale).astype(np.int8)
-            
-            return quantized.tobytes(), scale
-        except Exception as e:
-            self.log.warning(f"Quantization failed: {e}")
-            return b"", 1.0
-            
-    def _deserialize_tensor(self, data: bytes) -> Any:
-        if torch is None or not data:
-            return None
-        import numpy as np
-        try:
-            return torch.from_numpy(np.frombuffer(data, dtype=np.float32))
-        except Exception:
-            return None
-
     def infer(self, inputs: Any):
-        if not self.node_manager.clients:
-            return "[Error: No WebGPU workers connected via browser]"
-            
-        tensor_bytes, quant_scale = self._serialize_tensor(inputs) if torch else (b"dummy_tensor_data", 1.0)
-        
-        # --- Fallback & Redundancy System ---
-        max_retries = 3
-        for attempt in range(max_retries):
-            fut = self.node_manager.submit_tensor(layer_id=0, tensor_data=tensor_bytes, quant_scale=quant_scale)
+        """Forward a single tensor through one matmul layer via WebGPU."""
+        if self.num_workers == 0:
+            return "[Error: No WebGPU workers connected]"
+
+        if torch is not None and isinstance(inputs, torch.Tensor):
+            # Treat as activation [1, hidden] * weight [vocab, hidden]
+            # For now, just echo through a trivial identity-like matmul
+            M, K = inputs.shape[-2], inputs.shape[-1]
+            # Identity-ish: B = I padded (this is a stub — real usage
+            # sends actual weight slices from the model)
+            eye = torch.eye(K, dtype=torch.float32)
             try:
-                result_bytes = asyncio.run_coroutine_threadsafe(asyncio.wait_for(fut, timeout=10.0), self._loop).result()
-                if torch and result_bytes:
-                    return self._deserialize_tensor(result_bytes)
-                return result_bytes
-            except asyncio.TimeoutError:
-                self.log.warning(f"WebGPU Tensor timeout, retrying ({attempt+1}/{max_retries})...")
+                return self.matmul_sync(inputs.view(M, K), eye)
             except Exception as e:
-                self.log.warning(f"WebGPU Worker error: {e}, retrying ({attempt+1}/{max_retries})...")
-                
-        self.log.error("WebGPU inference failed after maximum retries.")
-        return "[WebGPU Timeout/Crash Prevention]"
-
-    def _submit_speculative_batch(self, inputs_list, layer_ids):
-        """Submit multiple speculative tokens in parallel via asyncio.gather.
-
-        Returns list of (res_bytes | None) in order.
-        """
-        futures = []
-        for inp, lid in zip(inputs_list, layer_ids):
-            tensor_bytes, quant_scale = self._serialize_tensor(inp) if torch else (json.dumps(inp).encode(), 1.0)
-            fut = self.node_manager.submit_tensor(layer_id=lid, tensor_data=tensor_bytes, quant_scale=quant_scale)
-            futures.append(asyncio.wait_for(fut, timeout=10.0))
-
-        async def _gather():
-            return await asyncio.gather(*futures, return_exceptions=True)
-
-        results = asyncio.run_coroutine_threadsafe(_gather(), self._loop).result()
-        out = []
-        for r in results:
-            if isinstance(r, Exception):
-                out.append(None)
-            else:
-                out.append(r)
-        return out
-
-    def _decode_token(self, res_bytes):
-        """Extract token id from worker response bytes."""
-        if res_bytes and len(res_bytes) >= 4:
-            try:
-                return struct.unpack("<I", res_bytes[:4])[0]
-            except Exception:
-                pass
-        return 32  # fallback space
+                self.log.warning(f"WebGPU infer failed: {e}")
+                return inputs  # passthrough on failure
+        return inputs
 
     def generate(self, prompt: str, max_new_tokens: int = 128, **kwargs) -> Any:
         if kwargs.get("stream", False):
             return self.generate_stream(prompt, max_new_tokens, **kwargs)
-            
-        clients_count = len(self.node_manager.clients)
-        if not clients_count:
-            raise RuntimeError("WebGPU: Waiting for browsers to connect.")
-            
-        if self.tokenizer:
-            input_ids = self.tokenizer.encode(prompt, return_tensors="pt")
-        else:
-            input_ids = [ord(c) for c in prompt]
-            
-        output_tokens = []
-        current_input = input_ids
-        step = 0
-        K = min(self.SPECULATION_WINDOW, max(1, clients_count))  # adapt to worker count
-        
-        while step < max_new_tokens:
-            if K > 1 and step + K <= max_new_tokens:
-                # --- Speculative Decoding: submit K tokens in parallel ---
-                # Use last known token as seed for all K drafts
-                spec_inputs = [current_input] * K
-                spec_layers = [(step + i) % 12 for i in range(K)]
-                results = self._submit_speculative_batch(spec_inputs, spec_layers)
 
-                # Verify: accept the first contiguous run that returned valid data
-                accepted = 0
-                for res_bytes in results:
-                    if res_bytes is None:
-                        break
-                    token = self._decode_token(res_bytes)
-                    output_tokens.append(token)
-                    if torch:
-                        current_input = torch.tensor([[token]])
-                    else:
-                        current_input = [token]
-                    accepted += 1
+        if self.num_workers == 0:
+            raise RuntimeError(
+                "WebGPU: No browser workers connected. "
+                "Open dashboard/worker/index.html in a WebGPU-capable browser."
+            )
 
-                if accepted == 0:
-                    # Fallback to sequential single-token
-                    K = 1
-                    continue
-                step += accepted
-            else:
-                # --- Sequential fallback (single token or final tokens) ---
-                tensor_bytes, quant_scale = self._serialize_tensor(current_input) if torch else (json.dumps(current_input).encode(), 1.0)
-                max_retries = 3
-                res_bytes = None
-                for attempt in range(max_retries):
-                    fut = self.node_manager.submit_tensor(layer_id=step % 12, tensor_data=tensor_bytes, quant_scale=quant_scale)
-                    try:
-                        res_bytes = asyncio.run_coroutine_threadsafe(asyncio.wait_for(fut, timeout=10.0), self._loop).result()
-                        break
-                    except Exception as e:
-                        self.log.warning(f"WebGPU node failed at step {step}, attempt {attempt+1}: {e}")
-                        time.sleep(0.1)
-                        
-                if res_bytes is None:
-                    self.log.error(f"Swarm failure: All attempts exhausted at step {step}")
-                    break
-                    
-                next_token = self._decode_token(res_bytes)
-                output_tokens.append(next_token)
-            
-                if torch:
-                    current_input = torch.tensor([[next_token]])
-                else:
-                    current_input = [next_token]
-                step += 1
-                
-        if self.tokenizer:
-            return self.tokenizer.decode(output_tokens, skip_special_tokens=True)
-        return "".join(chr(t) for t in output_tokens if 32 <= t <= 126)
+        self.log.info(
+            f"generate() called with {self.num_workers} workers "
+            f"(max_new_tokens={max_new_tokens})"
+        )
+
+        # This backend handles individual matmul ops dispatched by the
+        # inference pipeline (via infer/matmul_sync). Full autoregressive
+        # generation requires the pipeline to drive token-by-token and
+        # route each layer's matmul through us.
+        #
+        # Standalone generate is a stub — the real path is:
+        #   InferencePipeline.generate() -> per-layer forward -> backend.infer()
+        return f"[WebGPU backend: {self.num_workers} workers ready, use via InferencePipeline]"
 
     def generate_stream(self, prompt: str, max_new_tokens: int = 128, **kwargs):
-        clients_count = len(self.node_manager.clients)
-        if not clients_count:
-            yield "[WebGPU Error: Waiting for browsers to connect to the node...]"
-            return
-            
-        if self.tokenizer:
-            input_ids = self.tokenizer.encode(prompt, return_tensors="pt")
-        else:
-            input_ids = [ord(c) for c in prompt]
-            
-        current_input = input_ids
-        for step in range(max_new_tokens):
-            tensor_bytes, quant_scale = self._serialize_tensor(current_input) if torch else (json.dumps(current_input).encode(), 1.0)
-            max_retries = 3
-            res_bytes = None
-            for attempt in range(max_retries):
-                fut = self.node_manager.submit_tensor(layer_id=step % 12, tensor_data=tensor_bytes, quant_scale=quant_scale) 
-                try:
-                    res_bytes = asyncio.run_coroutine_threadsafe(asyncio.wait_for(fut, timeout=7.0), self._loop).result()
-                    break
-                except Exception as e:
-                    self.log.warning(f"Rescheduling token {step} computation due to crash (attempt {attempt+1})...")
-            
-            if res_bytes is None:
-                yield f"\n[WebGPU Crash Prevention: Stream halted after {max_retries} attempts]"
-                break
-                
-            next_token = 32
-            if res_bytes and len(res_bytes) >= 4:
-                try:
-                    next_token = struct.unpack("<I", res_bytes[:4])[0]
-                except Exception:
-                    pass
-                    
-            if torch:
-                current_input = torch.tensor([[next_token]])
-            else:
-                current_input = [next_token]
-                
-            if self.tokenizer:
-                yield self.tokenizer.decode([next_token])
-            else:
-                if 32 <= next_token <= 126:
-                    yield chr(next_token)
+        yield self.generate(prompt, max_new_tokens, **kwargs)

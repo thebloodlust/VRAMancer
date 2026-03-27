@@ -40,7 +40,7 @@ import threading
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Any, Callable, Dict, List, Optional, Tuple
-from concurrent.futures import Future
+from concurrent.futures import Future, ThreadPoolExecutor
 
 _logger = logging.getLogger("vramancer.continuous_batcher")
 _MINIMAL = os.environ.get("VRM_MINIMAL_TEST", "")
@@ -149,6 +149,15 @@ class ContinuousBatcher:
         self._total_iterations = 0
         self._start_time: Optional[float] = None
 
+        # Async tokenizer thread pool (parallel tokenization for multi-request batches)
+        _pool_size = int(os.environ.get("VRM_TOKENIZER_WORKERS", "4"))
+        self._tokenizer_pool: Optional[ThreadPoolExecutor] = None
+        if _pool_size > 1:
+            self._tokenizer_pool = ThreadPoolExecutor(
+                max_workers=_pool_size,
+                thread_name_prefix="vrm-tokenizer",
+            )
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -212,6 +221,10 @@ class ContinuousBatcher:
         self._running = False
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=timeout)
+        # Shutdown tokenizer thread pool
+        if self._tokenizer_pool is not None:
+            self._tokenizer_pool.shutdown(wait=False)
+            self._tokenizer_pool = None
         # Cancel remaining waiting requests
         with self._lock:
             for req in self._waiting:
@@ -264,15 +277,30 @@ class ContinuousBatcher:
                     to_prepare = self._waiting[:slots]
                     self._waiting = self._waiting[slots:]
 
-            # Phase 1b: Tokenize OUTSIDE lock — O(seq_len), can be slow
-            for req in to_prepare:
-                try:
-                    self._prepare_request(req)
-                    req.status = RequestStatus.ACTIVE
-                except Exception as e:
-                    req.status = RequestStatus.ERROR
-                    if req.future and not req.future.done():
-                        req.future.set_exception(e)
+            # Phase 1b: Tokenize OUTSIDE lock — parallel via thread pool
+            if len(to_prepare) > 1 and self._tokenizer_pool is not None:
+                futures_map = {
+                    self._tokenizer_pool.submit(self._prepare_request, req): req
+                    for req in to_prepare
+                }
+                for fut in futures_map:
+                    req = futures_map[fut]
+                    try:
+                        fut.result()
+                        req.status = RequestStatus.ACTIVE
+                    except Exception as e:
+                        req.status = RequestStatus.ERROR
+                        if req.future and not req.future.done():
+                            req.future.set_exception(e)
+            else:
+                for req in to_prepare:
+                    try:
+                        self._prepare_request(req)
+                        req.status = RequestStatus.ACTIVE
+                    except Exception as e:
+                        req.status = RequestStatus.ERROR
+                        if req.future and not req.future.done():
+                            req.future.set_exception(e)
 
             # Phase 1c: Add prepared requests to active batch under lock
             prepared = [r for r in to_prepare if r.status == RequestStatus.ACTIVE]

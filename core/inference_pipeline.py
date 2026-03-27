@@ -108,18 +108,6 @@ class InferencePipeline:
         self.scheduler = None
         self.transfer_manager = None
         self.stream_manager = None
-        
-        # WebGPU Edge Swarm
-        try:
-            from core.network.webgpu_node import WebGPUNodeManager
-            self.webgpu_manager = WebGPUNodeManager(port=8560)
-            self.webgpu_manager.start()
-        except Exception as e:
-            import traceback
-            _logger.warning(f"Could not start WebGPUNodeManager: {e}")
-            _logger.error(traceback.format_exc())
-            self.webgpu_manager = None
-
         self.compute_engine = None
         self.discovery = None
         self.monitor = None
@@ -130,6 +118,8 @@ class InferencePipeline:
         self.hierarchical_memory = None
         self.fault_manager: Optional[Any] = None
         self.turbo_engine: Optional[Any] = None  # TurboEngine for compiled decode
+        self.cuda_graph_runner: Optional[Any] = None  # CUDA Graph for decode steps
+        self.tp_model: Optional[Any] = None  # Tensor Parallel model wrapper
 
         # Dynamic rebalancing
         self._rebalance_thread: Optional[threading.Thread] = None
@@ -201,8 +191,6 @@ class InferencePipeline:
             # 2. Select backend
             from core.backends import select_backend
             self.backend = select_backend(model_name, backend=self.backend_name, num_gpus=self.num_gpus)
-            if hasattr(self, 'webgpu_manager') and hasattr(self.backend, 'transfer_manager'):
-                self.backend.webgpu_manager = self.webgpu_manager
 
             # 3. Init GPU monitor
             try:
@@ -234,8 +222,30 @@ class InferencePipeline:
             if hasattr(self.backend, 'transfer_manager'):
                 self.backend.transfer_manager = self.transfer_manager
 
-            # 7. Split model across GPUs
-            if self.num_gpus > 1:
+            # 6b. Tensor Parallel mode (VRM_PARALLEL_MODE=tp)
+            # When selected, wraps the loaded model with apply_tensor_parallel()
+            # which shards weights across GPUs and uses NCCL all-reduce.
+            # Default: "pp" (pipeline parallelism via model_splitter).
+            _parallel_mode = os.environ.get("VRM_PARALLEL_MODE", "pp").lower()
+            if self.num_gpus > 1 and _parallel_mode == "tp":
+                try:
+                    from core.tensor_parallel import apply_tensor_parallel
+                    model = getattr(self.backend, "model", None)
+                    if model is not None and _TORCH:
+                        devices = [f"cuda:{i}" for i in range(self.num_gpus)]
+                        self.tp_model = apply_tensor_parallel(model, devices=devices)
+                        _logger.info(
+                            "Tensor Parallel activated: %d GPUs, devices=%s",
+                            self.num_gpus, devices,
+                        )
+                    else:
+                        _logger.warning("TP requested but no model on backend — falling back to PP")
+                except Exception as e:
+                    _logger.warning("Tensor Parallel init failed (%s), falling back to PP", e)
+                    self.tp_model = None
+
+            # 7. Split model across GPUs (only in PP mode, skip if TP)
+            if self.num_gpus > 1 and self.tp_model is None:
                 try:
                     self.blocks = self.backend.split_model(self.num_gpus)
                     _logger.info("Model split into %d blocks", len(self.blocks))
@@ -286,7 +296,9 @@ class InferencePipeline:
 
             # 13. Init VRAM Lending Pool (cooperative GPU memory)
             # Skip when vLLM/llama.cpp manage their own VRAM
-            if self.num_gpus > 1 and _backend_type not in ('vllm', 'llamacpp'):
+            # Controlled by VRM_VRAM_LENDING env var (default: enabled for multi-GPU)
+            _lending_enabled = os.environ.get("VRM_VRAM_LENDING", "1").lower() not in ("0", "false", "no")
+            if self.num_gpus > 1 and _backend_type not in ('vllm', 'llamacpp') and _lending_enabled:
                 self._init_lending_pool()
 
             # 13b. Init Hierarchical Memory Manager (L1-L6 tiered memory)
@@ -298,12 +310,8 @@ class InferencePipeline:
             # 15. Init TurboEngine (compiled decode — ~2x speedup)
             self._init_turbo_engine()
 
-            # 16. Awaken the Connectome (Neuroplasticity Engine)
-            try:
-                from core.network.connectome import global_connectome
-                global_connectome.start_heartbeat()
-            except Exception as e:
-                _logger.debug("Could not awake Connectome: %s", e)
+            # 16. Init CUDA Graph runner for decode step acceleration
+            self._init_cuda_graph_runner()
 
         return self
 
@@ -411,6 +419,7 @@ class InferencePipeline:
                             swarm_verify_callable=self.infer,
                             gamma=int(os.environ.get("VRM_SPEC_GAMMA", "5")),
                             temperature=temperature,
+                            adaptive=os.environ.get("VRM_SPEC_ADAPTIVE", "1") != "0",
                         )
                         input_ids = self.backend.tokenizer.encode(
                             prompt, return_tensors="pt",
@@ -528,7 +537,7 @@ class InferencePipeline:
         """Execute generate() with GPU fault protection.
 
         Prefers TurboEngine (compiled decode, ~2x speedup) when available.
-        Falls back to backend.generate() otherwise.
+        Falls back to TP model or backend.generate() otherwise.
         """
         # TurboEngine path: compiled Inductor decode (fastest)
         if self.turbo_engine is not None:
@@ -543,6 +552,20 @@ class InferencePipeline:
                 )
             except Exception as e:
                 _logger.warning("TurboEngine generate failed (%s), falling back", e)
+
+        # Tensor Parallel path: TP model greedy generation
+        if self.tp_model is not None and _TORCH:
+            try:
+                tokenizer = getattr(self.backend, "tokenizer", None)
+                if tokenizer is not None:
+                    input_ids = tokenizer.encode(prompt, return_tensors="pt")
+                    max_new = gen_kwargs.get("max_new_tokens", 128)
+                    out_ids = self.tp_model.generate_greedy(input_ids, max_new_tokens=max_new)
+                    return tokenizer.decode(out_ids[0], skip_special_tokens=True)
+                else:
+                    _logger.warning("TP model active but no tokenizer — falling back to backend")
+            except Exception as e:
+                _logger.warning("TP generate failed (%s), falling back to backend", e)
 
         if self.fault_manager and _FAULT_TOLERANCE:
             # Determine primary GPU (device 0 for single-GPU, or first healthy)
@@ -565,6 +588,20 @@ class InferencePipeline:
 
     def _protected_infer(self, input_ids: Any) -> Any:
         """Execute infer() with GPU fault protection."""
+        # CUDA Graph path: replay captured graph for decode step
+        if self.cuda_graph_runner is not None and _TORCH:
+            try:
+                return self.cuda_graph_runner.forward(input_ids)
+            except Exception as e:
+                _logger.debug("CUDA Graph forward failed (%s), falling back", e)
+
+        # Tensor Parallel path: direct forward
+        if self.tp_model is not None and _TORCH:
+            try:
+                return self.tp_model(input_ids)
+            except Exception as e:
+                _logger.warning("TP infer failed (%s), falling back to backend", e)
+
         if self.fault_manager and _FAULT_TOLERANCE:
             primary_gpu = self._get_primary_gpu()
             try:
@@ -691,6 +728,39 @@ class InferencePipeline:
             self.turbo_engine = None
             self.fault_manager = None
 
+    def _init_cuda_graph_runner(self) -> None:
+        """Initialize CUDA Graph runner for decode step acceleration.
+
+        Captures the model forward as a CUDA graph after warmup,
+        eliminating CPU dispatch overhead on repeated decode steps.
+        Requires VRM_CUDA_GRAPH=1 (opt-in — fragile with dynamic shapes).
+        """
+        if not os.environ.get("VRM_CUDA_GRAPH"):
+            return
+        if os.environ.get("VRM_MINIMAL_TEST"):
+            return
+
+        backend_type = getattr(self.backend, 'backend_type', 'huggingface')
+        if backend_type in ('vllm', 'ollama', 'llamacpp'):
+            return  # these backends manage their own graphs
+
+        model = getattr(self.backend, 'model', None)
+        if model is None:
+            return
+
+        try:
+            from core.cuda_graph_decode import CUDAGraphRunner
+            self.cuda_graph_runner = CUDAGraphRunner(
+                model=model,
+                max_cache_entries=int(os.environ.get("VRM_CUDA_GRAPH_CACHE", "4")),
+                warmup_steps=int(os.environ.get("VRM_CUDA_GRAPH_WARMUP", "3")),
+            )
+            _logger.info("CUDA Graph runner initialized (opt-in, %d cache slots)",
+                         self.cuda_graph_runner.max_cache_entries)
+        except Exception as e:
+            _logger.warning("CUDA Graph runner init failed: %s", e)
+            self.cuda_graph_runner = None
+
     def _migrate_blocks(self, source_gpu: int, target_gpu: int) -> int:
         """Migrate model blocks from a failed GPU to a healthy one.
 
@@ -799,6 +869,8 @@ class InferencePipeline:
             "continuous_batcher": self.continuous_batcher is not None,
             "paged_kv_cache": self.paged_kv is not None,
             "fault_tolerance": self.fault_manager is not None,
+            "tensor_parallel": self.tp_model is not None,
+            "parallel_mode": "tp" if self.tp_model is not None else "pp",
             "gpus": self.scheduler.get_available_gpus() if self.scheduler else [],
             "transfer_stats": (
                 self.transfer_manager.stats()
@@ -1091,6 +1163,16 @@ class InferencePipeline:
 
             self.paged_kv = PagedKVCacheManager(kv_config)
             _logger.info("PagedKVCache initialized: %s", self.paged_kv)
+
+            # Wire paged KV to stream manager for compress-on-evict
+            if self.stream_manager and self.paged_kv:
+                self.stream_manager.paged_kv = self.paged_kv
+                if self.paged_kv.kv_compression_active:
+                    _logger.info(
+                        "KV compression wired to StreamManager "
+                        "(%.1fx reduction on eviction)",
+                        self.paged_kv.compression_ratio,
+                    )
         except Exception as e:
             _logger.debug("PagedKV init skipped: %s", e)
             self.paged_kv = None
@@ -1362,13 +1444,6 @@ class InferencePipeline:
             except Exception as e:
                 _logger.debug(f"Exception silencieuse dans l'exécution: {e}", exc_info=True)
 
-        if hasattr(self, 'webgpu_manager') and self.webgpu_manager:
-            try:
-                if hasattr(self.webgpu_manager, 'stop'):
-                    self.webgpu_manager.stop()
-            except Exception as e:
-                _logger.debug(f"Exception silencieuse dans l'exécution: {e}", exc_info=True)
-
         # Stop GPU hot-plug
         if self.gpu_hotplug:
             try:
@@ -1388,6 +1463,20 @@ class InferencePipeline:
             except Exception as e:
                 _logger.debug(f"Exception silencieuse dans l'exécution: {e}", exc_info=True)
 
+        # Shutdown VRAM lending pool
+        if self.lending_pool:
+            try:
+                self.lending_pool.close()
+            except Exception as e:
+                _logger.debug(f"Exception silencieuse dans l'exécution: {e}", exc_info=True)
+            self.lending_pool = None
+
+        # Reset Prometheus gauge metrics (clear stale label sets)
+        try:
+            from core.metrics import reset_metrics
+            reset_metrics()
+        except Exception as e:
+            _logger.debug(f"Exception silencieuse dans l'exécution: {e}", exc_info=True)
 
         self._loaded = False
         _logger.info("Pipeline shutdown complete")

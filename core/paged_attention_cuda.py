@@ -231,4 +231,121 @@ def _pytorch_paged_attention_decode(
     return torch.stack(outputs)
 
 
-__all__ = ["paged_attention_decode", "has_cuda_paged_attention"]
+# ---------------------------------------------------------------------------
+# Q4 quantized KV — fused dequantization variant
+# ---------------------------------------------------------------------------
+
+def paged_attention_decode_q4(
+    query: Any,            # [B, H, D] fp32
+    kv_pool_q4: Any,       # [P, L, 2, KH, PS, D/2] uint8 packed nibbles
+    kv_scales: Any,        # [P, L, 2, KH, PS, num_groups] fp16
+    kv_zeros: Any,         # [P, L, 2, KH, PS, num_groups] fp16
+    page_table: Any,       # [B, max_pages_per_seq] int32
+    context_lens: Any,     # [B] int32
+    layer_idx: int,
+    scale: Optional[float] = None,
+) -> Any:
+    """PagedAttention decode with Q4-quantized KV cache.
+
+    Dequantizes 4-bit packed KV values inline during attention computation,
+    avoiding the overhead of a separate decompress-then-attend pass.
+    Falls back to dequantize + standard fp32 kernel if CUDA Q4 kernel unavailable.
+    """
+    import torch
+
+    head_dim = query.shape[-1]
+    if scale is None:
+        scale = 1.0 / math.sqrt(head_dim)
+
+    if page_table.dtype != torch.int32:
+        page_table = page_table.to(torch.int32)
+    if context_lens.dtype != torch.int32:
+        context_lens = context_lens.to(torch.int32)
+    if query.dtype != torch.float32:
+        query = query.float()
+
+    # Try fused CUDA Q4 kernel
+    mod = _load_cuda_module()
+    if mod is not None and hasattr(mod, 'paged_attention_decode_q4'):
+        try:
+            return mod.paged_attention_decode_q4(
+                query.contiguous(),
+                kv_pool_q4.contiguous(),
+                kv_scales.contiguous(),
+                kv_zeros.contiguous(),
+                page_table.contiguous(),
+                context_lens.contiguous(),
+                layer_idx,
+                scale,
+            )
+        except Exception as e:
+            _logger.warning("CUDA Q4 kernel failed, falling back: %s", e)
+
+    # Fallback: dequantize Q4 → fp32, then use standard kernel
+    return _pytorch_paged_attention_decode_q4(
+        query, kv_pool_q4, kv_scales, kv_zeros,
+        page_table, context_lens, layer_idx, scale,
+    )
+
+
+def _pytorch_paged_attention_decode_q4(
+    query, kv_pool_q4, kv_scales, kv_zeros,
+    page_table, context_lens, layer_idx, scale,
+):
+    """Pure PyTorch fallback: dequantize Q4 then compute attention."""
+    import torch
+
+    batch_size, num_heads, head_dim = query.shape
+    num_kv_heads = kv_pool_q4.shape[3]
+    page_size = kv_pool_q4.shape[4]
+    kv_head_ratio = num_heads // num_kv_heads
+
+    def _dequant_page(packed, scales, zeros):
+        """Dequantize a packed uint8 page [KH, PS, D/2] → [KH, PS, D] fp32."""
+        lo = (packed & 0x0F).float()
+        hi = ((packed >> 4) & 0x0F).float()
+        # Interleave: [KH, PS, D/2] → [KH, PS, D]
+        vals = torch.stack([lo, hi], dim=-1).reshape(*packed.shape[:-1], -1)
+        # Expand scales/zeros from [KH, PS, G] to [KH, PS, D]
+        group_size = 32
+        sc = scales.float().repeat_interleave(group_size, dim=-1)[..., :vals.shape[-1]]
+        zp = zeros.float().repeat_interleave(group_size, dim=-1)[..., :vals.shape[-1]]
+        return (vals - zp) * sc
+
+    outputs = []
+    for b in range(batch_size):
+        ctx_len = context_lens[b].item()
+        if ctx_len <= 0:
+            outputs.append(torch.zeros(num_heads, head_dim, device=query.device))
+            continue
+
+        num_pages = (ctx_len + page_size - 1) // page_size
+        page_ids = page_table[b, :num_pages].long()
+
+        k_q4 = kv_pool_q4[page_ids, layer_idx, 0]
+        v_q4 = kv_pool_q4[page_ids, layer_idx, 1]
+        k_sc = kv_scales[page_ids, layer_idx, 0]
+        v_sc = kv_scales[page_ids, layer_idx, 1]
+        k_zp = kv_zeros[page_ids, layer_idx, 0]
+        v_zp = kv_zeros[page_ids, layer_idx, 1]
+
+        k_pages = _dequant_page(k_q4, k_sc, k_zp)
+        v_pages = _dequant_page(v_q4, v_sc, v_zp)
+
+        k_flat = k_pages.permute(1, 0, 2, 3).reshape(num_kv_heads, -1, head_dim)[:, :ctx_len, :]
+        v_flat = v_pages.permute(1, 0, 2, 3).reshape(num_kv_heads, -1, head_dim)[:, :ctx_len, :]
+
+        if kv_head_ratio > 1:
+            k_flat = k_flat.repeat_interleave(kv_head_ratio, dim=0)
+            v_flat = v_flat.repeat_interleave(kv_head_ratio, dim=0)
+
+        q = query[b].unsqueeze(1)
+        scores = torch.bmm(q, k_flat.transpose(1, 2)) * scale
+        weights = torch.softmax(scores, dim=-1)
+        out = torch.bmm(weights, v_flat).squeeze(1)
+        outputs.append(out)
+
+    return torch.stack(outputs)
+
+
+__all__ = ["paged_attention_decode", "paged_attention_decode_q4", "has_cuda_paged_attention"]

@@ -681,7 +681,7 @@ class HierarchicalMemoryManager:
     def _move_network(self, tensor: Any, block: MemoryBlock, prev: Tier, target: Tier) -> Any:
         """Move tensor to/from remote node via RDMA or TCP."""
         try:
-            from core.network.fibre_fastpath import open_low_latency_channel
+            from core.network.network_transport import open_low_latency_channel
             if not hasattr(self, '_net_channel'):
                 self._net_channel = open_low_latency_channel()
             if self._net_channel:

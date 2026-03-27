@@ -136,6 +136,7 @@ CONFIG_PATHS = _os_config_paths()
 # -------------------------------------------------------------------------
 _lock = threading.Lock()
 _cached_config: Optional[Dict[str, Any]] = None
+_reload_hooks: List[Any] = []  # List[Callable[[Dict, Dict], None]]
 
 
 def _load_yaml() -> dict:
@@ -289,11 +290,23 @@ def get_config() -> Dict[str, Any]:
 
 
 def reload_config() -> Dict[str, Any]:
-    """Force le rechargement complet de la configuration."""
+    """Force le rechargement complet de la configuration.
+
+    Notifie tous les hooks enregistrés via register_reload_hook()
+    avec (old_config, new_config) après le rechargement.
+    """
     global _cached_config
     with _lock:
+        old = _cached_config
         _cached_config = _build_config()
+        new = _cached_config
     _logger.info("Configuration rechargee")
+    # Notify hooks outside the lock to avoid deadlocks
+    for hook in list(_reload_hooks):
+        try:
+            hook(old or {}, new)
+        except Exception as exc:
+            _logger.warning("Reload hook %s raised: %s", getattr(hook, '__name__', hook), exc)
     return _cached_config
 
 
@@ -310,4 +323,21 @@ def config_path() -> Optional[Path]:
     return None
 
 
-__all__ = ["get_config", "reload_config", "get", "config_path", "DEFAULTS"]
+def register_reload_hook(fn) -> None:
+    """Register a callback invoked on reload_config(). Signature: fn(old_cfg, new_cfg)."""
+    if fn not in _reload_hooks:
+        _reload_hooks.append(fn)
+
+
+def unregister_reload_hook(fn) -> None:
+    """Remove a previously registered reload hook."""
+    try:
+        _reload_hooks.remove(fn)
+    except ValueError:
+        pass
+
+
+__all__ = [
+    "get_config", "reload_config", "get", "config_path", "DEFAULTS",
+    "register_reload_hook", "unregister_reload_hook",
+]

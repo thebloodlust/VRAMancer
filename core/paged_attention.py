@@ -63,6 +63,23 @@ except ImportError:
     torch = None  # type: ignore
     _TORCH = False
 
+# KV cache compression (conditional)
+_KV_QUANT = False
+try:
+    from core.kv_quantizer import KVCacheCompressor
+    if HAS_TORCH := _TORCH:
+        _KV_QUANT = True
+except ImportError:
+    pass
+
+# Parity memory — XOR erasure coding for evicted pages
+_PARITY = False
+try:
+    from core.parity_memory import parity_kv as _parity_kv
+    _PARITY = True
+except ImportError:
+    _parity_kv = None
+
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -82,6 +99,9 @@ class PagedKVConfig:
     devices: List[str] = field(default_factory=list)  # all devices for distributed pool
     pages_per_device: Dict[str, int] = field(default_factory=dict)  # per-device page budget
     enable_lending: bool = True  # use VRAMLendingPool for overflow
+    kv_compression: Optional[str] = None  # None or "turboquant" (kept for compat)
+    compression_bits: int = 3             # bits per polar angle (3 → ~3.5 bits/dim)
+    qjl_dim: Optional[int] = None         # QJL projection dim (default head_dim//2)
 
     @property
     def page_size_bytes(self) -> int:
@@ -96,9 +116,13 @@ class PagedKVConfig:
     @classmethod
     def from_model(cls, model: Any, max_pages: int = 4096, device: str = "cuda:0") -> "PagedKVConfig":
         """Auto-detect config from a HuggingFace model."""
+        kv_comp = os.environ.get("VRM_KV_COMPRESSION", "").lower() or None
+        comp_bits = int(os.environ.get("VRM_KV_COMPRESSION_BITS", "3"))
+
         config = getattr(model, 'config', None)
         if config is None:
-            return cls(max_pages=max_pages, device=device)
+            return cls(max_pages=max_pages, device=device,
+                       kv_compression=kv_comp, compression_bits=comp_bits)
 
         num_layers = getattr(config, 'num_hidden_layers', 12)
         num_heads = getattr(config, 'num_attention_heads', 12)
@@ -112,6 +136,8 @@ class PagedKVConfig:
             head_dim=head_dim,
             max_pages=max_pages,
             device=device,
+            kv_compression=kv_comp,
+            compression_bits=comp_bits,
         )
 
 
@@ -195,6 +221,15 @@ class PagedKVCacheManager:
         # VRAMLendingPool integration for overflow
         self._lending_pool = None
         self._lending_leases: Dict[str, Any] = {}  # lease_id -> lease
+
+        # KV cache compression (per-head compressor + compressed sidecar)
+        self._kv_compressor: Any = None
+        self._compressed_pages: Dict[int, Dict[int, Dict[str, dict]]] = {}
+        # Structure: { page_id: { layer_idx: { "k": compressed_k, "v": compressed_v } } }
+        self._init_kv_compression()
+
+        # Parity engrams — store XOR parity for evicted pages (single-fault recovery)
+        self._parity_engrams: Dict[int, str] = {}  # page_id -> engram_id
 
         # Build device list
         if not self.config.devices:
@@ -280,6 +315,38 @@ class PagedKVCacheManager:
             _logger.debug("Connected to VRAMLendingPool for overflow")
         except Exception:
             self._lending_pool = None
+
+    def _init_kv_compression(self) -> None:
+        """Initialize KV cache compression if configured."""
+        comp = self.config.kv_compression
+        if not comp or comp != "turboquant":
+            return
+        if not _KV_QUANT:
+            _logger.warning(
+                "VRM_KV_COMPRESSION=turboquant but core.kv_quantizer unavailable "
+                "(requires torch). Falling back to uncompressed KV."
+            )
+            return
+        try:
+            self._kv_compressor = KVCacheCompressor(
+                head_dim=self.config.head_dim,
+                bits_per_angle=self.config.compression_bits,
+                qjl_dim=self.config.qjl_dim,
+            )
+            # Move to primary device if GPU available
+            if _TORCH and self.config.device.startswith("cuda") and not _MINIMAL:
+                self._kv_compressor = self._kv_compressor.to(self.config.device)
+            bpd = self._kv_compressor.bits_per_dim()
+            ratio = 16.0 / bpd  # fp16 = 16 bits/dim baseline
+            _logger.info(
+                "KV cache compression enabled: %.1f bits/dim (%.1fx reduction, "
+                "bits_per_angle=%d, qjl_dim=%d)",
+                bpd, ratio, self.config.compression_bits,
+                self._kv_compressor.qjl_dim,
+            )
+        except Exception as e:
+            _logger.warning("KV compression init failed: %s", e)
+            self._kv_compressor = None
 
     # ------------------------------------------------------------------
     # Allocation
@@ -447,10 +514,35 @@ class PagedKVCacheManager:
         key: Any,
         value: Any,
     ) -> None:
-        """Write key/value vectors to a specific page slot."""
+        """Write key/value vectors to a specific page slot.
+
+        If KV compression is enabled, also stores compressed
+        forms in the sidecar for later attention_score() and offload.
+        """
         if self._gpu_pool is not None:
             self._gpu_pool[page_id, layer_idx, 0, :, slot, :] = key
             self._gpu_pool[page_id, layer_idx, 1, :, slot, :] = value
+
+        # KV compress and store in sidecar
+        if self._kv_compressor is not None and _TORCH:
+            try:
+                # key/value shape: [num_kv_heads, head_dim]
+                k_flat = key.reshape(-1, self.config.head_dim)
+                v_flat = value.reshape(-1, self.config.head_dim)
+                with torch.no_grad():
+                    ck = self._kv_compressor.compress(k_flat)
+                    cv = self._kv_compressor.compress(v_flat)
+                if page_id not in self._compressed_pages:
+                    self._compressed_pages[page_id] = {}
+                if layer_idx not in self._compressed_pages[page_id]:
+                    self._compressed_pages[page_id][layer_idx] = {}
+                # Store per-slot compressed form
+                slot_key = f"s{slot}"
+                self._compressed_pages[page_id][layer_idx][slot_key] = {
+                    "k": ck, "v": cv,
+                }
+            except Exception:
+                pass  # compression failure is non-fatal
 
     def read_kv(
         self,
@@ -558,6 +650,25 @@ class PagedKVCacheManager:
                 # Write whole page slice at once: [heads, slot_end, dim]
                 self._gpu_pool[page_id, layer_idx, 0, :, :slot_end, :] = k[:, tok_start:tok_end, :]
                 self._gpu_pool[page_id, layer_idx, 1, :, :slot_end, :] = v[:, tok_start:tok_end, :]
+
+                # KV compress each slot for this page
+                if self._kv_compressor is not None and _TORCH:
+                    try:
+                        if page_id not in self._compressed_pages:
+                            self._compressed_pages[page_id] = {}
+                        if layer_idx not in self._compressed_pages[page_id]:
+                            self._compressed_pages[page_id][layer_idx] = {}
+                        with torch.no_grad():
+                            for s in range(slot_end):
+                                k_vec = k[:, tok_start + s, :]  # [heads, dim]
+                                v_vec = v[:, tok_start + s, :]
+                                ck = self._kv_compressor.compress(k_vec)
+                                cv = self._kv_compressor.compress(v_vec)
+                                self._compressed_pages[page_id][layer_idx][f"s{s}"] = {
+                                    "k": ck, "v": cv,
+                                }
+                    except Exception:
+                        pass
 
     def to_hf_cache(self, request_id: str) -> Optional[Any]:
         """Reconstruct HuggingFace past_key_values from paged memory.
@@ -682,6 +793,37 @@ class PagedKVCacheManager:
         else:
             victim = min(candidates, key=lambda p: p.last_access)
 
+        # KV compress before eviction if not already compressed
+        # Compressed form survives eviction for ~4.6x memory saving
+        if self._kv_compressor is not None and victim.page_id not in self._compressed_pages:
+            self.compress_page_bulk(victim.page_id)
+
+        # Parity: encode evicted page with XOR erasure coding before eviction
+        # Allows single-fault recovery if the page needs to be restored
+        if _PARITY and _parity_kv is not None:
+            try:
+                page_data = None
+                if hasattr(self, '_gpu_pool') and self._gpu_pool is not None:
+                    try:
+                        page_data = self._gpu_pool[victim.page_id].cpu().contiguous().numpy().tobytes()
+                    except Exception:
+                        pass
+                elif victim.page_id in self._compressed_pages:
+                    # Use compressed form if available
+                    import json
+                    page_data = json.dumps(self._compressed_pages[victim.page_id]).encode("utf-8")
+
+                if page_data and len(page_data) > 0:
+                    engram_id = f"kv_page_{victim.page_id}"
+                    _parity_kv.store_engram(engram_id, page_data, num_shards=3)
+                    self._parity_engrams[victim.page_id] = engram_id
+                    _logger.debug(
+                        "Parity engram stored for page %d (%d bytes, 3 shards)",
+                        victim.page_id, len(page_data),
+                    )
+            except Exception as e:
+                _logger.debug("Parity encode failed for page %d: %s", victim.page_id, e)
+
         # 1. KV PAGE OFFLOAD via HierarchicalMemoryManager (GPU -> CPU RAM)
         # We hook into HierarchicalMemoryManager to move the tensor.
         if hasattr(self, '_gpu_pool') and self._gpu_pool is not None:
@@ -733,6 +875,46 @@ class PagedKVCacheManager:
         victim.ref_count = 0
         self._total_frees += 1
         return victim.page_id
+
+    def recover_page(self, page_id: int, simulate_shard_loss: int = -1) -> Optional[bytes]:
+        """Recover an evicted page from its parity engram.
+
+        If the page was encoded with XOR parity before eviction, reconstruct
+        its data from the remaining shards + parity. Optionally simulates
+        loss of a specific shard to test fault tolerance.
+
+        Args:
+            page_id: Physical page ID to recover
+            simulate_shard_loss: If >= 0, simulate losing this shard index
+
+        Returns:
+            Recovered page data bytes, or None if not recoverable
+        """
+        if not _PARITY or _parity_kv is None:
+            return None
+
+        engram_id = self._parity_engrams.get(page_id)
+        if engram_id is None:
+            _logger.debug("No parity engram for page %d", page_id)
+            return None
+
+        try:
+            if simulate_shard_loss >= 0:
+                result = _parity_kv.heal_engram(engram_id, simulate_shard_loss)
+            else:
+                engram = _parity_kv.active_engrams.get(engram_id)
+                if engram:
+                    result = b"".join(engram["shards"])
+                else:
+                    result = None
+
+            if result:
+                _logger.info("Parity: recovered page %d (%d bytes)", page_id, len(result))
+            return result
+        except Exception as e:
+            _logger.error("Parity recovery failed for page %d: %s", page_id, e)
+            return None
+
     # ------------------------------------------------------------------
     # Stats
     # ------------------------------------------------------------------
@@ -764,6 +946,9 @@ class PagedKVCacheManager:
             "pages_per_device": per_device,
             "lending_active": self._lending_pool is not None,
             "active_leases": len(self._lending_leases),
+            "kv_compression": self.config.kv_compression or "none",
+            "compressed_pages": len(self._compressed_pages),
+            "compression_ratio": self.compression_ratio,
         }
 
     def __repr__(self) -> str:
@@ -838,6 +1023,188 @@ class PagedKVCacheManager:
             query, self._gpu_pool, page_table, context_lens,
             layer_idx, scale,
         )
+
+    # ------------------------------------------------------------------
+    # Compressed KV attention (Python path)
+    # ------------------------------------------------------------------
+
+    def compute_attention_turbo(
+        self,
+        query: Any,
+        request_id: str,
+        layer_idx: int,
+        scale: float = None,
+    ) -> Any:
+        """Compute attention scores from compressed keys.
+
+        Uses the asymmetric QJL estimator — scores are computed directly
+        from compressed keys without reconstructing full KV tensors.
+        ~4.6x KV memory reduction with near-zero accuracy loss.
+
+        Args:
+            query: [num_heads, head_dim] single query vector (decode step).
+            request_id: Request identifier.
+            layer_idx: Transformer layer index.
+            scale: Attention scale (defaults to 1/sqrt(head_dim)).
+
+        Returns:
+            (attn_output, attn_weights) or None if compressed data unavailable.
+        """
+        if self._kv_compressor is None or not _TORCH:
+            return None
+
+        with self._lock:
+            entry = self._page_tables.get(request_id)
+            if entry is None or not entry.pages:
+                return None
+            page_ids = list(entry.pages)
+            num_tokens = entry.num_tokens
+
+        if scale is None:
+            scale = 1.0 / math.sqrt(self.config.head_dim)
+
+        # Gather compressed keys and values across all pages for this layer
+        all_ck = []
+        all_cv = []
+        for pid in page_ids:
+            page_data = self._compressed_pages.get(pid, {}).get(layer_idx, {})
+            for slot in range(self.config.page_size):
+                slot_key = f"s{slot}"
+                if slot_key not in page_data:
+                    break
+                all_ck.append(page_data[slot_key]["k"])
+                all_cv.append(page_data[slot_key]["v"])
+
+        if not all_ck:
+            return None
+
+        # Trim to actual token count
+        all_ck = all_ck[:num_tokens]
+        all_cv = all_cv[:num_tokens]
+
+        try:
+            with torch.no_grad():
+                # Process per-head: query [num_heads, head_dim]
+                num_heads = query.shape[0] if query.dim() >= 2 else 1
+                q_heads = query.reshape(num_heads, self.config.head_dim)
+
+                # Merge compressed keys: concatenate per-token compressed dicts
+                # Each ck has: radius [n_kv_heads, 1], angles, qjl_signs, qjl_norms
+                # For simplicity, process head-by-head
+                n_kv_heads = self.config.num_kv_heads
+                head_dim = self.config.head_dim
+
+                outputs = []
+                for h in range(num_heads):
+                    kv_head = h % n_kv_heads  # GQA mapping
+
+                    # Gather this head's compressed keys across all tokens
+                    k_radii = []
+                    k_angles_by_level = None
+                    k_qjl_signs = []
+                    k_qjl_norms = []
+
+                    for ck in all_ck:
+                        # ck comes from compress() with input [n_kv_heads, head_dim]
+                        # radius: [n_kv_heads, 1], angles: list of [n_kv_heads, ...]
+                        r = ck["radius"][kv_head:kv_head+1]  # [1, 1]
+                        k_radii.append(r)
+                        if k_angles_by_level is None:
+                            k_angles_by_level = [[] for _ in ck["angles"]]
+                        for lvl, a in enumerate(ck["angles"]):
+                            k_angles_by_level[lvl].append(a[kv_head:kv_head+1])
+                        k_qjl_signs.append(ck["qjl_signs"][kv_head:kv_head+1])
+                        k_qjl_norms.append(ck["qjl_norms"][kv_head:kv_head+1])
+
+                    # Stack across sequence dimension
+                    merged_ck = {
+                        "radius": torch.cat(k_radii, dim=0),  # [seq, 1]
+                        "angles": [torch.cat(lvl, dim=0) for lvl in k_angles_by_level],
+                        "qjl_signs": torch.cat(k_qjl_signs, dim=0),  # [seq, m]
+                        "qjl_norms": torch.cat(k_qjl_norms, dim=0),  # [seq, 1]
+                        "shape": (len(all_ck), head_dim),
+                    }
+
+                    # Compute attention scores directly (no reconstruction)
+                    q_h = q_heads[h:h+1]  # [1, head_dim]
+                    scores = self._kv_compressor.attention_score(q_h, merged_ck)
+                    scores = scores * scale  # [1, seq]
+
+                    # Softmax
+                    weights = torch.softmax(scores, dim=-1)  # [1, seq]
+
+                    # For values, decompress (values need full reconstruction)
+                    v_vecs = []
+                    for cv in all_cv:
+                        v_dec = self._kv_compressor.decompress(cv)
+                        v_vecs.append(v_dec[kv_head:kv_head+1])  # [1, head_dim]
+
+                    v_mat = torch.cat(v_vecs, dim=0)  # [seq, head_dim]
+                    out_h = weights @ v_mat  # [1, head_dim]
+                    outputs.append(out_h)
+
+                return torch.cat(outputs, dim=0)  # [num_heads, head_dim]
+        except Exception as e:
+            _logger.debug("Compressed KV attention failed: %s", e)
+            return None
+
+    def compress_page_bulk(self, page_id: int) -> bool:
+        """Compress all KV data for a page (used during offload/eviction).
+
+        Reads raw KV from gpu_pool and stores compressed form in sidecar.
+        After this, raw data can be freed for ~4.6x memory saving.
+
+        Returns True if compression succeeded.
+        """
+        if self._kv_compressor is None or self._gpu_pool is None or not _TORCH:
+            return False
+
+        try:
+            page = self._pages[page_id]
+            if not page.allocated:
+                return False
+
+            with torch.no_grad():
+                if page_id not in self._compressed_pages:
+                    self._compressed_pages[page_id] = {}
+
+                for layer_idx in range(self.config.num_layers):
+                    if layer_idx not in self._compressed_pages[page_id]:
+                        self._compressed_pages[page_id][layer_idx] = {}
+
+                    # Read raw KV: [num_kv_heads, page_size, head_dim]
+                    k_raw = self._gpu_pool[page_id, layer_idx, 0]
+                    v_raw = self._gpu_pool[page_id, layer_idx, 1]
+
+                    for slot in range(self.config.page_size):
+                        slot_key = f"s{slot}"
+                        if slot_key in self._compressed_pages[page_id][layer_idx]:
+                            continue  # already compressed
+                        k_vec = k_raw[:, slot, :]  # [n_kv_heads, head_dim]
+                        v_vec = v_raw[:, slot, :]
+                        ck = self._kv_compressor.compress(k_vec)
+                        cv = self._kv_compressor.compress(v_vec)
+                        self._compressed_pages[page_id][layer_idx][slot_key] = {
+                            "k": ck, "v": cv,
+                        }
+
+            _logger.debug("Bulk compressed page %d (%d layers)", page_id, self.config.num_layers)
+            return True
+        except Exception as e:
+            _logger.debug("Bulk compress page %d failed: %s", page_id, e)
+            return False
+
+    @property
+    def kv_compression_active(self) -> bool:
+        """Whether KV cache compression is active."""
+        return self._kv_compressor is not None
+
+    @property
+    def compression_ratio(self) -> float:
+        """Current compression ratio (fp16 baseline / compressed bits)."""
+        if self._kv_compressor is None:
+            return 1.0
+        return 16.0 / self._kv_compressor.bits_per_dim()
 
 
 __all__ = [

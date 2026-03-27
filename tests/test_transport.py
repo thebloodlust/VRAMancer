@@ -1,4 +1,4 @@
-"""Tests for the transport layer (transfer_manager, fibre_fastpath, transport_factory).
+"""Tests for the transport layer (transfer_manager, network_transport, transport_factory).
 
 Run with: VRM_MINIMAL_TEST=1 VRM_DISABLE_RATE_LIMIT=1 pytest tests/test_transport.py -v
 """
@@ -92,25 +92,25 @@ class TestTransferManagerStub:
 
 
 # ---------------------------------------------------------------------------
-# FastHandle / fibre_fastpath tests
+# FastHandle / network_transport tests
 # ---------------------------------------------------------------------------
 class TestFibreFastpath:
     """Tests for the network transport layer."""
 
     def test_import(self):
-        from core.network.fibre_fastpath import (
+        from core.network.network_transport import (
             FastHandle, detect_fast_interfaces, open_low_latency_channel,
             RDMATransport, GPUDirectTransport, ZeroCopyTCPTransport,
         )
         assert FastHandle is not None
 
     def test_detect_interfaces(self):
-        from core.network.fibre_fastpath import detect_fast_interfaces
+        from core.network.network_transport import detect_fast_interfaces
         interfaces = detect_fast_interfaces()
         assert isinstance(interfaces, list)
 
     def test_open_channel_fallback(self):
-        from core.network.fibre_fastpath import open_low_latency_channel
+        from core.network.network_transport import open_low_latency_channel
         handle = open_low_latency_channel()
         assert handle is not None
         assert hasattr(handle, 'kind')
@@ -118,7 +118,7 @@ class TestFibreFastpath:
         assert hasattr(handle, 'recv')
 
     def test_fasthandle_capabilities(self):
-        from core.network.fibre_fastpath import FastHandle
+        from core.network.network_transport import FastHandle
         fh = FastHandle(kind="stub", meta={})
         caps = fh.capabilities()
         assert "kind" in caps
@@ -128,7 +128,7 @@ class TestFibreFastpath:
         assert "transport" in caps
 
     def test_fasthandle_mmap_send_recv(self):
-        from core.network.fibre_fastpath import FastHandle
+        from core.network.network_transport import FastHandle
         fh = FastHandle(kind="test", meta={"id": "unit_test"})
         payload = b"hello vramancer transport"
         sent = fh.send(payload)
@@ -140,38 +140,38 @@ class TestFibreFastpath:
             os.unlink(fh.shm_path)
 
     def test_fasthandle_send_tensor_method_exists(self):
-        from core.network.fibre_fastpath import FastHandle
+        from core.network.network_transport import FastHandle
         fh = FastHandle(kind="stub", meta={})
         assert hasattr(fh, 'send_tensor')
         assert hasattr(fh, 'recv_tensor')
 
     def test_rdma_transport_init_no_hardware(self):
-        from core.network.fibre_fastpath import RDMATransport
+        from core.network.network_transport import RDMATransport
         rt = RDMATransport()
         # Without RDMA hardware, should gracefully degrade
         assert rt.available is False or rt.available is True  # depends on env
 
     def test_gpudirect_transport_init(self):
-        from core.network.fibre_fastpath import GPUDirectTransport
+        from core.network.network_transport import GPUDirectTransport
         gdt = GPUDirectTransport()
         # Should not crash without hardware
         assert gdt.available is False  # no RDMA transport injected
 
     def test_zerocopy_tcp_init(self):
-        from core.network.fibre_fastpath import ZeroCopyTCPTransport
+        from core.network.network_transport import ZeroCopyTCPTransport
         tcp = ZeroCopyTCPTransport()
         assert tcp.host == '0.0.0.0'
         assert tcp.buf_size == 4 * 1024 * 1024
 
     def test_zerocopy_tcp_listen_close(self):
-        from core.network.fibre_fastpath import ZeroCopyTCPTransport
+        from core.network.network_transport import ZeroCopyTCPTransport
         tcp = ZeroCopyTCPTransport()
         port = tcp.listen(0)  # ephemeral port
         assert port > 0
         tcp.close()
 
     def test_benchmark_interfaces(self):
-        from core.network.fibre_fastpath import benchmark_interfaces
+        from core.network.network_transport import benchmark_interfaces
         results = benchmark_interfaces(sample_size=1)
         assert isinstance(results, list)
 

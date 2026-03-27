@@ -60,12 +60,14 @@ class StreamManager:
     def __init__(self, scheduler=None, monitor=None, logger=None,
                  verbose: bool = True, compressor=None,
                  overload_threshold: float = 0.90,
-                 eviction_threshold: float = 0.85):
+                 eviction_threshold: float = 0.85,
+                 paged_kv=None):
         self.scheduler = scheduler
         self.monitor = monitor
         self.logger = logger or _logger
         self.verbose = verbose
         self.compressor = compressor
+        self.paged_kv = paged_kv  # PagedKVCacheManager (for KV compress on evict)
         self.overload_threshold = overload_threshold
         self.eviction_threshold = eviction_threshold
 
@@ -332,7 +334,23 @@ class StreamManager:
             self._shutdown.wait(timeout=interval)  # interruptible sleep
 
     def _evict_lowest_priority(self, gpu_id: int) -> None:
-        """Evict the lowest-priority layer from a GPU."""
+        """Evict the lowest-priority layer from a GPU.
+
+        If a PagedKVCacheManager with KV compression is attached, also
+        compresses KV pages before eviction for ~4.6x memory saving.
+        """
+        # Compress KV pages under memory pressure
+        if self.paged_kv and getattr(self.paged_kv, 'kv_compression_active', False):
+            try:
+                stats = self.paged_kv.stats()
+                for pid in range(stats.get("total_pages", 0)):
+                    page = self.paged_kv._pages[pid]
+                    if page.allocated and pid not in self.paged_kv._compressed_pages:
+                        self.paged_kv.compress_page_bulk(pid)
+                        break  # compress one page per cycle to avoid blocking
+            except Exception:
+                pass
+
         with self._lock:
             candidates = [
                 (name, block) for name, block in self.loaded_layers.items()

@@ -120,6 +120,45 @@ def dashboard():
     return render_template("dashboard.html", gpus=gpus, memory=memory)
 
 
+@app.route("/api/gpu")
+def api_gpu():
+    """Real-time GPU info using torch (same data as routes_ops)."""
+    try:
+        import torch
+        if not torch.cuda.is_available():
+            return jsonify({"cuda_available": False, "devices": []})
+        devices = []
+        for i in range(torch.cuda.device_count()):
+            try:
+                props = torch.cuda.get_device_properties(i)
+                alloc = torch.cuda.memory_allocated(i)
+                total = props.total_memory
+                devices.append({
+                    "id": i, "name": props.name,
+                    "memory_used": alloc, "memory_total": total,
+                    "memory_free": total - alloc,
+                    "memory_usage_percent": round((alloc / total) * 100, 2) if total else 0,
+                })
+            except Exception as e:
+                devices.append({"id": i, "error": str(e)})
+        return jsonify({"cuda_available": True, "device_count": len(devices), "devices": devices})
+    except ImportError:
+        return jsonify({"cuda_available": False, "devices": [], "message": "torch not available"})
+
+
+@app.route("/api/pipeline/status")
+def api_pipeline_status():
+    """Pipeline status from the global inference pipeline."""
+    try:
+        from core.inference_pipeline import get_pipeline
+        pipe = get_pipeline()
+        if pipe and pipe.is_loaded():
+            return jsonify(pipe.status())
+        return jsonify({"loaded": False, "message": "No model loaded"})
+    except Exception as e:
+        return jsonify({"loaded": False, "error": str(e)})
+
+
 @app.route("/chat")
 def chat_ui():
     return render_template("chat.html")
@@ -174,15 +213,16 @@ def api_models_search():
 
 @app.route("/api/swarm/status")
 def api_swarm_status():
+    clients = 0
+    flops = 0.0
+    tensors = 0
     try:
         from core.metrics import WEBGPU_CONNECTED_CLIENTS, WEBGPU_FLOPS_TOTAL
         clients = max(0, int(WEBGPU_CONNECTED_CLIENTS._value.get()))
         flops = WEBGPU_FLOPS_TOTAL._value.get()
-        tensors = int(flops // 15000000) # estimation for visuals
+        tensors = int(flops // 15000000) if flops else 0
     except Exception:
-        clients = 0
-        flops = 0
-        tensors = 0
+        pass
 
     return jsonify({
         "activeNodes": clients,

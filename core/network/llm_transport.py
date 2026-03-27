@@ -782,19 +782,71 @@ class LLMTransport:
 
     def connect_peer_tcp(self, peer_node_id: str, host: str,
                          port: int = VTP_CONTROL_PORT) -> bool:
-        """Connect to a peer via TCP fallback."""
+        """Connect to a peer via TCP with VTP handshake."""
         try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            # Resolve host for IPv4 or IPv6
+            infos = socket.getaddrinfo(
+                host, port, socket.AF_UNSPEC, socket.SOCK_STREAM,
+            )
+            if not infos:
+                log.error(f"VTP: cannot resolve {host}:{port}")
+                return False
+            af, socktype, proto, _, sa = infos[0]
+            sock = socket.socket(af, socktype, proto)
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             try:
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_BUSY_POLL, 50)
             except Exception:
                 pass
             sock.settimeout(10.0)
-            sock.connect((host, port))
+            sock.connect(sa)
+
+            # --- VTP Handshake (client side) ---
+            # Step 1: Receive server handshake
+            hdr_data = LLMTransport._tcp_recv_exact(sock, _HEADER_PAD)
+            if hdr_data:
+                srv_hdr = TensorHeader.decode(hdr_data)
+                if srv_hdr.opcode == VTPOpcode.CONTROL and srv_hdr.payload_bytes > 0:
+                    srv_info_data = LLMTransport._tcp_recv_exact(sock, srv_hdr.payload_bytes)
+                    if srv_info_data:
+                        try:
+                            import json
+                            srv_info = json.loads(srv_info_data.decode("utf-8"))
+                            log.info(
+                                f"VTP: server {peer_node_id} info: "
+                                f"gpus={srv_info.get('num_gpus', '?')}, "
+                                f"tier={srv_info.get('tier', '?')}"
+                            )
+                        except Exception:
+                            pass
+
+            # Step 2: Send our handshake
+            import json
+            local_info = {
+                "node_id": self.node_id,
+                "tier": self._tier.name,
+                "num_gpus": 0,
+                "rdma_available": _PYVERBS,
+                "gpudirect_available": _GPUDIRECT,
+                "vtp_version": VTP_VERSION,
+            }
+            if _TORCH and _CUDA:
+                try:
+                    local_info["num_gpus"] = torch.cuda.device_count()
+                except Exception:
+                    pass
+            info_bytes = json.dumps(local_info).encode("utf-8")
+            client_hdr = TensorHeader(
+                opcode=VTPOpcode.CONTROL,
+                payload_bytes=len(info_bytes),
+            )
+            sock.sendall(client_hdr.encode())
+            sock.sendall(info_bytes)
+
+            sock.settimeout(None)
             self._tcp_fallback[peer_node_id] = sock
             self._tier = TransportTier.ZEROCOPY_TCP
-            log.info(f"VTP: TCP fallback to {peer_node_id} ({host}:{port})")
+            log.info(f"VTP: TCP connected to {peer_node_id} ({host}:{port}) with handshake")
             return True
         except Exception as exc:
             log.error(f"VTP TCP connect to {peer_node_id} failed: {exc}")
@@ -1373,9 +1425,14 @@ class VTPServer:
 
     def start(self) -> int:
         """Start the VTP server. Returns the actual port."""
-        self._server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._server_sock = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
         self._server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self._server_sock.bind((self.host, self.port))
+        # Dual-stack: accept both IPv4 and IPv6 connections
+        try:
+            self._server_sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+        except (AttributeError, OSError):
+            pass  # Some OSes default to dual-stack already
+        self._server_sock.bind((self.host if ":" in self.host else "::", self.port))
         self._server_sock.listen(16)
         self._server_sock.settimeout(1.0)
         actual_port = self._server_sock.getsockname()[1]
@@ -1416,11 +1473,216 @@ class VTPServer:
                     log.error(f"VTP accept error: {exc}")
 
     def _handle_client(self, conn: socket.socket, addr):
-        """Handle incoming VTP connection."""
+        """Handle incoming VTP connection with OOB handshake + recv loop.
+
+        Handshake protocol:
+          1. Server sends: HANDSHAKE header (opcode=CONTROL) with local node info
+          2. Client sends: HANDSHAKE header (opcode=CONTROL) with its node info
+          3. Both sides register the TCP fallback path
+
+        After handshake, enters a recv loop that:
+          - Reads TensorHeader (64 bytes)
+          - Routes based on opcode (TENSOR, KV_CACHE, HEARTBEAT, CONTROL)
+          - Stores received tensors in the transport's recv queue
+        """
         log.info(f"VTP: incoming connection from {addr}")
         peer_id = f"{addr[0]}:{addr[1]}"
-        self.transport._tcp_fallback[peer_id] = conn
-        # Keep connection alive for future tensor transfers
+
+        try:
+            # --- Step 1: Send our handshake ---
+            local_info = self._build_handshake_info()
+            handshake_hdr = TensorHeader(
+                opcode=VTPOpcode.CONTROL,
+                flags=0,
+                payload_bytes=len(local_info),
+                layer_id=0,
+                seq_id=0,
+                src_gpu=0,
+                dst_gpu=0,
+                ndim=0,
+                dtype_code=0,
+                shape=(),
+            )
+            conn.sendall(handshake_hdr.encode())
+            conn.sendall(local_info)
+
+            # --- Step 2: Receive peer handshake ---
+            conn.settimeout(10.0)
+            peer_hdr_data = self._tcp_recv_exact_static(conn, _HEADER_PAD)
+            if not peer_hdr_data:
+                log.warning(f"VTP: handshake timeout from {addr}")
+                conn.close()
+                return
+
+            peer_hdr = TensorHeader.decode(peer_hdr_data)
+            if peer_hdr.opcode != VTPOpcode.CONTROL:
+                log.warning(f"VTP: unexpected opcode in handshake: {peer_hdr.opcode}")
+                conn.close()
+                return
+
+            peer_info_data = self._tcp_recv_exact_static(conn, peer_hdr.payload_bytes)
+            if peer_info_data:
+                try:
+                    import json
+                    peer_info = json.loads(peer_info_data.decode("utf-8"))
+                    peer_node_id = peer_info.get("node_id", peer_id)
+                    peer_id = peer_node_id
+                    log.info(
+                        f"VTP: handshake OK from {peer_id} "
+                        f"(gpus={peer_info.get('num_gpus', '?')}, "
+                        f"tier={peer_info.get('tier', '?')})"
+                    )
+                except Exception as exc:
+                    log.warning(f"VTP: peer info decode failed: {exc}")
+
+            # Register TCP path
+            self.transport._tcp_fallback[peer_id] = conn
+            conn.settimeout(None)
+
+            # --- Step 3: Recv loop ---
+            self._recv_loop(conn, peer_id)
+
+        except Exception as exc:
+            log.error(f"VTP: client handler error for {addr}: {exc}")
+        finally:
+            # Cleanup
+            self.transport._tcp_fallback.pop(peer_id, None)
+            try:
+                conn.close()
+            except Exception:
+                pass
+            log.info(f"VTP: connection closed from {peer_id}")
+
+    def _recv_loop(self, conn: socket.socket, peer_id: str):
+        """Receive tensors and control messages until connection closes."""
+        while self._running:
+            try:
+                conn.settimeout(30.0)
+                hdr_data = self._tcp_recv_exact_static(conn, _HEADER_PAD)
+                if not hdr_data:
+                    log.info(f"VTP: connection closed by {peer_id}")
+                    break
+
+                header = TensorHeader.decode(hdr_data)
+
+                # --- HEARTBEAT ---
+                if header.opcode == VTPOpcode.HEARTBEAT:
+                    # Respond with heartbeat ACK
+                    ack = TensorHeader(
+                        opcode=VTPOpcode.HEARTBEAT,
+                        payload_bytes=0,
+                    )
+                    conn.sendall(ack.encode())
+                    continue
+
+                # --- CONTROL ---
+                if header.opcode == VTPOpcode.CONTROL:
+                    if header.payload_bytes > 0:
+                        payload = self._tcp_recv_exact_static(conn, header.payload_bytes)
+                        # Process control message (credit grants, etc.)
+                        if payload and (header.flags & 0xFF) == VTPOpcode.CREDIT_GRANT.value:
+                            self.transport._stats["credits_recv"] += 1
+                    continue
+
+                # --- TENSOR / KV_CACHE ---
+                if header.opcode in (VTPOpcode.TENSOR, VTPOpcode.KV_CACHE):
+                    payload = self._tcp_recv_exact_static(conn, header.payload_bytes)
+                    if not payload:
+                        log.warning(f"VTP: truncated tensor from {peer_id}")
+                        break
+
+                    # Reconstruct tensor
+                    tensor = self._decode_tensor_payload(header, payload)
+                    if tensor is not None:
+                        # Store in recv queue keyed by (peer_id, layer_id)
+                        recv_key = (peer_id, header.layer_id)
+                        if not hasattr(self.transport, '_recv_queue'):
+                            self.transport._recv_queue = {}
+                        self.transport._recv_queue[recv_key] = (tensor, header)
+                        self.transport._stats["tensors_recv"] += 1
+                        self.transport._stats["bytes_recv"] += header.payload_bytes
+                    continue
+
+                log.debug(f"VTP: unknown opcode {header.opcode} from {peer_id}")
+
+            except socket.timeout:
+                # Send heartbeat to keep connection alive
+                try:
+                    hb = TensorHeader(
+                        opcode=VTPOpcode.HEARTBEAT,
+                        payload_bytes=0,
+                    )
+                    conn.sendall(hb.encode())
+                except Exception:
+                    break
+            except ConnectionError:
+                break
+            except Exception as exc:
+                log.error(f"VTP: recv loop error from {peer_id}: {exc}")
+                break
+
+    def _build_handshake_info(self) -> bytes:
+        """Build handshake payload with local node info."""
+        import json
+        info = {
+            "node_id": self.transport._stats.get("node_id", socket.gethostname()),
+            "tier": self.transport._tier.name,
+            "num_gpus": 0,
+            "rdma_available": _PYVERBS,
+            "gpudirect_available": _GPUDIRECT,
+            "vtp_version": VTP_VERSION,
+        }
+        if _TORCH and _CUDA:
+            try:
+                info["num_gpus"] = torch.cuda.device_count()
+            except Exception:
+                pass
+        return json.dumps(info).encode("utf-8")
+
+    @staticmethod
+    def _tcp_recv_exact_static(sock: socket.socket, size: int) -> Optional[bytes]:
+        """Read exactly `size` bytes from socket."""
+        if size <= 0:
+            return b""
+        buf = bytearray(size)
+        view = memoryview(buf)
+        received = 0
+        while received < size:
+            try:
+                n = sock.recv_into(view[received:])
+            except socket.timeout:
+                return None
+            if n == 0:
+                return None
+            received += n
+        return bytes(buf)
+
+    @staticmethod
+    def _decode_tensor_payload(header: TensorHeader, payload: bytes):
+        """Decode tensor from header + payload bytes."""
+        if not _TORCH:
+            return None
+        try:
+            import numpy as np
+            np_dtype = {
+                0: np.float32, 1: np.float16, 2: np.float32,
+                3: np.float64, 4: np.int64, 5: np.int32,
+                6: np.int16, 7: np.int8, 8: np.uint8,
+                9: np.bool_,
+            }.get(header.dtype_code, np.float32)
+            shape = header.shape if header.shape else (len(payload) // np.dtype(np_dtype).itemsize,)
+            arr = np.frombuffer(payload[:header.payload_bytes], dtype=np_dtype)
+            arr = arr.reshape(shape)
+            tensor = torch.from_numpy(arr.copy())
+            torch_dtype = _CODE_TO_DTYPE.get(header.dtype_code, torch.float32)
+            if torch_dtype == torch.bfloat16:
+                tensor = tensor.to(torch.bfloat16)
+            if _CUDA and header.dst_gpu >= 0:
+                tensor = tensor.to(f"cuda:{header.dst_gpu}")
+            return tensor
+        except Exception as exc:
+            log.error(f"VTP: tensor decode failed: {exc}")
+            return None
 
 
 # ═══════════════════════════════════════════════════════════════════════════
