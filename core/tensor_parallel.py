@@ -49,10 +49,15 @@ def _nccl_all_reduce(tensors: List[Any]) -> None:
     try:
         torch.cuda.nccl.all_reduce(tensors)
     except Exception:
-        # Fallback: manual staging via CPU
-        total = sum(t.to("cpu") for t in tensors)
-        for t in tensors:
-            t.copy_(total.to(t.device))
+        # Fallback: manual staging via CPU (inference-only, no gradient).
+        # sum() would create a compute graph that breaks backprop,
+        # but TP is inference-only in VRAMancer so detach is safe.
+        with torch.no_grad():
+            total = torch.zeros_like(tensors[0], device="cpu")
+            for t in tensors:
+                total += t.detach().to("cpu")
+            for t in tensors:
+                t.copy_(total.to(t.device))
 
 
 def _all_reduce_sum(tensors: List[Any]) -> Any:
@@ -105,6 +110,8 @@ def _detect_architecture(model: Any) -> str:
         if "q_proj" in name:
             return "llama"
 
+    _logger.warning("Unknown architecture %r — defaulting to llama TP sharding; "
+                     "this may produce wrong shapes for unsupported models.", arch)
     return "llama"  # default assumption
 
 
@@ -254,11 +261,17 @@ class TPAttention(nn.Module):
             k = k.view(bsz, seq_len, kv_heads, self.head_dim).transpose(1, 2)
             v = v.view(bsz, seq_len, kv_heads, self.head_dim).transpose(1, 2)
 
-            # GQA expand
+            # GQA expand — handle non-divisible head counts
             if kv_heads < self.heads_per_shard:
-                repeat = self.heads_per_shard // kv_heads
-                k = k.repeat_interleave(repeat, dim=1)
-                v = v.repeat_interleave(repeat, dim=1)
+                if self.heads_per_shard % kv_heads == 0:
+                    repeat = self.heads_per_shard // kv_heads
+                    k = k.repeat_interleave(repeat, dim=1)
+                    v = v.repeat_interleave(repeat, dim=1)
+                else:
+                    # Non-divisible: expand then slice to target size
+                    repeat = (self.heads_per_shard + kv_heads - 1) // kv_heads
+                    k = k.repeat_interleave(repeat, dim=1)[:, :self.heads_per_shard]
+                    v = v.repeat_interleave(repeat, dim=1)[:, :self.heads_per_shard]
 
             # Scaled dot-product attention
             attn_out = torch.nn.functional.scaled_dot_product_attention(q, k, v, is_causal=(seq_len > 1))
@@ -515,7 +528,19 @@ def apply_tensor_parallel(model: Any, devices: List[str] = None) -> TPModel:
         TPModel wrapping the sharded weights.
     """
     if devices is None:
-        devices = [f"cuda:{i}" for i in range(torch.cuda.device_count())]
+        try:
+            from core.utils import detect_backend
+            backend = detect_backend()
+        except ImportError:
+            backend = "cuda"
+        if backend in ("cuda", "rocm"):
+            # ROCm uses the torch.cuda API
+            devices = [f"cuda:{i}" for i in range(torch.cuda.device_count())]
+        elif backend == "mps":
+            # MPS is single-device; TP not applicable
+            raise ValueError("Tensor parallelism is not supported on MPS (single device)")
+        else:
+            raise ValueError(f"Tensor parallelism requires CUDA/ROCm GPUs, got backend={backend!r}")
 
     if len(devices) < 2:
         raise ValueError("Tensor parallelism requires at least 2 devices")

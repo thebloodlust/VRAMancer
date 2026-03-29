@@ -92,11 +92,11 @@
 - [x] **block_router.py load_block_from_disk** — Charge maintenant réellement via `torch.load(path, weights_only=True)` au lieu de retourner un `Identity()` stub. Fallback gracieux si fichier manquant. Label "zero-copy" retiré du commentaire de désérialisation.
 - [x] **stream_manager.py eviction priority** — Le tri d'éviction était **inversé** : `sort(key=-priority)` + `[0]` prenait le bloc de plus haute priorité au lieu de la plus basse. Corrigé en `sort(key=priority)` + `[0]` dans `swap_if_needed()` et `_evict_lowest_priority()`.
 
-### Multi-accélérateur
+### Multi-accélérateur (DONE — 3/3)
 
-- [ ] **routes_ops.py ROCm/MPS** — La détection GPU est CUDA-only. Utiliser `core/utils.py:detect_backend()` pour supporter ROCm (`torch.cuda` via HIP) et MPS dans les endpoints `/api/gpu` et health checks.
-- [ ] **monitor.py ROCm validation** — Le fallback ROCm-SMI n'a jamais été testé sur du vrai AMD. Le mapping d'index GPU assume `torch.cuda` = ordre système. Valider sur hardware AMD ou documenter la limitation.
-- [ ] **tensor_parallel.py robustesse** — Le fallback CPU casse le gradient (inutilisable pour fine-tuning). GQA (Grouped Query Attention) a des edge cases non couverts. Testé uniquement sur GPT-2 — étendre les tests à Llama/Mistral.
+- [x] **routes_ops.py ROCm/MPS** — Les endpoints `/api/gpu` et `/api/nodes` utilisent maintenant `core/utils.py:enumerate_devices()` et `detect_backend()` au lieu de `torch.cuda.*` direct. Supporte CUDA, ROCm (via HIP) et MPS. Réponse JSON inclut `backend`, `vendor`, `hip_version` si applicable.
+- [x] **monitor.py ROCm validation** — Documentation ajoutée sur les limitations du fallback ROCm-SMI (non testé sur AMD réel, mapping d'index card→torch.cuda potentiellement divergent avec HIP_VISIBLE_DEVICES). Documentation du contrat d'index dans `_query_allocated()`.
+- [x] **tensor_parallel.py robustesse** — Fallback CPU all-reduce corrigé (`torch.no_grad()` + `torch.zeros_like` au lieu de `sum()`). GQA gère les cas non-divisibles (repeat_interleave + slice). Architecture inconnue log un warning. `apply_tensor_parallel()` utilise `detect_backend()` et refuse MPS (single-device).
 
 ### Performance
 

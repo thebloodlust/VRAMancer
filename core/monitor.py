@@ -60,7 +60,16 @@ _logger = logging.getLogger("vramancer.monitor")
 # -------------------------------------------------------------------------
 
 def _rocm_smi_memory(idx: int) -> Optional[Dict[str, int]]:
-    """Query AMD GPU memory via rocm-smi CLI (fallback when pynvml absent)."""
+    """Query AMD GPU memory via rocm-smi CLI (fallback when pynvml absent).
+
+    Limitations:
+      - Requires ``rocm-smi`` binary on PATH (part of ROCm runtime).
+      - JSON format varies across rocm-smi versions; only tested with 6.x keys.
+      - ``idx`` is passed as ``card{idx}`` — assumes rocm-smi card numbering
+        matches ``torch.cuda`` device indices, which may NOT be true when
+        CUDA_VISIBLE_DEVICES or HIP_VISIBLE_DEVICES reorders devices.
+      - NOT validated on real AMD hardware (NVIDIA-only test environment).
+    """
     import subprocess
     try:
         result = subprocess.run(
@@ -247,6 +256,15 @@ class GPUMonitor:
                 }
 
     def _query_allocated(self, idx: int | str) -> int:
+        """Query allocated memory for device *idx*.
+
+        Note: *idx* is the ``enumerate_devices()`` physical index, which is
+        passed directly to ``torch.cuda.memory_allocated()``.  This is correct
+        as long as ``enumerate_devices()`` returns torch.cuda physical indices,
+        which it currently does.  In mixed AMD+NVIDIA setups the rocm-smi
+        ``card{idx}`` numbering may diverge from torch.cuda ordering when
+        ``HIP_VISIBLE_DEVICES`` is set — use with caution.
+        """
         if _MINIMAL or torch is None:
             return 0
         try:

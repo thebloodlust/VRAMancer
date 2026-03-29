@@ -152,38 +152,63 @@ def api_status():
 @ops_bp.route('/api/gpu/info')
 @ops_bp.route('/api/gpu')
 def gpu_info():
-    """GPU information."""
+    """GPU information (multi-accelerator: CUDA, ROCm, MPS)."""
     try:
+        from core.utils import detect_backend, enumerate_devices
         import torch
-        if not torch.cuda.is_available():
-            return jsonify({'cuda_available': False, 'devices': [],
-                            'message': 'CUDA not available'})
+
+        backend = detect_backend()
+        all_devices = enumerate_devices()
+        gpu_devices = [d for d in all_devices if d['backend'] in ('cuda', 'rocm', 'mps')]
+
+        if not gpu_devices:
+            return jsonify({'gpu_available': False, 'devices': [],
+                            'backend': backend, 'message': 'No GPU available'})
+
         devices = []
-        for i in range(torch.cuda.device_count()):
+        for d in gpu_devices:
+            dev_info = {
+                'id': d['index'], 'name': d['name'],
+                'backend': d['backend'], 'vendor': d.get('vendor', 'unknown'),
+            }
             try:
-                props = torch.cuda.get_device_properties(i)
-                alloc = torch.cuda.memory_allocated(i)
-                total = props.total_memory
-                devices.append({
-                    'id': i, 'name': props.name,
-                    'memory_used': alloc, 'memory_total': total,
-                    'memory_free': total - alloc,
-                    'memory_usage_percent': round(
-                        (alloc / total) * 100, 2
-                    ) if total else 0,
-                    'compute_capability': f"{props.major}.{props.minor}",
-                })
+                idx = d['index']
+                if d['backend'] in ('cuda', 'rocm') and torch.cuda.is_available():
+                    props = torch.cuda.get_device_properties(idx)
+                    alloc = torch.cuda.memory_allocated(idx)
+                    total = props.total_memory
+                    dev_info.update({
+                        'memory_used': alloc, 'memory_total': total,
+                        'memory_free': total - alloc,
+                        'memory_usage_percent': round(
+                            (alloc / total) * 100, 2
+                        ) if total else 0,
+                        'compute_capability': f"{props.major}.{props.minor}",
+                    })
+                elif d['backend'] == 'mps':
+                    dev_info.update({
+                        'memory_used': torch.mps.current_allocated_memory() if hasattr(torch, 'mps') else 0,
+                        'memory_total': d.get('total_memory', 0),
+                    })
             except Exception as e:
-                devices.append({'id': i, 'error': str(e)})
-        return jsonify({
-            'cuda_available': True, 'device_count': len(devices),
-            'devices': devices, 'cuda_version': torch.version.cuda,
-        })
+                dev_info['error'] = str(e)
+            devices.append(dev_info)
+
+        result = {
+            'gpu_available': True, 'backend': backend,
+            'device_count': len(devices), 'devices': devices,
+        }
+        # Add CUDA version if relevant
+        if backend in ('cuda', 'rocm') and hasattr(torch.version, 'cuda') and torch.version.cuda:
+            result['cuda_version'] = torch.version.cuda
+        if backend == 'rocm' and hasattr(torch.version, 'hip') and torch.version.hip:
+            result['hip_version'] = torch.version.hip
+        return jsonify(result)
     except ImportError:
-        return jsonify({'cuda_available': False, 'devices': [],
+        return jsonify({'gpu_available': False, 'devices': [],
                         'message': 'PyTorch not installed'}), 503
     except Exception as e:
-        return jsonify({'error': str(e), 'cuda_available': False}), 500
+        return jsonify({'error': str(e), 'gpu_available': False}), 500
 
 
 @ops_bp.route('/api/system')
@@ -260,21 +285,21 @@ def nodes_info():
         uptime_s = time.time() - psutil.boot_time()
         gpu_data = {'name': 'No GPU', 'vram': 0, 'count': 0}
         try:
-            import torch
-            if torch.cuda.is_available():
+            from core.utils import enumerate_devices
+            all_devs = enumerate_devices()
+            gpu_devs = [d for d in all_devs if d['backend'] in ('cuda', 'rocm', 'mps')]
+            if gpu_devs:
                 total_vram = 0
-                gpu_count = torch.cuda.device_count()
                 names = []
-                for i in range(gpu_count):
-                    props = torch.cuda.get_device_properties(i)
-                    total_vram += props.total_memory
-                    if props.name not in names:
-                        names.append(props.name)
-                        
+                for d in gpu_devs:
+                    mem = d.get('total_memory') or 0
+                    total_vram += mem
+                    if d['name'] not in names:
+                        names.append(d['name'])
                 gpu_data = {
                     'name': " + ".join(names) if names else "Multiple GPUs",
                     'vram': round(total_vram / (1024**2)),
-                    'count': gpu_count,
+                    'count': len(gpu_devs),
                 }
         except Exception:
             pass
