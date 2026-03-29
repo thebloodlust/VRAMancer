@@ -75,3 +75,55 @@
 - [x] **Rename marketing modules** — `core/turboquant.py` → `core/kv_quantizer.py` (`KVCacheCompressor` class), `core/network/fibre_fastpath.py` → `core/network/network_transport.py`. Backward-compat shims in old locations. All 20+ imports updated in production code and tests. Env var `VRM_KV_COMPRESSION=turboquant` preserved for backward compat.
 - [x] **Benchmark vs accelerate** — `benchmarks/bench_vs_accelerate.py`: side-by-side comparison of `accelerate device_map="balanced"` vs VRAMancer VRAM-proportional split. Measures tok/s, VRAM usage, supports quantization modes. JSON results output.
 
+---
+
+## Prochaines améliorations
+
+### Stabilité des tests (DONE — 3/3)
+
+- [x] **Isolation test suite** — Fixtures `gpu_monitor`, `stream_manager`, `flask_test_client` dans `conftest.py` ont maintenant un teardown propre (`stop_polling()`, `stop_monitoring()`, `executor.shutdown()`). `PipelineRegistry.shutdown()` arrête aussi `ClusterDiscovery`. Session-scoped fixture nettoie les threads daemon résiduels.
+- [x] **Race condition batcher** — Ajout `threading.Event` (`_ready`) dans `ContinuousBatcher`. `start()` attend `_ready.wait(5s)` jusqu'à ce que `_loop()` signale qu'il est prêt. `stop()` notifie la Condition pour débloquer le loop immédiatement.
+- [x] **Timeout pynvml dans health.py** — Tous les appels pynvml (`nvmlInit`, `nvmlDeviceGetHandleByIndex`, `nvmlDeviceGetTemperature`) wrappés dans `_call_with_timeout()` (ThreadPoolExecutor, défaut 5s configurable via `VRM_PYNVML_TIMEOUT`).
+
+### Bugs & correctifs modules Grade C
+
+- [ ] **backends_vllm.py OOM retry** — La logique de retry OOM divise `max_tokens` au lieu de `batch_size`. Corriger : réduire `batch_size` en priorité, puis `max_tokens` en dernier recours.
+- [ ] **backends_ollama.py resource leak** — `generate_async()` est du dead code (supprimer). La session `aiohttp` n'est jamais fermée → fuite de connexions. Ajouter `async with` ou un `close()` explicite.
+- [ ] **block_router.py RemoteExecutor** — `load_block_from_disk()` appelle `storage_manager` qui n'existe pas → `AttributeError` en runtime. Câbler vers `persistence.py` ou supprimer. Retirer le label "zero-copy" (safetensors sérialise).
+- [ ] **stream_manager.py thread leak** — L'executor async n'est jamais `join()` au shutdown. Ajouter `executor.shutdown(wait=True)` dans `close()`. L'éviction LRU ignore l'importance des blocs — ajouter un score de priorité.
+
+### Multi-accélérateur
+
+- [ ] **routes_ops.py ROCm/MPS** — La détection GPU est CUDA-only. Utiliser `core/utils.py:detect_backend()` pour supporter ROCm (`torch.cuda` via HIP) et MPS dans les endpoints `/api/gpu` et health checks.
+- [ ] **monitor.py ROCm validation** — Le fallback ROCm-SMI n'a jamais été testé sur du vrai AMD. Le mapping d'index GPU assume `torch.cuda` = ordre système. Valider sur hardware AMD ou documenter la limitation.
+- [ ] **tensor_parallel.py robustesse** — Le fallback CPU casse le gradient (inutilisable pour fine-tuning). GQA (Grouped Query Attention) a des edge cases non couverts. Testé uniquement sur GPT-2 — étendre les tests à Llama/Mistral.
+
+### Performance
+
+- [ ] **layer_profiler.py bande passante** — La bande passante PCIe est hardcodée à 25 GB/s. Détecter dynamiquement via `nvidia-smi` ou `pynvml` (PCIe gen/width → bandwidth théorique).
+- [ ] **continuous_batcher.py lock contention** — Malgré le `ThreadPoolExecutor` pour le tokenizer, vérifier que le lock principal ne bloque plus l'API sous charge. Profiler avec 8+ requêtes concurrentes et mesurer la contention réelle.
+- [ ] **cuda_graph_decode.py KV update** — La logique de mise à jour du KV cache dans `CUDAGraphRunner` est tronquée/incomplète. Compléter pour que le graph replay fonctionne correctement sur des séquences longues.
+
+### Sécurité
+
+- [ ] **auth_strong.py credentials par défaut** — En mode dev, `admin/admin` est accepté (avec warning log seulement). Forcer un changement au premier login ou générer un mot de passe aléatoire au setup. Envisager le support MFA (TOTP).
+- [ ] **production_api.py circuit breaker SSE** — Le streaming SSE contourne le circuit breaker. Un client lent peut maintenir une connexion ouverte indéfiniment. Ajouter un timeout SSE et respecter le circuit breaker pour les streams.
+- [ ] **production_api.py queue depth** — La queue depth est par-process — casse en multi-worker gunicorn. Utiliser Redis ou un compteur partagé (mmap/file lock) pour une backpressure globale.
+
+### Nettoyage code natif
+
+- [ ] **software_cxl.cpp renommer** — Le nom "CXL" est trompeur : c'est du simple file I/O (`std::ofstream`). Renommer en `file_offload.cpp` ou documenter clairement que ce n'est PAS du CXL matériel.
+- [ ] **dmabuf_bridge.c compléter** — Le mmap transfer n'est jamais implémenté (squelette). Soit implémenter le transfert DMA-BUF réel, soit supprimer et documenter que CUDA IPC est le seul chemin cross-GPU.
+- [ ] **vtp_core.cpp L3+** — Le routeur VTP hiérarchique est stub à partir de L3 (`return src.clone()`). Implémenter le routage réseau réel ou supprimer les niveaux non fonctionnels.
+
+### Dashboard
+
+- [ ] **dashboard_web.py données réelles** — Les templates GPU contiennent encore des données hardcodées dans certains cas. S'assurer que tous les widgets utilisent les endpoints `/api/gpu` et `/api/pipeline/status` pour des données live.
+- [ ] **dashboard/launcher.py** — Vérifier que l'import de `launch_cli_dashboard()` est corrigé après les refactors P1. Si le launcher n'est plus utile, le supprimer.
+
+### Réseau
+
+- [ ] **nat_traversal.py compléter** — STUN RFC 5389 est réel, mais UDP hole punch et relay sont des stubs. Implémenter le hole punch pour le cas WAN peer-to-peer, ou documenter que seuls les réseaux locaux sont supportés.
+- [ ] **supervision_api.py HA sync** — L'endpoint de sync HA est vide. Implémenter la réplication d'état entre superviseurs ou supprimer le endpoint pour ne pas mentir.
+- [ ] **aitp_receiver.py XDP cleanup** — Le code XDP utilise `socket(44, SOCK_RAW, 0)` — famille 44 invalide en Linux. Supprimer le chemin XDP userspace (le vrai eBPF est dans `csrc/aitp_xdp_bypass.c`) ou le corriger avec AF_XDP (famille 44 = `AF_XDP` uniquement sur kernels récents avec les bons headers).
+

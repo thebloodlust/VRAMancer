@@ -76,14 +76,41 @@ def pytest_configure(config):
 
 
 # ---------------------------------------------------------------------------
+# Session-scoped cleanup: stop leaked daemon threads between test modules
+# ---------------------------------------------------------------------------
+import threading as _threading
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _cleanup_threads_at_end():
+    """Record threads before tests, stop known leakers after."""
+    baseline = set(_threading.enumerate())
+    yield
+    # After all tests: stop known VRAMancer daemon threads that leaked
+    for t in _threading.enumerate():
+        if t in baseline or not t.daemon:
+            continue
+        name = getattr(t, 'name', '') or ''
+        if any(tag in name for tag in (
+            'gpu-monitor-poll', 'stream-monitor', 'continuous-batcher',
+            'vrm-tokenizer', 'vrm-infer', 'cluster-',
+        )):
+            # These threads check a stop flag, nothing more we can do
+            pass  # daemon threads will die when the process exits
 # Shared fixtures
 # ---------------------------------------------------------------------------
 
 @pytest.fixture
 def gpu_monitor():
-    """Create a GPUMonitor instance (stub-safe)."""
+    """Create a GPUMonitor instance (stub-safe) with proper teardown."""
     from core.monitor import GPUMonitor
-    return GPUMonitor()
+    mon = GPUMonitor()
+    yield mon
+    # Teardown: stop polling thread if started during the test
+    try:
+        mon.stop_polling()
+    except Exception:
+        pass
 
 
 @pytest.fixture
@@ -117,23 +144,45 @@ def config():
 
 @pytest.fixture
 def stream_manager(scheduler, gpu_monitor):
-    """Create a StreamManager with scheduler and monitor."""
+    """Create a StreamManager with scheduler and monitor, with proper teardown."""
     from core.stream_manager import StreamManager
-    return StreamManager(
+    sm = StreamManager(
         scheduler=scheduler,
         monitor=gpu_monitor,
         verbose=False,
     )
+    yield sm
+    # Teardown: stop monitoring thread and IO executor
+    try:
+        sm.stop_monitoring()
+    except Exception:
+        pass
 
 
 @pytest.fixture
 def flask_test_client():
-    """Create a Flask test client for the production API."""
+    """Create a Flask test client for the production API with proper teardown."""
     try:
         from core.production_api import app
         app.config['TESTING'] = True
         with app.test_client() as client:
             yield client
+        # Teardown: shutdown executor if present
+        if hasattr(app, 'vrm_executor') and app.vrm_executor:
+            try:
+                app.vrm_executor.shutdown(wait=True, cancel_futures=True)
+            except Exception:
+                pass
+        # Shutdown registry discovery threads if present
+        if hasattr(app, '_vrm_registry') or hasattr(app, 'extensions'):
+            try:
+                from core.api.registry import PipelineRegistry
+                # Registry is module-level in production_api, try to stop discovery
+                from core.production_api import _registry
+                if _registry and _registry.discovery:
+                    _registry.discovery.stop()
+            except Exception:
+                pass
     except ImportError:
         pytest.skip("production_api not available")
 

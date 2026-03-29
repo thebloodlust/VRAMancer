@@ -147,6 +147,7 @@ class ContinuousBatcher:
         self._lock = threading.Lock()
         self._has_work = threading.Condition(self._lock)
         self._running = False
+        self._ready = threading.Event()  # signals _loop() is executing
         self._thread: Optional[threading.Thread] = None
 
         # Metrics
@@ -216,6 +217,7 @@ class ContinuousBatcher:
             if self._running:
                 return
             self._running = True
+            self._ready.clear()
             self._start_time = time.time()
             self._thread = threading.Thread(
                 target=self._loop,
@@ -223,11 +225,16 @@ class ContinuousBatcher:
                 name="continuous-batcher",
             )
             self._thread.start()
+        # Wait until _loop() is actually executing before returning
+        self._ready.wait(timeout=5.0)
         _logger.info("ContinuousBatcher started (max_batch=%d)", self.max_batch_size)
 
     def stop(self, timeout: float = 10.0) -> None:
         """Stop the batcher gracefully."""
         self._running = False
+        # Wake the loop so it can see _running=False and exit
+        with self._has_work:
+            self._has_work.notify_all()
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=timeout)
         # Shutdown tokenizer thread pool
@@ -279,6 +286,7 @@ class ContinuousBatcher:
 
         Uses threading.Condition for responsive wake-up instead of polling.
         """
+        self._ready.set()  # Signal that _loop() is now executing
         while self._running:
             # Phase 1: Move waiting requests to a staging list under lock
             with self._has_work:

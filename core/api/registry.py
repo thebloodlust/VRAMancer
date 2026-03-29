@@ -76,6 +76,12 @@ class PipelineRegistry:
                 except Exception:
                     pass
                 self._pipeline = None
+            # Stop cluster discovery threads
+            if self.discovery:
+                try:
+                    self.discovery.stop()
+                except Exception:
+                    pass
 
     # ------------------------------------------------------------------
     # Inference

@@ -15,6 +15,7 @@ Exécution :
 """
 from __future__ import annotations
 import logging
+import concurrent.futures
 
 import importlib
 import json
@@ -31,6 +32,18 @@ except ImportError:
 _MINIMAL = os.environ.get("VRM_MINIMAL_TEST", "")
 
 OPTIONAL = ["vllm", "ollama", "requests", "prometheus_client", "psutil"]
+
+_PYNVML_TIMEOUT = float(os.environ.get("VRM_PYNVML_TIMEOUT", "5"))
+
+
+def _call_with_timeout(fn, *args, timeout: float = _PYNVML_TIMEOUT):
+    """Run *fn* in a thread with a timeout. Returns None on timeout/error."""
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        fut = pool.submit(fn, *args)
+        try:
+            return fut.result(timeout=timeout)
+        except (concurrent.futures.TimeoutError, Exception):
+            return None
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -98,16 +111,24 @@ def gpu_detailed_health() -> Dict[str, Any]:
     except Exception:
         pass
 
-    # Get temperature via pynvml if available
+    # Get temperature via pynvml if available (with timeout protection)
     nvml_handles = {}
     try:
         import pynvml
-        pynvml.nvmlInit()
-        for i in range(torch.cuda.device_count()):
-            try:
-                nvml_handles[i] = pynvml.nvmlDeviceGetHandleByIndex(i)
-            except Exception:
-                pass
+
+        def _init_nvml_handles():
+            pynvml.nvmlInit()
+            handles = {}
+            for i in range(torch.cuda.device_count()):
+                try:
+                    handles[i] = pynvml.nvmlDeviceGetHandleByIndex(i)
+                except Exception:
+                    pass
+            return handles
+
+        result = _call_with_timeout(_init_nvml_handles)
+        if result is not None:
+            nvml_handles = result
     except ImportError:
         pass
 
@@ -124,14 +145,20 @@ def gpu_detailed_health() -> Dict[str, Any]:
             gpu_info["vram_free_mb"] = round((total - allocated) / 1e6)
             gpu_info["vram_pct"] = round(allocated / max(total, 1) * 100, 1)
 
-            # Temperature
+            # Temperature (with timeout — pynvml can hang on stuck GPU)
             handle = nvml_handles.get(i)
             if handle:
                 try:
                     import pynvml
-                    temp = pynvml.nvmlDeviceGetTemperature(handle, pynvml.NVML_TEMPERATURE_GPU)
-                    gpu_info["temperature_c"] = temp
-                    gpu_info["thermal_ok"] = temp < 85
+                    temp = _call_with_timeout(
+                        pynvml.nvmlDeviceGetTemperature,
+                        handle, pynvml.NVML_TEMPERATURE_GPU,
+                    )
+                    if temp is not None:
+                        gpu_info["temperature_c"] = temp
+                        gpu_info["thermal_ok"] = temp < 85
+                    else:
+                        gpu_info["temperature_c"] = -1
                 except Exception:
                     gpu_info["temperature_c"] = -1
 

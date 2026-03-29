@@ -309,7 +309,7 @@ class StreamManager:
         if self._monitor_thread and self._monitor_thread.is_alive():
             self._monitor_thread.join(timeout=5)
         if hasattr(self, '_io_executor') and self._io_executor:
-            self._io_executor.shutdown(wait=False, cancel_futures=True)
+            self._io_executor.shutdown(wait=True, cancel_futures=True)
         self.logger.info("Stream monitoring stopped")
 
     def _monitor_loop(self, interval: float) -> None:
