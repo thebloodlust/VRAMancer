@@ -272,8 +272,8 @@ class StreamManager:
         if not candidates:
             return False
 
-        # Sort by priority (highest number = lowest priority = migrate first)
-        candidates.sort(key=lambda x: -x[1].priority)
+        # Sort by priority ascending — lowest priority should migrate first
+        candidates.sort(key=lambda x: x[1].priority)
         name, block = candidates[0]
 
         try:
@@ -360,7 +360,8 @@ class StreamManager:
         if not candidates:
             return
 
-        candidates.sort(key=lambda x: -x[1].priority)
+        # Sort ascending — evict lowest priority first
+        candidates.sort(key=lambda x: x[1].priority)
         name, block = candidates[0]
 
         # Don't evict active layers

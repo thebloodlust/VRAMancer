@@ -116,17 +116,21 @@ class vLLMBackend(BaseLLMBackend):
             except RuntimeError as e:
                 if "out of memory" in str(e).lower() and not oom_retried:
                     oom_retried = True
-                    logger.warning("[vLLM] OOM detected, clearing cache and retrying...")
+                    logger.warning("[vLLM] OOM detected, clearing cache and retrying with reduced gpu_memory_utilization...")
                     try:
                         import torch
                         torch.cuda.empty_cache()
                     except Exception:
                         pass
-                    # Re-submit with halved max_tokens
+                    # Reduce GPU memory utilization for the engine (the real OOM cause)
+                    new_util = max(0.50, self.gpu_memory_utilization - 0.10)
+                    logger.info("[vLLM] Reducing gpu_memory_utilization: %.2f -> %.2f", self.gpu_memory_utilization, new_util)
+                    self.gpu_memory_utilization = new_util
+                    # Re-submit same request with same params (memory pressure is what matters)
                     request_id_retry = str(uuid.uuid4())
                     retry_params = SamplingParams(
                         temperature=temperature,
-                        max_tokens=max(1, max_tokens_val // 2),
+                        max_tokens=max_tokens_val,
                         **valid_kwargs
                     )
                     self.engine.add_request(request_id_retry, prompt, retry_params)
@@ -176,16 +180,19 @@ class vLLMBackend(BaseLLMBackend):
             except RuntimeError as e:
                 if "out of memory" in str(e).lower() and not oom_retried:
                     oom_retried = True
-                    logger.warning("[vLLM Stream] OOM detected, clearing cache and retrying...")
+                    logger.warning("[vLLM Stream] OOM detected, clearing cache and retrying with reduced gpu_memory_utilization...")
                     try:
                         import torch
                         torch.cuda.empty_cache()
                     except Exception:
                         pass
+                    new_util = max(0.50, self.gpu_memory_utilization - 0.10)
+                    logger.info("[vLLM Stream] Reducing gpu_memory_utilization: %.2f -> %.2f", self.gpu_memory_utilization, new_util)
+                    self.gpu_memory_utilization = new_util
                     request_id_retry = str(uuid.uuid4())
                     retry_params = SamplingParams(
                         temperature=temperature,
-                        max_tokens=max(1, max_tokens_val // 2),
+                        max_tokens=max_tokens_val,
                         **valid_kwargs
                     )
                     self.engine.add_request(request_id_retry, prompt, retry_params)

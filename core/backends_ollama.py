@@ -12,17 +12,8 @@ from core.backends import BaseLLMBackend
 from core.logger import LoggerAdapter
 
 
-try:
-    import aiohttp
-    _HAS_AIOHTTP = True
-except ImportError:
-    _HAS_AIOHTTP = False
-
 class OllamaBackend(BaseLLMBackend):
-    """Ollama backend with fully asynchronous high-throughput integration.
-
-    Communicates with a local Ollama server natively using asyncio
-    to prevent worker threads from blocking during token generation.
+    """Ollama backend — communicates with a local Ollama server via REST API.
     """
     def __init__(self, real: bool = True):
         self.model = None
@@ -30,7 +21,6 @@ class OllamaBackend(BaseLLMBackend):
         self.log = LoggerAdapter("backend.ollama" + (".stub" if not real else ""))
         self.real = real
         self._base_url = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-        self._session = None
 
     def load_model(self, model_name: str, **kwargs):
         self.model_name = model_name
@@ -72,38 +62,6 @@ class OllamaBackend(BaseLLMBackend):
             return {"text": "stub-ollama-output", "len_in": getattr(inputs, 'shape', '?')}
         prompt = inputs if isinstance(inputs, str) else str(inputs)
         return {"text": self.generate(prompt), "model": self.model}
-
-    async def generate_async(self, prompt: str, max_new_tokens: int = 128, **kwargs) -> str:
-        """Fully async generate via aiohttp."""
-        if not _HAS_AIOHTTP:
-            import asyncio
-            # Fallback wrapper if aiohttp isn't installed
-            loop = asyncio.get_event_loop()
-            return await loop.run_in_executor(None, lambda: self.generate(prompt, max_new_tokens, **kwargs))
-            
-        if self._session is None:
-            self._session = aiohttp.ClientSession()
-
-        payload = {
-            "model": self.model,
-            "prompt": prompt,
-            "stream": False,
-            "options": {
-                "num_predict": max_new_tokens,
-                "temperature": kwargs.get('temperature', 1.0),
-                "top_p": kwargs.get('top_p', 1.0),
-                "top_k": kwargs.get('top_k', 50),
-                "num_gpu": kwargs.get('num_gpu', -1),
-            },
-        }
-
-        async with self._session.post(f"{self._base_url}/api/generate", json=payload) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                return data.get('response', '')
-            text = await resp.text()
-            self.log.error(f"Ollama API error: {resp.status} {text[:200]}")
-            raise RuntimeError(f"Ollama API returned {resp.status}")
 
     def generate(self, prompt: str, max_new_tokens: int = 128, **kwargs) -> str:
         """Generate text via Ollama REST API (Sync fallback)."""

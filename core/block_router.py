@@ -51,12 +51,23 @@ except Exception:  # pragma: no cover
             return 0, 0
 
 def load_block_from_disk(path):
-    _logger.warning("storage_manager unavailable, returning identity stub for %s", path)
+    """Load a saved model block from disk."""
     try:
         import torch
+        if os.path.exists(path):
+            return torch.load(path, map_location="cpu", weights_only=True)
+        _logger.warning("Block file not found: %s, returning identity stub", path)
         return torch.nn.Identity()
     except ImportError:
+        _logger.warning("torch unavailable, returning identity stub for %s", path)
         return lambda x: x
+    except Exception as exc:
+        _logger.warning("Failed to load block from %s: %s, returning identity stub", path, exc)
+        try:
+            import torch
+            return torch.nn.Identity()
+        except ImportError:
+            return lambda x: x
 
 try:
     from core.config import get_config
@@ -184,7 +195,7 @@ class RemoteExecutor:
                 _logger.error(f"Zero-Trust Violation: Invalid signature from {self.host}:{self.port}")
                 raise ValueError("Untrusted response payload")
 
-            # Dessérialisation dynamique (Zero-Copy ou Pickle Legacy)
+            # Deserialization (safetensors binary or torch pickle)
             resp_type = resp_payload[:1]
             pure_data = resp_payload[1:]
             

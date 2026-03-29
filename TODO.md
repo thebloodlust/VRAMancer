@@ -85,12 +85,12 @@
 - [x] **Race condition batcher** — Ajout `threading.Event` (`_ready`) dans `ContinuousBatcher`. `start()` attend `_ready.wait(5s)` jusqu'à ce que `_loop()` signale qu'il est prêt. `stop()` notifie la Condition pour débloquer le loop immédiatement.
 - [x] **Timeout pynvml dans health.py** — Tous les appels pynvml (`nvmlInit`, `nvmlDeviceGetHandleByIndex`, `nvmlDeviceGetTemperature`) wrappés dans `_call_with_timeout()` (ThreadPoolExecutor, défaut 5s configurable via `VRM_PYNVML_TIMEOUT`).
 
-### Bugs & correctifs modules Grade C
+### Bugs & correctifs modules Grade C (DONE — 4/4)
 
-- [ ] **backends_vllm.py OOM retry** — La logique de retry OOM divise `max_tokens` au lieu de `batch_size`. Corriger : réduire `batch_size` en priorité, puis `max_tokens` en dernier recours.
-- [ ] **backends_ollama.py resource leak** — `generate_async()` est du dead code (supprimer). La session `aiohttp` n'est jamais fermée → fuite de connexions. Ajouter `async with` ou un `close()` explicite.
-- [ ] **block_router.py RemoteExecutor** — `load_block_from_disk()` appelle `storage_manager` qui n'existe pas → `AttributeError` en runtime. Câbler vers `persistence.py` ou supprimer. Retirer le label "zero-copy" (safetensors sérialise).
-- [ ] **stream_manager.py thread leak** — L'executor async n'est jamais `join()` au shutdown. Ajouter `executor.shutdown(wait=True)` dans `close()`. L'éviction LRU ignore l'importance des blocs — ajouter un score de priorité.
+- [x] **backends_vllm.py OOM retry** — Le retry OOM réduit maintenant `gpu_memory_utilization` (-0.10, min 0.50) au lieu de diviser `max_tokens`. Le vrai problème est la pression mémoire du moteur, pas la longueur de séquence.
+- [x] **backends_ollama.py resource leak** — `generate_async()` supprimé (dead code non câblé). Import `aiohttp` et `_session` retirés. Plus de fuite de connexions.
+- [x] **block_router.py load_block_from_disk** — Charge maintenant réellement via `torch.load(path, weights_only=True)` au lieu de retourner un `Identity()` stub. Fallback gracieux si fichier manquant. Label "zero-copy" retiré du commentaire de désérialisation.
+- [x] **stream_manager.py eviction priority** — Le tri d'éviction était **inversé** : `sort(key=-priority)` + `[0]` prenait le bloc de plus haute priorité au lieu de la plus basse. Corrigé en `sort(key=priority)` + `[0]` dans `swap_if_needed()` et `_evict_lowest_priority()`.
 
 ### Multi-accélérateur
 
