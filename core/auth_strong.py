@@ -26,6 +26,7 @@ class User:
     pwd_hash: str
     role: str = "user"
     salt: str = ""
+    must_change_password: bool = False
 
 _USERS: Dict[str, User] = {}
 _REFRESH_STORE: Dict[str, dict] = {}  # refresh_token -> {sub, exp}
@@ -33,12 +34,14 @@ _REFRESH_STORE: Dict[str, dict] = {}  # refresh_token -> {sub, exp}
 def _hash_password(password: str, salt: str) -> str:
     return hashlib.pbkdf2_hmac('sha256', password.encode(), salt.encode(), 120_000).hex()
 
-def create_user(username: str, password: str, role: str = "user"):
+def create_user(username: str, password: str, role: str = "user",
+                must_change_password: bool = False):
     if username in _USERS:
         raise ValueError("user exists")
     salt = secrets.token_hex(8)
     pwd_hash = _hash_password(password, salt)
-    _USERS[username] = User(username, pwd_hash, role, salt)
+    _USERS[username] = User(username, pwd_hash, role, salt,
+                            must_change_password=must_change_password)
 
 def verify_user(username: str, password: str) -> bool:
     u = _USERS.get(username)
@@ -68,7 +71,8 @@ def issue_tokens(username: str) -> dict:
     now = int(time.time())
     exp_access = now + int(os.environ.get('VRM_AUTH_EXP','900'))
     exp_refresh = now + int(os.environ.get('VRM_AUTH_REFRESH_EXP','86400'))
-    payload = {"sub": username, "role": u.role, "iat": now, "exp": exp_access, "typ": "access"}
+    payload = {"sub": username, "role": u.role, "iat": now, "exp": exp_access, "typ": "access",
+               "pwd_change": u.must_change_password}
     secret = _get_secret()
     access = jwt.encode(payload, secret, algorithm='HS256')
     refresh_payload = {"sub": username, "iat": now, "exp": exp_refresh, "typ": "refresh"}
@@ -101,6 +105,19 @@ def decode_access(token: str) -> Optional[dict]:
     except Exception:
         return None
 
+
+def change_password(username: str, old_password: str, new_password: str) -> bool:
+    """Change a user's password. Returns True on success."""
+    if not verify_user(username, old_password):
+        return False
+    u = _USERS[username]
+    salt = secrets.token_hex(8)
+    u.pwd_hash = _hash_password(new_password, salt)
+    u.salt = salt
+    u.must_change_password = False
+    return True
+
+
 def ensure_default_admin():  # auto bootstrap
     if not _USERS:
         import logging
@@ -113,16 +130,34 @@ def ensure_default_admin():  # auto bootstrap
             )
             return
         dev_password = os.environ.get("VRM_DEFAULT_ADMIN_PASS")
+        force_change = False
         if not dev_password:
             dev_password = secrets.token_urlsafe(16)
-            _logger.warning(
-                "SECURITY: No VRM_DEFAULT_ADMIN_PASS set. "
-                "Generated random admin password: %s  "
-                "Set VRM_DEFAULT_ADMIN_PASS env var to use a fixed password.",
-                dev_password,
+            force_change = True
+            # Write password to a file instead of logging it in plaintext
+            creds_file = os.path.join(
+                os.environ.get("VRM_DATA_DIR", "."), ".vrm_admin_creds"
             )
-        create_user('admin', dev_password, 'admin')
-        _logger.info("Dev admin user created (username=admin).")
+            try:
+                fd = os.open(creds_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                with os.fdopen(fd, "w") as f:
+                    f.write(f"username=admin\npassword={dev_password}\n")
+                _logger.warning(
+                    "SECURITY: Generated random admin password — written to %s "
+                    "(mode 0600). Change it via /api/auth/change-password. "
+                    "Set VRM_DEFAULT_ADMIN_PASS env var to skip this.",
+                    creds_file,
+                )
+            except OSError:
+                # Can't write file — log hashed hint instead of plaintext
+                _logger.warning(
+                    "SECURITY: Generated random admin password (cannot write creds file). "
+                    "Set VRM_DEFAULT_ADMIN_PASS env var to use a fixed password."
+                )
+        create_user('admin', dev_password, 'admin',
+                     must_change_password=force_change)
+        _logger.info("Dev admin user created (username=admin, must_change=%s).",
+                      force_change)
 
 __all__ = [
     'create_user','verify_user','issue_tokens','refresh_token','decode_access','ensure_default_admin'

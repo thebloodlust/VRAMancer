@@ -39,6 +39,85 @@ os.environ.setdefault('VRM_API_BASE', f'http://localhost:{API_PORT}')
 # Inference queue settings
 _INFERENCE_TIMEOUT = int(os.environ.get('VRM_INFERENCE_TIMEOUT', '120'))
 _MAX_QUEUE_SIZE = int(os.environ.get('VRM_MAX_QUEUE_SIZE', '32'))
+_SSE_TIMEOUT = int(os.environ.get('VRM_SSE_TIMEOUT', '300'))
+
+
+class _QueueCounter:
+    """Queue depth counter — thread-safe, optionally cross-process (VRM_SHARED_QUEUE=1)."""
+
+    def __init__(self, max_size: int, shared_path: str | None = None):
+        self._max = max_size
+        self._shared = shared_path is not None
+        if self._shared:
+            import struct as _struct
+            self._struct = _struct
+            self._path = shared_path
+            fd = os.open(shared_path, os.O_RDWR | os.O_CREAT, 0o600)
+            if os.fstat(fd).st_size < 4:
+                os.write(fd, b'\x00\x00\x00\x00')
+            os.close(fd)
+        else:
+            self._count = 0
+            self._lock = threading.Lock()
+
+    def try_acquire(self) -> bool:
+        """Atomically try to increment. Returns True if under max_size."""
+        if self._shared:
+            return self._shared_try_acquire()
+        with self._lock:
+            if self._count >= self._max:
+                return False
+            self._count += 1
+            return True
+
+    def release(self):
+        """Decrement queue depth."""
+        if self._shared:
+            return self._shared_release()
+        with self._lock:
+            self._count = max(0, self._count - 1)
+
+    @property
+    def depth(self) -> int:
+        if self._shared:
+            return self._shared_depth()
+        return self._count
+
+    # --- file-lock implementation (cross-process via fcntl) ---
+
+    def _shared_try_acquire(self) -> bool:
+        import fcntl
+        with open(self._path, 'r+b') as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            try:
+                data = f.read(4)
+                count = self._struct.unpack('<i', data)[0] if len(data) == 4 else 0
+                if count >= self._max:
+                    return False
+                f.seek(0)
+                f.write(self._struct.pack('<i', count + 1))
+                f.flush()
+                return True
+            finally:
+                fcntl.flock(f, fcntl.LOCK_UN)
+
+    def _shared_release(self):
+        import fcntl
+        with open(self._path, 'r+b') as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            try:
+                data = f.read(4)
+                count = self._struct.unpack('<i', data)[0] if len(data) == 4 else 0
+                f.seek(0)
+                f.write(self._struct.pack('<i', max(0, count - 1)))
+                f.flush()
+            finally:
+                fcntl.flock(f, fcntl.LOCK_UN)
+
+    def _shared_depth(self) -> int:
+        with open(self._path, 'rb') as f:
+            data = f.read(4)
+            return self._struct.unpack('<i', data)[0] if len(data) == 4 else 0
 
 # ---------------------------------------------------------------------------
 # Pipeline registry (extracted to core.api.registry)
@@ -134,8 +213,14 @@ def create_app(model_name: Optional[str] = None,
     )
     # Store executor on app for graceful shutdown
     application.vrm_executor = executor
-    queue_depth = [0]  # mutable for closure
-    queue_lock = threading.Lock()
+
+    # Queue depth tracking — per-process by default, cross-process via VRM_SHARED_QUEUE=1
+    _shared_path = None
+    if os.environ.get('VRM_SHARED_QUEUE', '0') in ('1', 'true'):
+        _shared_path = os.path.join(
+            os.environ.get('VRM_DATA_DIR', '/tmp'), '.vrm_queue_depth'
+        )
+    _queue = _QueueCounter(_MAX_QUEUE_SIZE, shared_path=_shared_path)
 
     def _run_with_timeout(fn, timeout_s=None):
         """Run fn with timeout, queue backpressure and circuit-breaker.
@@ -151,10 +236,8 @@ def create_app(model_name: Optional[str] = None,
                 "(too many recent failures)", 503
             )
 
-        with queue_lock:
-            if queue_depth[0] >= _MAX_QUEUE_SIZE:
-                return None, ("Queue full — server overloaded, try again later", 429)
-            queue_depth[0] += 1
+        if not _queue.try_acquire():
+            return None, ("Queue full — server overloaded, try again later", 429)
 
         try:
             future = executor.submit(fn)
@@ -176,11 +259,10 @@ def create_app(model_name: Optional[str] = None,
                     _circuit_breaker.record_failure()
                 raise
         finally:
-            with queue_lock:
-                queue_depth[0] -= 1
+            _queue.release()
 
     # Register all routes
-    _register_routes(application, _run_with_timeout, queue_depth, queue_lock,
+    _register_routes(application, _run_with_timeout, _queue,
                       _circuit_breaker)
 
     # Pre-load model if requested
@@ -199,7 +281,7 @@ def create_app(model_name: Optional[str] = None,
 # Route registration
 # ============================================================================
 
-def _register_routes(application: Flask, _run_with_timeout, queue_depth, queue_lock,
+def _register_routes(application: Flask, _run_with_timeout, _queue,
                       _circuit_breaker=None):
     """Register all routes on a Flask app instance."""
 
@@ -236,7 +318,7 @@ def _register_routes(application: Flask, _run_with_timeout, queue_depth, queue_l
         """Wrap an SSE generator with circuit-breaker and queue protection.
 
         Checks the circuit-breaker before streaming begins, counts
-        in-flight SSE requests in queue_depth, and records
+        in-flight SSE requests via _queue counter, and records
         success/failure when the generator completes or errors.
         """
         # 1. Circuit-breaker check
@@ -250,22 +332,27 @@ def _register_routes(application: Flask, _run_with_timeout, queue_depth, queue_l
                             headers={'Cache-Control': 'no-cache'})
 
         # 2. Queue backpressure
-        with queue_lock:
-            if queue_depth[0] >= _MAX_QUEUE_SIZE:
-                def _q_error():
-                    yield ('data: {"error": {"message": '
-                           '"Queue full — server overloaded, try again later", '
-                           '"type": "server_error"}}\n\n')
-                return Response(_q_error(), mimetype='text/event-stream',
-                                status=503,
-                                headers={'Cache-Control': 'no-cache'})
-            queue_depth[0] += 1
+        if not _queue.try_acquire():
+            def _q_error():
+                yield ('data: {"error": {"message": '
+                       '"Queue full — server overloaded, try again later", '
+                       '"type": "server_error"}}\n\n')
+            return Response(_q_error(), mimetype='text/event-stream',
+                            status=503,
+                            headers={'Cache-Control': 'no-cache'})
 
         # 3. Wrapped generator with cleanup
         def _wrapped():
             try:
                 _start = time.perf_counter()
-                yield from gen_fn()
+                _timeout = _SSE_TIMEOUT
+                for chunk in gen_fn():
+                    if time.perf_counter() - _start > _timeout:
+                        yield (f'data: {json.dumps({"error": {"message": "SSE stream timeout", "type": "timeout"}})}\n\n')
+                        if _circuit_breaker:
+                            _circuit_breaker.record_failure()
+                        return
+                    yield chunk
                 if _circuit_breaker:
                     _circuit_breaker.record_success()
                 _elapsed = time.perf_counter() - _start
@@ -281,8 +368,7 @@ def _register_routes(application: Flask, _run_with_timeout, queue_depth, queue_l
                     _circuit_breaker.record_failure()
                 yield (f'data: {json.dumps({"error": {"message": str(exc), "type": "server_error"}})}\n\n')
             finally:
-                with queue_lock:
-                    queue_depth[0] -= 1
+                _queue.release()
 
         return Response(
             _wrapped(),
@@ -992,12 +1078,12 @@ def _register_routes(application: Flask, _run_with_timeout, queue_depth, queue_l
     def queue_status():
         """Inference queue status and backpressure info."""
         resp = {
-            'queue_depth': queue_depth[0],
+            'queue_depth': _queue.depth,
             'max_queue_size': _MAX_QUEUE_SIZE,
             'max_concurrent': int(os.environ.get('VRM_MAX_CONCURRENT', '4')),
             'inference_timeout_s': _INFERENCE_TIMEOUT,
             'utilization_pct': round(
-                (queue_depth[0] / max(1, _MAX_QUEUE_SIZE)) * 100, 1
+                (_queue.depth / max(1, _MAX_QUEUE_SIZE)) * 100, 1
             ),
         }
         if _circuit_breaker:

@@ -104,11 +104,11 @@
 - [x] **continuous_batcher.py lock contention** — Audit confirmé : tokenisation et forward GPU sont déjà hors lock. Seules les mutations de queue (append/evict) sont sous lock. Fix : le `ThreadPoolExecutor` tokenizer est maintenant toujours créé (min 1 worker) pour que `_finish_request_decode()` ne bloque jamais la boucle batcher en mode synchrone.
 - [x] **cuda_graph_decode.py KV update** — Ajout de `_GraphState` avec buffers statiques pour `attention_mask`, `position_ids` et `cache_position`. Capture utilise des buffers pré-alloués à `max_seq_len`. Replay met à jour les buffers in-place (même adresses mémoire) et incrémente `cur_pos`. Fallback eager si `cur_pos >= max_seq_len`.
 
-### Sécurité
+### Sécurité (DONE — 3/3)
 
-- [ ] **auth_strong.py credentials par défaut** — En mode dev, `admin/admin` est accepté (avec warning log seulement). Forcer un changement au premier login ou générer un mot de passe aléatoire au setup. Envisager le support MFA (TOTP).
-- [ ] **production_api.py circuit breaker SSE** — Le streaming SSE contourne le circuit breaker. Un client lent peut maintenir une connexion ouverte indéfiniment. Ajouter un timeout SSE et respecter le circuit breaker pour les streams.
-- [ ] **production_api.py queue depth** — La queue depth est par-process — casse en multi-worker gunicorn. Utiliser Redis ou un compteur partagé (mmap/file lock) pour une backpressure globale.
+- [x] **auth_strong.py credentials par défaut** — Mot de passe admin aléatoire écrit dans un fichier `.vrm_admin_creds` (mode 0600) au lieu d'être loggé en clair. Ajout `must_change_password` (User dataclass + JWT payload `pwd_change`). Nouvelle fonction `change_password()`. `create_user()` accepte `must_change_password`. En prod, refus de créer un admin par défaut (déjà le cas).
+- [x] **production_api.py circuit breaker SSE** — Ajout timeout SSE configurable (`VRM_SSE_TIMEOUT`, défaut 300s). Le générateur `_guarded_sse()` vérifie le temps écoulé à chaque chunk et coupe le stream avec un event d'erreur JSON en cas de dépassement. Circuit breaker enregistre un failure sur timeout.
+- [x] **production_api.py queue depth** — Nouveau `_QueueCounter` : thread-safe par défaut (lock interne), cross-process via `VRM_SHARED_QUEUE=1` (file lock `fcntl` sur compteur binaire 4 octets). Remplace `queue_depth[0]` + `queue_lock` partout (factory, routes, SSE, status endpoint).
 
 ### Nettoyage code natif
 
