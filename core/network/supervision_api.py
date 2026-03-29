@@ -3,6 +3,27 @@ API et protocole custom VRAMancer pour supervision avancée des nœuds.
 - État en ligne/hors ligne, type, icône, CPU, RAM, GPU, OS, connexion (USB4, Ethernet, WiFi)
 - Historique, alertes, actions distantes
 - REST + WebSocket
+
+STATUS — HA Sync:
+  /api/ha/apply (receiver) is FULLY IMPLEMENTED:
+    - HMAC-SHA256 signature verification with anti-replay (300s window + nonce)
+    - Compression support (zstd/lz4/zlib)
+    - Full state sync and delta (add/remove) modes
+    - Cluster L1 pressure auto-eviction
+    - Journal rotation with gzip archival
+
+  NOT IMPLEMENTED:
+    - HA push (sender side): no code periodically serializes local state
+      and POSTs it to peer supervisors. An external orchestrator or cron
+      must call /api/ha/apply on each peer to replicate state.
+    - Peer discovery for HA: supervisors don't auto-discover each other.
+      Use VRM_HA_PEERS env var or manual configuration.
+
+  NODES list is populated dynamically via:
+    - WebSocket heartbeat events
+    - /api/edge/report POST from edge devices
+    - /api/telemetry/ingest binary ingestion
+    - /api/ha/apply state replication (HMM registry only, not NODES)
 """
 from flask import Flask, jsonify, request, Response
 import os

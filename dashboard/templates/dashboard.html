@@ -213,9 +213,9 @@
                 logs: [],
                 init() {
                     this.fetchLiveTasks();
-                    setInterval(() => this.updateMockMetrics(), 2000);
+                    setInterval(() => this.updateMetrics(), 2000);
                 },
-                async updateMockMetrics() {
+                async updateMetrics() {
                     try {
                         const r = await fetch('/api/swarm/status');
                         if (r.ok) {
@@ -271,27 +271,30 @@
             .linkDirectionalParticleSpeed(d => d.value * 0.005)
             .cameraPosition({ x: 0, y: 0, z: 250 });
 
-        // Simulate a cluster of exactly 1 Orchestrator, 4 Worker GPUs, 2 NVMe Nodes
-        const gData = {
-            nodes: [
-                { id: 'Orchestrator (Rust/Python)', group: 1, val: 20 },
-                { id: 'Worker GPU 1 (RTX 4090)', group: 2, val: 15 },
-                { id: 'Worker GPU 2 (RTX 3090)', group: 2, val: 15 },
-                { id: 'Worker GPU 3 (Apple M3)', group: 2, val: 10 },
-                { id: 'Worker GPU 4 (WebGPU Edge)', group: 2, val: 8 },
-                { id: 'NVMe Swap Node A', group: 3, val: 5 },
-            ],
-            links: [
-                { source: 'Worker GPU 1 (RTX 4090)', target: 'Orchestrator (Rust/Python)', value: 8 },
-                { source: 'Worker GPU 2 (RTX 3090)', target: 'Orchestrator (Rust/Python)', value: 6 },
-                { source: 'Worker GPU 3 (Apple M3)', target: 'Orchestrator (Rust/Python)', value: 4 },
-                { source: 'Worker GPU 4 (WebGPU Edge)', target: 'Orchestrator (Rust/Python)', value: 2 },
-                { source: 'NVMe Swap Node A', target: 'Orchestrator (Rust/Python)', value: 1 },
-                { source: 'Worker GPU 1 (RTX 4090)', target: 'Worker GPU 2 (RTX 3090)', value: 3 }, // P2P Tokio Link
-            ]
-        };
-
-        Graph.graphData(gData);
+        // Build graph from real GPU data (fetched from /api/gpu)
+        const gData = { nodes: [{ id: 'Orchestrator', group: 1, val: 20 }], links: [] };
+        fetch('/api/gpu').then(r => r.json()).then(data => {
+            const devices = data.devices || [];
+            devices.forEach((gpu, i) => {
+                const name = gpu.name || ('GPU ' + i);
+                const vram_gb = Math.round((gpu.memory_total || 0) / (1024*1024*1024));
+                const label = name + ' (' + vram_gb + ' GB)';
+                gData.nodes.push({ id: label, group: 2, val: Math.max(5, vram_gb) });
+                gData.links.push({ source: label, target: 'Orchestrator', value: 6 });
+                // P2P links between adjacent GPUs
+                if (i > 0) {
+                    const prev = (devices[i-1].name || ('GPU '+(i-1))) + ' (' + Math.round((devices[i-1].memory_total||0)/(1024*1024*1024)) + ' GB)';
+                    gData.links.push({ source: label, target: prev, value: 3 });
+                }
+            });
+            if (devices.length === 0) {
+                gData.nodes.push({ id: 'No GPU detected', group: 3, val: 5 });
+            }
+            Graph.graphData(gData);
+        }).catch(() => {
+            gData.nodes.push({ id: 'No GPU detected', group: 3, val: 5 });
+            Graph.graphData(gData);
+        });
 
         // Make the graph spin slowly for the WOW factor
         let angle = 0;

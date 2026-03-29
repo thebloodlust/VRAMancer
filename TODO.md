@@ -116,14 +116,14 @@
 - [x] **dmabuf_bridge.c documenté** — Header augmenté avec section STATUS : REAL (open/close/export/import/probe/transfer mmap read) vs STUB (`vrm_dmabuf_copy` pointer-based = returns -1, dst mmap write non implémenté). Documente que le chemin cross-GPU effectif est CUDA IPC ou CPU-staged.
 - [x] **vtp_core.cpp L3+ clarifiés** — Header réécrit : REAL (L1/L2 P2P CUDA via `fast_p2p_transfer_cuda`) vs STUB (L3-L7 = `src.clone()`). Commentaires inline pour chaque stub pointant vers les implémentations Python réelles (`core/network/`). L'enum L1-L7 conservé pour l'API.
 
-### Dashboard
+### Dashboard (DONE — 2/2)
 
-- [ ] **dashboard_web.py données réelles** — Les templates GPU contiennent encore des données hardcodées dans certains cas. S'assurer que tous les widgets utilisent les endpoints `/api/gpu` et `/api/pipeline/status` pour des données live.
-- [ ] **dashboard/launcher.py** — Vérifier que l'import de `launch_cli_dashboard()` est corrigé après les refactors P1. Si le launcher n'est plus utile, le supprimer.
+- [x] **dashboard_web.py données réelles** — Template 3D graph remplacé : les nœuds hardcodés (RTX 4090, RTX 3090, Apple M3, WebGPU Edge) sont supprimés. Le graphe charge dynamiquement les GPUs réels via `fetch('/api/gpu')`. Méthode Alpine renommée `updateMockMetrics` → `updateMetrics`.
+- [x] **dashboard/launcher.py** — Corrigé : le branch `web` appelait `dashboard_web()` (le module) au lieu de `dashboard_web.launch()`. Imports nettoyés (retrait `importlib.util`, `subprocess` inutilisés). Import `dashboard_web` déplacé dans le branch pour éviter l'import au top-level.
 
-### Réseau
+### Réseau (DONE — 3/3)
 
-- [ ] **nat_traversal.py compléter** — STUN RFC 5389 est réel, mais UDP hole punch et relay sont des stubs. Implémenter le hole punch pour le cas WAN peer-to-peer, ou documenter que seuls les réseaux locaux sont supportés.
-- [ ] **supervision_api.py HA sync** — L'endpoint de sync HA est vide. Implémenter la réplication d'état entre superviseurs ou supprimer le endpoint pour ne pas mentir.
-- [ ] **aitp_receiver.py XDP cleanup** — Le code XDP utilise `socket(44, SOCK_RAW, 0)` — famille 44 invalide en Linux. Supprimer le chemin XDP userspace (le vrai eBPF est dans `csrc/aitp_xdp_bypass.c`) ou le corriger avec AF_XDP (famille 44 = `AF_XDP` uniquement sur kernels récents avec les bons headers).
+- [x] **nat_traversal.py compléter** — Docstring réécrite avec section STATUS détaillant REAL (STUN client, IPv6 detection, LAN ULA), FUNCTIONAL (hole punch — requiert coordination simultanée, relay send — one-shot unidirectionnel sans serveur), NOT IMPLEMENTED (relay server, NAT type classification, 6in4/Teredo tunnel). Conclusion : VRAMancer est conçu pour LAN ou WAN direct, multi-site NAT nécessite un VPN.
+- [x] **supervision_api.py HA sync** — `/api/ha/apply` est COMPLET (HMAC auth, anti-replay, compression zstd/lz4/zlib, full+delta sync, journal rotation). Docstring ajoutée documentant que le sender side (push périodique vers pairs) n'est PAS implémenté — un orchestrateur externe doit appeler `/api/ha/apply`. NODES se peuple dynamiquement via heartbeat/edge_report/telemetry_ingest.
+- [x] **aitp_receiver.py XDP cleanup** — `_xdp_available()` et `_loop_xdp()` utilisent maintenant `getattr(socket, "AF_XDP", 44)` au lieu du magic number `44`. Docstring ajoutée expliquant les prérequis (Linux >= 4.18, root/CAP_NET_ADMIN, BPF program pré-chargé). Le fallback gracieux (XDP → raw → UDP) était déjà correct.
 

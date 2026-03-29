@@ -125,10 +125,18 @@ class AITPReceiver:
 
     @staticmethod
     def _xdp_available() -> bool:
+        """Check if AF_XDP sockets can be created.
+
+        AF_XDP (address family 44) requires Linux >= 4.18 and root or
+        CAP_NET_ADMIN.  Even if the socket opens, a full XDP setup needs
+        libbpf + a pre-loaded BPF program (csrc/aitp_xdp_bypass.c).
+        _loop_xdp() handles the graceful fallback when UMEM setup fails.
+        """
         if sys.platform != "linux":
             return False
+        AF_XDP = getattr(socket, "AF_XDP", 44)
         try:
-            s = socket.socket(44, socket.SOCK_RAW, 0)
+            s = socket.socket(AF_XDP, socket.SOCK_RAW, 0)
             s.close()
             return True
         except (OSError, PermissionError):
@@ -339,7 +347,7 @@ class AITPReceiver:
         The XDP program (csrc/aitp_xdp_bypass.c) must be pre-loaded on the
         interface with: ip link set dev <iface> xdpgeneric obj aitp_xdp_bypass.o sec xdp_aitp_bypass
         """
-        AF_XDP = 44
+        AF_XDP = getattr(socket, "AF_XDP", 44)
 
         # Try real AF_XDP with UMEM
         try:

@@ -19,6 +19,33 @@ Solution: Three-layer traversal strategy (auto-selected):
   4. IPv6 over IPv4 Tunnel:  If no IPv6 at all, auto-configure a 6in4 or
              Teredo-style encapsulation for LAN-only operation.
 
+STATUS:
+  REAL (tested):
+    - STUN client (RFC 5389): discover_external() — full IPv4/IPv6 binding
+      request, XOR-MAPPED-ADDRESS + MAPPED-ADDRESS parsing, multiple servers.
+    - IPv6 detection: has_ipv6(), get_local_ipv6() — probes Google DNS.
+    - LAN overlay: create_lan_ipv6_overlay() — ULA fd42:vrm:swarm:: generation.
+
+  FUNCTIONAL (untested in WAN):
+    - UDP hole punch: punch_hole() — sends real AITP probes with HMAC auth.
+      Requires BOTH peers to call punch_hole() simultaneously (coordinated
+      via sensing or relay signaling). Works for full-cone and restricted NAT.
+      Will NOT work for symmetric NAT (different port per destination).
+    - Relay send: send_via_relay() — one-shot unidirectional UDP send with
+      peer_uid routing header. No relay server implementation included
+      (the relay node must run a separate receiver that parses uid+data).
+    - send_to_peer() — best-effort cascade: direct → punched → relay.
+
+  NOT IMPLEMENTED:
+    - Relay server (receiving side) — only client send is implemented.
+    - NAT type classification (full-cone vs symmetric) — _nat_type is set
+      but only to "none" or "nat66", never "full_cone"/"restricted"/"symmetric".
+    - IPv6-over-IPv4 tunnel (6in4/Teredo) — only LAN ULA is implemented.
+    - Bidirectional relay channel.
+
+  In practice, VRAMancer clusters are designed for LAN or direct-routable WAN.
+  Multi-site WAN with NAT requires a VPN or manual port forwarding.
+
 Usage:
     traversal = NATTraversal()
     my_addr = traversal.discover_external()

@@ -1,11 +1,8 @@
 # launcher.py
 
 import argparse
-import importlib.util
-import subprocess
 import sys
 
-from dashboard import dashboard_web
 
 def main():
     parser = argparse.ArgumentParser(description="VRAMancer Dashboard Launcher")
@@ -21,8 +18,8 @@ def main():
         from dashboard import launch_cli_dashboard
         launch_cli_dashboard()
     else:
-        from dashboard import dashboard_web
-        dashboard_web()
+        from dashboard.dashboard_web import launch
+        launch()
 
 if __name__ == "__main__":
     main()
