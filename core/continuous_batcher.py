@@ -157,14 +157,15 @@ class ContinuousBatcher:
         self._start_time: Optional[float] = None
 
         # Async tokenizer thread pool (parallel tokenization for multi-request batches)
-        # Always create the pool (min 1 worker) so decode is never synchronous
-        # in the batcher loop — even single-request batches benefit from async decode.
+        # Set VRM_TOKENIZER_WORKERS=0 to disable the pool entirely.
         _pool_size = int(os.environ.get("VRM_TOKENIZER_WORKERS", "4"))
-        _pool_size = max(_pool_size, 1)
-        self._tokenizer_pool: Optional[ThreadPoolExecutor] = ThreadPoolExecutor(
-            max_workers=_pool_size,
-            thread_name_prefix="vrm-tokenizer",
-        )
+        if _pool_size > 0:
+            self._tokenizer_pool: Optional[ThreadPoolExecutor] = ThreadPoolExecutor(
+                max_workers=_pool_size,
+                thread_name_prefix="vrm-tokenizer",
+            )
+        else:
+            self._tokenizer_pool = None
 
     # ------------------------------------------------------------------
     # Public API

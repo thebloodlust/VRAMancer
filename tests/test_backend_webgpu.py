@@ -27,7 +27,6 @@ def test_webgpu_backend_load_model():
     """load_model stores name and returns dict."""
     from core.backends_webgpu import WebGPUBackend
     import threading
-    threading.Thread.start = MagicMock()
 
     backend = WebGPUBackend.__new__(WebGPUBackend)
     backend.log = MagicMock()
@@ -40,7 +39,8 @@ def test_webgpu_backend_load_model():
     backend._thread = None
     backend._server = None
 
-    result = backend.load_model("test-model")
+    with patch.object(threading.Thread, 'start', MagicMock()):
+        result = backend.load_model("test-model")
     assert result["name"] == "test-model"
     assert result["type"] == "webgpu_distributed"
     assert backend.model_name == "test-model"

@@ -75,7 +75,7 @@ VRAMancer est un orchestrateur multi-GPU Python (88 fichiers .py dans core/, ~35
 
 | Module | LOC | Grade | Description | Problemes |
 |---|---|---|---|---|
-| `hierarchical_memory.py` | 1096 | D+ | 6-tier memory hierarchy. | **_evict_lru() log "physically offloaded" MAIS NE DEPLACE PAS LES DONNEES.** Metadata-only. NVMe/CXL = stub. |
+| `hierarchical_memory.py` | 1096 | B | 6-tier memory hierarchy. | eviction_cycle() + spill_to_nvme() REEL (GPU->CPU->disk via Rust cxl_direct_memory_dump). _tensor_registry tient les vrais tensors. |
 | `backends_webgpu.py` | 400 | D | WebSocket WebGPU POC. | Nodes jamais peuplees. "Speculative Decoding" = batching optimiste. "Holographic Parity" = marketing. |
 | `swarm_ledger.py` | 300 | D+ | Ledger SQLite complet. | Orchestrateur l'ignore. Pas de routing vers contributeurs. Fonctionnel mais orphelin. |
 | `telemetry.py` | 115 | D | Format binaire custom. | Aucun consommateur. mDNS prefere. |
@@ -276,7 +276,7 @@ Tests integration (threading/reseau)  : ~30 tests (@pytest.mark.integration)
 - `test_turboquant.py` — KV compression (23 tests)
 - `test_chaos_concurrency.py` — Race condition pre-existante dans test_pipeline_concurrent_load (deselect en CI)
 
-**Pre-existing failures (~12-15 F) :** autour de 44% du test suite, non lies aux changements recents. Principalement des tests Flask et some edge cases.
+**Pre-existing failures :** 0-1 failures restantes (multiprocess Flask timing). 941+ tests passent.
 
 ## Benchmarks reels (23-27 mars 2026, RTX 3090 + RTX 5070 Ti, Proxmox VM)
 
@@ -317,7 +317,7 @@ Tests integration (threading/reseau)  : ~30 tests (@pytest.mark.integration)
 
 ### RED FLAGS (code qui ment)
 
-1. **hierarchical_memory.py** — `_evict_lru()` log "physically offloaded" **MAIS NE DEPLACE PAS LES DONNEES**. Metadata-only. NVMe cache jamais peuple.
+1. ~~**hierarchical_memory.py**~~ — **CORRIGE** : eviction_cycle() + spill_to_nvme() deplacent reellement les tensors (GPU->CPU->disk via Rust). _tensor_registry tient les vrais torch tensors.
 2. **transfer_manager.py Strategy 1.5** — `vramancer_rust.direct_vram_copy()` **N'EXISTE PAS** dans le crate Rust. Le code Rust a le triple-buffering mais la fonction n'est pas exposee via PyO3.
 3. **block_router.py RemoteExecutor** — label "zero-copy" = **FAUX** (safetensors serialise).
 4. **software_cxl.cpp** — nom "CXL" = **TROMPEUR** : c'est du file I/O simple (std::ofstream).

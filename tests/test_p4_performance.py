@@ -219,7 +219,7 @@ class TestAsyncTokenizer:
 
     def test_tokenizer_pool_disabled_with_env(self):
         from core.continuous_batcher import ContinuousBatcher
-        with patch.dict(os.environ, {"VRM_TOKENIZER_WORKERS": "1"}):
+        with patch.dict(os.environ, {"VRM_TOKENIZER_WORKERS": "0"}):
             b = ContinuousBatcher(max_batch_size=8)
             assert b._tokenizer_pool is None
             b.stop()
