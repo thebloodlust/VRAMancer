@@ -142,7 +142,7 @@ class PlacementEngine:
         self,
         model: Any,
         num_gpus: int = 0,
-        transfer_bandwidth_gbps: float = 25.0,
+        transfer_bandwidth_gbps: float = 0.0,
     ) -> Any:
         """Compute optimal layer-to-GPU placement for a full model.
 
@@ -152,7 +152,7 @@ class PlacementEngine:
         Args:
             model: Loaded nn.Module (HuggingFace or custom).
             num_gpus: Number of GPUs (0 = auto-detect).
-            transfer_bandwidth_gbps: Inter-GPU bandwidth.
+            transfer_bandwidth_gbps: Inter-GPU bandwidth (0 = auto-detect).
 
         Returns:
             PlacementPlan with (layer_index, gpu_index) assignments.

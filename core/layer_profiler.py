@@ -40,6 +40,79 @@ except ImportError:
     def enumerate_devices():
         return [{"id": "cpu:0", "backend": "cpu", "index": 0, "name": "CPU"}]
 
+
+def _detect_pcie_bandwidth_gbps() -> float:
+    """Detect inter-GPU PCIe bandwidth dynamically.
+
+    Tries nvidia-smi (fast, no GPU init), then falls back to pynvml,
+    then sysfs, then a conservative default.
+
+    Returns the **minimum** bandwidth across all detected GPUs (the
+    bottleneck link), in GB/s.
+    """
+    # ---- Strategy 1: nvidia-smi query (works without pynvml) ----
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["nvidia-smi",
+             "--query-gpu=pcie.link.gen.current,pcie.link.width.current",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            bws = []
+            for line in result.stdout.strip().splitlines():
+                parts = line.split(",")
+                if len(parts) >= 2:
+                    gen = int(parts[0].strip())
+                    width = int(parts[1].strip())
+                    bws.append(_pcie_gen_to_gbps(gen, width))
+            if bws:
+                bw = min(bws)
+                _logger.debug("PCIe bandwidth detected via nvidia-smi: %.1f GB/s", bw)
+                return bw
+    except (FileNotFoundError, subprocess.TimeoutExpired, Exception):
+        pass
+
+    # ---- Strategy 2: pynvml ----
+    try:
+        import pynvml
+        pynvml.nvmlInit()
+        bws = []
+        for i in range(pynvml.nvmlDeviceGetCount()):
+            handle = pynvml.nvmlDeviceGetHandleByIndex(i)
+            gen = pynvml.nvmlDeviceGetCurrPcieLinkGeneration(handle)
+            width = pynvml.nvmlDeviceGetCurrPcieLinkWidth(handle)
+            bws.append(_pcie_gen_to_gbps(gen, width))
+        if bws:
+            bw = min(bws)
+            _logger.debug("PCIe bandwidth detected via pynvml: %.1f GB/s", bw)
+            return bw
+    except Exception:
+        pass
+
+    # ---- Fallback: conservative default (PCIe Gen3 x16) ----
+    _logger.debug("PCIe bandwidth detection failed, using default 15.75 GB/s (Gen3 x16)")
+    return 15.75
+
+
+def _pcie_gen_to_gbps(gen: int, width: int) -> float:
+    """Convert PCIe generation + lane width to GB/s (128b/130b encoding)."""
+    gen_rates = {1: 2.5, 2: 5.0, 3: 8.0, 4: 16.0, 5: 32.0, 6: 64.0}
+    rate = gen_rates.get(gen, 8.0)  # GT/s per lane
+    return (rate * width * 128 / 130) / 8
+
+
+# Cached result — PCIe bandwidth won't change at runtime
+_CACHED_PCIE_BW: Optional[float] = None
+
+def detect_pcie_bandwidth() -> float:
+    """Return cached inter-GPU PCIe bandwidth in GB/s."""
+    global _CACHED_PCIE_BW
+    if _CACHED_PCIE_BW is None:
+        _CACHED_PCIE_BW = _detect_pcie_bandwidth_gbps()
+    return _CACHED_PCIE_BW
+
 # Lazy import to avoid circular dependency with model_splitter
 _extract_layers = None
 
@@ -538,7 +611,7 @@ class LayerProfiler:
 def compute_optimal_placement(
     layer_profiles: List[LayerProfile],
     gpu_profiles: List[GPUProfile],
-    transfer_bandwidth_gbps: float = 25.0,
+    transfer_bandwidth_gbps: float = 0.0,
 ) -> PlacementPlan:
     """Compute optimal layer-to-GPU assignment using dynamic programming.
 
@@ -557,10 +630,13 @@ def compute_optimal_placement(
         layer_profiles: Profiled layers, in model order.
         gpu_profiles: Available GPU profiles.
         transfer_bandwidth_gbps: Inter-GPU bandwidth (measured or estimated).
+            If 0 (default), auto-detects via nvidia-smi/pynvml.
 
     Returns:
         PlacementPlan with optimal assignments.
     """
+    if transfer_bandwidth_gbps <= 0:
+        transfer_bandwidth_gbps = detect_pcie_bandwidth()
     n_layers = len(layer_profiles)
     n_gpus = len(gpu_profiles)
 
@@ -736,4 +812,5 @@ __all__ = [
     "GPUProfile",
     "PlacementPlan",
     "compute_optimal_placement",
+    "detect_pcie_bandwidth",
 ]

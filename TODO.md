@@ -98,11 +98,11 @@
 - [x] **monitor.py ROCm validation** — Documentation ajoutée sur les limitations du fallback ROCm-SMI (non testé sur AMD réel, mapping d'index card→torch.cuda potentiellement divergent avec HIP_VISIBLE_DEVICES). Documentation du contrat d'index dans `_query_allocated()`.
 - [x] **tensor_parallel.py robustesse** — Fallback CPU all-reduce corrigé (`torch.no_grad()` + `torch.zeros_like` au lieu de `sum()`). GQA gère les cas non-divisibles (repeat_interleave + slice). Architecture inconnue log un warning. `apply_tensor_parallel()` utilise `detect_backend()` et refuse MPS (single-device).
 
-### Performance
+### Performance (DONE — 3/3)
 
-- [ ] **layer_profiler.py bande passante** — La bande passante PCIe est hardcodée à 25 GB/s. Détecter dynamiquement via `nvidia-smi` ou `pynvml` (PCIe gen/width → bandwidth théorique).
-- [ ] **continuous_batcher.py lock contention** — Malgré le `ThreadPoolExecutor` pour le tokenizer, vérifier que le lock principal ne bloque plus l'API sous charge. Profiler avec 8+ requêtes concurrentes et mesurer la contention réelle.
-- [ ] **cuda_graph_decode.py KV update** — La logique de mise à jour du KV cache dans `CUDAGraphRunner` est tronquée/incomplète. Compléter pour que le graph replay fonctionne correctement sur des séquences longues.
+- [x] **layer_profiler.py bande passante** — Détection dynamique PCIe via nvidia-smi (rapide, sans init GPU) → pynvml fallback → défaut conservateur Gen3 x16 (15.75 GB/s). Résultat caché. `compute_optimal_placement()` et `PlacementEngine.place_model()` utilisent auto-detect au lieu du 25 GB/s hardcodé. Nouveau export `detect_pcie_bandwidth()`.
+- [x] **continuous_batcher.py lock contention** — Audit confirmé : tokenisation et forward GPU sont déjà hors lock. Seules les mutations de queue (append/evict) sont sous lock. Fix : le `ThreadPoolExecutor` tokenizer est maintenant toujours créé (min 1 worker) pour que `_finish_request_decode()` ne bloque jamais la boucle batcher en mode synchrone.
+- [x] **cuda_graph_decode.py KV update** — Ajout de `_GraphState` avec buffers statiques pour `attention_mask`, `position_ids` et `cache_position`. Capture utilise des buffers pré-alloués à `max_seq_len`. Replay met à jour les buffers in-place (même adresses mémoire) et incrémente `cur_pos`. Fallback eager si `cur_pos >= max_seq_len`.
 
 ### Sécurité
 
