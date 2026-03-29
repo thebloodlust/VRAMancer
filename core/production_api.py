@@ -1097,18 +1097,12 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
         Forces the WebGPU Swarm Node Manager to simulate a massive context offload,
         bringing the UI neural network to life.
         """
-        try:
-            from core.network.webgpu_node import WebGPUNodeManager
-            # We instantiate a temporary dummy manager for testing if none is running, 
-            # but ideally it would trigger the real one. For visualizer waking up:
-            return jsonify({
-                "status": "Awakening Swarm Attention...",
-                "message": "Envoi asynchrone des requetes Tensor vers le reseau L7 Edge.",
-                "tflops_allocated": 14.3,
-                "nodes_pinged": 15
-            })
-        except Exception as e:
-            return jsonify({"error": str(e)}), 500
+        return jsonify({
+            "status": "Awakening Swarm Attention...",
+            "message": "Envoi asynchrone des requetes Tensor vers le reseau L7 Edge.",
+            "tflops_allocated": 14.3,
+            "nodes_pinged": 15
+        })
 
     # ====================================================================
     # Health / readiness / liveness — now in core.api.routes_ops blueprint

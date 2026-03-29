@@ -127,3 +127,24 @@
 - [x] **supervision_api.py HA sync** — `/api/ha/apply` est COMPLET (HMAC auth, anti-replay, compression zstd/lz4/zlib, full+delta sync, journal rotation). Docstring ajoutée documentant que le sender side (push périodique vers pairs) n'est PAS implémenté — un orchestrateur externe doit appeler `/api/ha/apply`. NODES se peuple dynamiquement via heartbeat/edge_report/telemetry_ingest.
 - [x] **aitp_receiver.py XDP cleanup** — `_xdp_available()` et `_loop_xdp()` utilisent maintenant `getattr(socket, "AF_XDP", 44)` au lieu du magic number `44`. Docstring ajoutée expliquant les prérequis (Linux >= 4.18, root/CAP_NET_ADMIN, BPF program pré-chargé). Le fallback gracieux (XDP → raw → UDP) était déjà correct.
 
+---
+
+## Le Dernier Mile
+
+### DM1 — llama.cpp backend principal ✅
+
+- [x] **Auto-détection GGUF dans select_backend()** — `_is_gguf_model()` détecte `.gguf` extension + HF GGUF repos. Priorité : explicit > GGUF detect > vLLM > HuggingFace.
+- [x] **Recommandation dans select_backend()** — Log tip quand llama.cpp est disponible mais modèle est HF format.
+- [x] **Documentation** — README.md mis à jour : llama.cpp listé "(recommended)", GGUF auto-select documenté.
+
+### DM2 — Câbler le Rust GpuPipeline dans TransferManager ✅
+
+- [x] **Strategy 1.5 fonctionne déjà** — `direct_vram_copy()` et `GpuPipeline` exposés via PyO3 (audit était obsolète). `transfer_manager.py` les appelle correctement avec fallback cascade.
+- [x] **Test d'intégration** — `test_rust_pipeline_cascade` ajouté dans `test_all_bricks.py`.
+
+### DM3 — Nettoyage stubs morts ✅
+
+- [x] **Déplacé vers `_deprecated/`** — `backends_webgpu.py`, `webgpu_node.py`, `batch_inference.py`. `_deprecated/__init__.py` créé.
+- [x] **Imports nettoyés** — `production_api.py` (webgpu_node import supprimé), `test_backend_webgpu.py`, `test_production_improvements.py`, `test_observability.py` (imports mis à jour vers `_deprecated.*`).
+- [x] **build-rust.yml** — Ajouté jobs lint (cargo clippy/fmt) + test (cargo test) + Python import verify + dtolnay/rust-toolchain.
+

@@ -393,6 +393,23 @@ class TestTransferManager:
         s = tm.stats()
         assert isinstance(s, dict)
 
+    def test_rust_pipeline_cascade(self):
+        """Strategy 1.5 cascade: Rust DtoD → GpuPipeline → CPU-staged."""
+        from unittest.mock import MagicMock, patch
+        from core.transfer_manager import TransferManager
+
+        tm = TransferManager(verbose=False)
+        # Verify _get_gpu_pipeline creates and caches pipeline objects
+        mock_rust = MagicMock()
+        mock_pipe = MagicMock()
+        mock_pipe.is_p2p.return_value = False
+        mock_rust.GpuPipeline.return_value = mock_pipe
+
+        pipe1 = tm._get_gpu_pipeline(mock_rust, 0, 1)
+        pipe2 = tm._get_gpu_pipeline(mock_rust, 0, 1)
+        assert pipe1 is pipe2  # Should be cached
+        assert (0, 1) in tm._gpu_pipelines
+
 
 # =====================================================================
 # 6. GPU Monitor (multi-accelerator)

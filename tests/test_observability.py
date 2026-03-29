@@ -293,7 +293,7 @@ class TestBatcherWithBatchFn:
 
     def test_batcher_accepts_batch_fn(self):
         """InferenceBatcher accepts generate_batch_fn parameter."""
-        from core.api.batch_inference import InferenceBatcher
+        from _deprecated.batch_inference import InferenceBatcher
         batcher = InferenceBatcher(
             generate_fn=self._dummy_generate,
             generate_batch_fn=self._dummy_batch_generate,
@@ -302,7 +302,7 @@ class TestBatcherWithBatchFn:
 
     def test_batcher_uses_batch_fn_for_uniform_batch(self):
         """When all requests have same kwargs, uses true batch path."""
-        from core.api.batch_inference import InferenceBatcher
+        from _deprecated.batch_inference import InferenceBatcher
 
         batch_calls = []
 
@@ -340,7 +340,7 @@ class TestBatcherWithBatchFn:
 
     def test_batcher_fallback_when_batch_fn_fails(self):
         """If generate_batch_fn raises, falls back to sequential."""
-        from core.api.batch_inference import InferenceBatcher
+        from _deprecated.batch_inference import InferenceBatcher
 
         def failing_batch(prompts, **kwargs):
             raise RuntimeError("batch failed")
@@ -361,7 +361,7 @@ class TestBatcherWithBatchFn:
 
     def test_batcher_stats_include_batch_info(self):
         """Stats dict is still well-formed with batch_fn."""
-        from core.api.batch_inference import InferenceBatcher
+        from _deprecated.batch_inference import InferenceBatcher
         batcher = InferenceBatcher(
             generate_fn=self._dummy_generate,
             generate_batch_fn=self._dummy_batch_generate,

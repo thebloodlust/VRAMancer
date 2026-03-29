@@ -67,8 +67,8 @@ vramancer run Qwen/Qwen2.5-14B-Instruct -q nf4
 # Force specific GPU count
 vramancer run meta-llama/Llama-3-8B --gpus 2
 
-# GGUF via llama.cpp backend
-vramancer run TheBloke/Mistral-7B-v0.1-GGUF --backend llamacpp
+# GGUF models auto-select llama.cpp (17x faster than HuggingFace)
+vramancer run bartowski/Qwen2.5-7B-Instruct-GGUF
 ```
 
 ### API server (OpenAI-compatible)
@@ -106,10 +106,12 @@ vramancer split Qwen/Qwen2.5-14B-Instruct --gpus 2  # Preview model split
 
 | Backend | Install | Best for |
 |---------|---------|----------|
-| **huggingface** (default) | `pip install transformers accelerate` | General use, multi-GPU split |
-| **llamacpp** | `pip install llama-cpp-python` | GGUF models, fastest small models |
-| **vllm** | `pip install vllm` | High-throughput serving |
+| **llamacpp** (recommended) | `pip install llama-cpp-python` | GGUF models, fastest inference (106 tok/s) |
+| **huggingface** | `pip install transformers accelerate` | General use, multi-GPU split |
+| **vllm** | `pip install vllm` | High-throughput batched serving |
 | **ollama** | Install [Ollama](https://ollama.ai) | Easy local models |
+
+> **Tip:** GGUF models are auto-detected and use llama.cpp automatically. For HuggingFace models, add `--backend llamacpp` isn't needed — just use a GGUF repo name.
 
 ## Configuration
 

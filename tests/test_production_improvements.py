@@ -30,7 +30,7 @@ class TestInferenceBatcher:
 
     def test_batcher_sync_fallback(self):
         """When batcher is not started, submit falls back to direct call."""
-        from core.api.batch_inference import InferenceBatcher
+        from _deprecated.batch_inference import InferenceBatcher
         batcher = InferenceBatcher(generate_fn=self._dummy_generate)
         # Not started — should call generate_fn directly
         result = batcher.submit("Hello")
@@ -38,7 +38,7 @@ class TestInferenceBatcher:
 
     def test_batcher_start_stop(self):
         """Batcher lifecycle: start, submit, stop."""
-        from core.api.batch_inference import InferenceBatcher
+        from _deprecated.batch_inference import InferenceBatcher
         batcher = InferenceBatcher(
             generate_fn=self._dummy_generate,
             max_batch=4,
@@ -55,7 +55,7 @@ class TestInferenceBatcher:
 
     def test_batcher_concurrent_requests(self):
         """Multiple concurrent requests are batched together."""
-        from core.api.batch_inference import InferenceBatcher
+        from _deprecated.batch_inference import InferenceBatcher
         batcher = InferenceBatcher(
             generate_fn=self._dummy_generate,
             max_batch=8,
@@ -87,7 +87,7 @@ class TestInferenceBatcher:
 
     def test_batcher_stats(self):
         """Stats are updated after processing."""
-        from core.api.batch_inference import InferenceBatcher
+        from _deprecated.batch_inference import InferenceBatcher
         batcher = InferenceBatcher(
             generate_fn=self._dummy_generate,
             max_batch=4,
@@ -111,7 +111,7 @@ class TestInferenceBatcher:
         def failing_generate(prompt, **kwargs):
             raise ValueError("inference failed")
 
-        from core.api.batch_inference import InferenceBatcher
+        from _deprecated.batch_inference import InferenceBatcher
         batcher = InferenceBatcher(
             generate_fn=failing_generate,
             window_ms=10,
@@ -131,7 +131,7 @@ class TestInferenceBatcher:
             received_kwargs.update(kwargs)
             return "ok"
 
-        from core.api.batch_inference import InferenceBatcher
+        from _deprecated.batch_inference import InferenceBatcher
         batcher = InferenceBatcher(
             generate_fn=capturing_generate,
             window_ms=10,
@@ -148,7 +148,7 @@ class TestInferenceBatcher:
 
     def test_batcher_pending_count(self):
         """pending_count reflects queue size."""
-        from core.api.batch_inference import InferenceBatcher
+        from _deprecated.batch_inference import InferenceBatcher
         batcher = InferenceBatcher(
             generate_fn=self._dummy_generate,
             window_ms=10,
@@ -415,7 +415,7 @@ class TestModuleStructure:
     """Verify new modules are importable and well-structured."""
 
     def test_import_batch_inference(self):
-        from core.api.batch_inference import InferenceBatcher
+        from _deprecated.batch_inference import InferenceBatcher
         assert InferenceBatcher is not None
 
     def test_import_gpu_hotplug(self):
@@ -423,7 +423,7 @@ class TestModuleStructure:
         assert GPUHotPlugMonitor is not None
 
     def test_batch_inference_all_exports(self):
-        from core.api import batch_inference
+        from _deprecated import batch_inference
         assert "InferenceBatcher" in batch_inference.__all__
 
     def test_monitor_exports_hotplug(self):

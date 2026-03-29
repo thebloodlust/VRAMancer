@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 def test_webgpu_backend_init_stub():
     """WebGPU backend initializes in stub mode without websockets."""
-    from core.backends_webgpu import WebGPUBackend
+    from _deprecated.backends_webgpu import WebGPUBackend
 
     backend = WebGPUBackend.__new__(WebGPUBackend)
     backend.log = MagicMock()
@@ -25,7 +25,7 @@ def test_webgpu_backend_init_stub():
 
 def test_webgpu_backend_load_model():
     """load_model stores name and returns dict."""
-    from core.backends_webgpu import WebGPUBackend
+    from _deprecated.backends_webgpu import WebGPUBackend
     import threading
 
     backend = WebGPUBackend.__new__(WebGPUBackend)
@@ -48,7 +48,7 @@ def test_webgpu_backend_load_model():
 
 def test_webgpu_backend_no_workers_error():
     """generate() raises when no workers connected."""
-    from core.backends_webgpu import WebGPUBackend
+    from _deprecated.backends_webgpu import WebGPUBackend
 
     backend = WebGPUBackend.__new__(WebGPUBackend)
     backend.log = MagicMock()

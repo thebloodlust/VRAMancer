@@ -346,26 +346,45 @@ def _compute_vllm_config(num_gpus: int) -> dict:
     return result
 
 
+def _is_gguf_model(model_name: str) -> bool:
+    """Detect if a model name refers to a GGUF file or HF repo with GGUF files."""
+    if not model_name:
+        return False
+    # Explicit .gguf file path
+    if model_name.lower().endswith('.gguf'):
+        return True
+    # Common HF GGUF repo naming: contains "GGUF" or "gguf" in name
+    if 'gguf' in model_name.lower():
+        return True
+    # Local file that exists and is .gguf
+    if os.path.isfile(model_name) and model_name.lower().endswith('.gguf'):
+        return True
+    return False
+
+
+def _llamacpp_available() -> bool:
+    """Check if llama-cpp-python is importable."""
+    try:
+        import llama_cpp  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
 def select_backend(model_name: str, cache_dir: str = None, backend: str = "auto", num_gpus: int = 1):
     logger.info(f"Sélection du backend pour {model_name} (demandé: {backend}, gpus: {num_gpus})")
 
-    # vLLM: preferred when explicitly requested or auto + CUDA available
-    if backend == "vllm" or (backend == "auto" and _vllm_available()):
+    # ── Explicit backend request ──────────────────────────────────────
+    if backend == "llamacpp":
+        from core.backends_llamacpp import LlamaCppBackend
+        return LlamaCppBackend(model_name, cache_dir=cache_dir)
+
+    if backend == "vllm":
         try:
             from core.backends_vllm import vLLMBackend
             vllm_cfg = _compute_vllm_config(num_gpus)
             tp = vllm_cfg["tensor_parallel_size"]
             target_gpu = vllm_cfg.get("target_gpu")
-
-            # If heterogeneous GPUs forced TP=1 but model needs more VRAM
-            # than the single largest GPU, fall through to accelerate
-            if tp == 1 and num_gpus > 1:
-                logger.info(
-                    f"vLLM TP=1 on GPU {target_gpu or 0} "
-                    f"(heterogeneous setup — 2nd GPU available via accelerate fallback "
-                    f"if model doesn't fit)"
-                )
-
             logger.info(f"Utilisation du backend vLLM pour {model_name} (TP={tp})")
             return vLLMBackend(
                 model_name,
@@ -379,30 +398,60 @@ def select_backend(model_name: str, cache_dir: str = None, backend: str = "auto"
             logger.info("Fallback sur HuggingFaceBackend car vLLM n'est pas disponible.")
             return HuggingFaceBackend(model_name, cache_dir=cache_dir)
 
-    # auto without vLLM → HuggingFace (accelerate)
-    if backend == "auto":
-        logger.info(f"Utilisation du backend HuggingFace pour {model_name}")
-        return HuggingFaceBackend(model_name, cache_dir=cache_dir)
-
-    if backend == "llamacpp":
-        from core.backends_llamacpp import LlamaCppBackend
-        return LlamaCppBackend(model_name, cache_dir=cache_dir)
-
     if backend == "ollama":
         from core.backends_ollama import OllamaBackend
         return OllamaBackend(model_name)
-        
-    if backend == "webgpu":
-        try:
-            from core.backends_webgpu import WebGPUBackend
-            return WebGPUBackend()
-        except ImportError as e:
-            logger.error(f"Failed to import WebGPUBackend: {e}")
-            raise ValueError("WebGPU support requires extra dependencies. Ensure they are installed.")
-        
+
     if backend == "huggingface":
         return HuggingFaceBackend(model_name, cache_dir=cache_dir)
-        
+
+    # ── Auto-detection ────────────────────────────────────────────────
+    if backend == "auto":
+        # 1. GGUF models → llama.cpp (17x faster than HF BF16)
+        if _is_gguf_model(model_name) and _llamacpp_available():
+            logger.info(
+                f"GGUF détecté — utilisation du backend llama.cpp pour {model_name} "
+                f"(~5-17x plus rapide que HuggingFace)"
+            )
+            from core.backends_llamacpp import LlamaCppBackend
+            return LlamaCppBackend(model_name, cache_dir=cache_dir)
+
+        # 2. Non-GGUF + vLLM available → vLLM (best for batched serving)
+        if _vllm_available():
+            try:
+                from core.backends_vllm import vLLMBackend
+                vllm_cfg = _compute_vllm_config(num_gpus)
+                tp = vllm_cfg["tensor_parallel_size"]
+                target_gpu = vllm_cfg.get("target_gpu")
+                if tp == 1 and num_gpus > 1:
+                    logger.info(
+                        f"vLLM TP=1 on GPU {target_gpu or 0} "
+                        f"(heterogeneous setup — 2nd GPU available via accelerate fallback "
+                        f"if model doesn't fit)"
+                    )
+                logger.info(f"Utilisation du backend vLLM pour {model_name} (TP={tp})")
+                return vLLMBackend(
+                    model_name,
+                    cache_dir=cache_dir,
+                    tensor_parallel_size=tp,
+                    gpu_memory_utilization=vllm_cfg.get("gpu_memory_utilization", 0.90),
+                    dtype_str=vllm_cfg.get("dtype_str"),
+                    target_gpu=target_gpu,
+                )
+            except ImportError:
+                pass
+
+        # 3. Suggest GGUF if llama.cpp available but model is HF format
+        if _llamacpp_available():
+            logger.info(
+                f"💡 Tip: considérez un modèle GGUF pour {model_name} — "
+                f"llama.cpp est ~5-17x plus rapide que HuggingFace pour l'inférence."
+            )
+
+        # 4. Fallback → HuggingFace (accelerate)
+        logger.info(f"Utilisation du backend HuggingFace pour {model_name}")
+        return HuggingFaceBackend(model_name, cache_dir=cache_dir)
+
     raise ValueError(f"Backend inconnu ou non supporté : {backend}")
 
 

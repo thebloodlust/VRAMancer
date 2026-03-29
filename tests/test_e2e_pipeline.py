@@ -159,6 +159,20 @@ class TestLlamaCppBackendStub:
         b = select_backend("test-model.gguf", backend="llamacpp")
         assert b.__class__.__name__ == "LlamaCppBackend"
 
+    def test_gguf_auto_detection(self):
+        """GGUF models should auto-select llama.cpp when available."""
+        from core.backends import _is_gguf_model
+        # Explicit .gguf extension
+        assert _is_gguf_model("model.gguf") is True
+        assert _is_gguf_model("path/to/model.GGUF") is True
+        # HF repo with GGUF in name
+        assert _is_gguf_model("bartowski/Qwen2.5-7B-Instruct-GGUF") is True
+        assert _is_gguf_model("TheBloke/Mistral-7B-v0.1-GGUF") is True
+        # Non-GGUF models
+        assert _is_gguf_model("Qwen/Qwen2.5-7B-Instruct") is False
+        assert _is_gguf_model("gpt2") is False
+        assert _is_gguf_model("") is False
+
     def test_load_model_stub(self):
         from core.backends_llamacpp import LlamaCppBackend
         b = LlamaCppBackend("test-model.gguf")
