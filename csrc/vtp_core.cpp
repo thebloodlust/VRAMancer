@@ -1,5 +1,13 @@
 // VTP (VRAMancer Transport Protocol) C++ Backend
-// Handles L1-L7 Hierarchical Memory Routing at zero-copy speeds using libibverbs/UCX concepts
+// Handles L1-L2 GPU P2P transfers via CUDA stream.
+//
+// STATUS:
+//   REAL:  L1/L2 (VRAM_PRIMARY/SECONDARY) — dispatches to fast_p2p_transfer_cuda()
+//   STUB:  L3+ (RDMA, RAM, NVMe, Network) — returns src.clone(), no actual transport.
+//          Real network transport is handled by Python (core/network/llm_transport.py).
+//
+// The L3-L7 tiers are defined for API completeness but route to a no-op clone.
+// This file's primary value is the GIL-free P2P CUDA transfer wrapper.
 
 #include <torch/extension.h>
 #include <pybind11/pybind11.h>
@@ -44,11 +52,13 @@ torch::Tensor vtp_migrate_tensor(torch::Tensor src, int current_tier, int target
     }
     
     if (target_tier == L3_VRAM_REMOTE_RDMA) {
-        // TODO: Map to libibverbs/UCX for real RoCEv2 transfer
-        // std::cout << "[VTP] Executing RDMA zero-copy to " << remote_ip << std::endl;
+        // STUB: No RDMA transport implemented here; returns clone.
+        // Real RDMA path: core/network/network_transport.py (pyverbs QP)
         return src.clone();
     }
     
+    // STUB: L4-L7 not implemented in C++; returns clone.
+    // Real paths: Python layer handles RAM/NVMe/Network transfers.
     return src.clone();
 }
 

@@ -110,11 +110,11 @@
 - [x] **production_api.py circuit breaker SSE** — Ajout timeout SSE configurable (`VRM_SSE_TIMEOUT`, défaut 300s). Le générateur `_guarded_sse()` vérifie le temps écoulé à chaque chunk et coupe le stream avec un event d'erreur JSON en cas de dépassement. Circuit breaker enregistre un failure sur timeout.
 - [x] **production_api.py queue depth** — Nouveau `_QueueCounter` : thread-safe par défaut (lock interne), cross-process via `VRM_SHARED_QUEUE=1` (file lock `fcntl` sur compteur binaire 4 octets). Remplace `queue_depth[0]` + `queue_lock` partout (factory, routes, SSE, status endpoint).
 
-### Nettoyage code natif
+### Nettoyage code natif (DONE — 3/3)
 
-- [ ] **software_cxl.cpp renommer** — Le nom "CXL" est trompeur : c'est du simple file I/O (`std::ofstream`). Renommer en `file_offload.cpp` ou documenter clairement que ce n'est PAS du CXL matériel.
-- [ ] **dmabuf_bridge.c compléter** — Le mmap transfer n'est jamais implémenté (squelette). Soit implémenter le transfert DMA-BUF réel, soit supprimer et documenter que CUDA IPC est le seul chemin cross-GPU.
-- [ ] **vtp_core.cpp L3+** — Le routeur VTP hiérarchique est stub à partir de L3 (`return src.clone()`). Implémenter le routage réseau réel ou supprimer les niveaux non fonctionnels.
+- [x] **software_cxl.cpp renommé** — Fichier renommé en `file_offload.cpp`. Commentaires nettoyés : clairement identifié comme du file I/O simple (`std::ofstream`/`std::ifstream`), pas du CXL matériel. Module pybind11 conserve le nom `software_cxl` pour compatibilité avec le Rust crate.
+- [x] **dmabuf_bridge.c documenté** — Header augmenté avec section STATUS : REAL (open/close/export/import/probe/transfer mmap read) vs STUB (`vrm_dmabuf_copy` pointer-based = returns -1, dst mmap write non implémenté). Documente que le chemin cross-GPU effectif est CUDA IPC ou CPU-staged.
+- [x] **vtp_core.cpp L3+ clarifiés** — Header réécrit : REAL (L1/L2 P2P CUDA via `fast_p2p_transfer_cuda`) vs STUB (L3-L7 = `src.clone()`). Commentaires inline pour chaque stub pointant vers les implémentations Python réelles (`core/network/`). L'enum L1-L7 conservé pour l'API.
 
 ### Dashboard
 

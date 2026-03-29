@@ -1,6 +1,17 @@
 /**
  * DMA-BUF Cross-Vendor GPU Bridge — VRAMancer native extension
  *
+ * STATUS: PARTIAL IMPLEMENTATION
+ *   REAL:  vrm_dmabuf_open/close, vrm_dmabuf_export/import (DRM PRIME ioctls)
+ *          vrm_dmabuf_probe (DRM version check), vrm_dmabuf_transfer (mmap read)
+ *   STUB:  vrm_dmabuf_copy (pointer-based path — returns -1, needs CUDA-DRM interop)
+ *          vrm_dmabuf_transfer step 4-5: dst mmap write not implemented,
+ *          the Python caller must do the final copy via torch pinned memory.
+ *
+ * The working cross-GPU transfer path in VRAMancer is CUDA IPC (P2P) or
+ * CPU-staged pinned memory (TransferManager strategy 4). This DMA-BUF bridge
+ * is experimental and requires DRM render nodes + nvidia-drm 495+.
+ *
  * Provides zero-copy GPU-to-GPU transfer via Linux DRM/DMA-BUF:
  *   1. Open DRM render nodes (/dev/dri/renderDXXX)
  *   2. Export source GPU buffer as DMA-BUF fd (drmPrimeHandleToFD)
@@ -358,7 +369,9 @@ int64_t vrm_dmabuf_copy(vrm_dmabuf_bridge_t *bridge,
      * GEM handle via nvidia-drm, then calls vrm_dmabuf_transfer().
      */
     (void)bridge; (void)src_ptr; (void)dst_ptr; (void)size;
-    /* This entry point is a placeholder for the CUDA ↔ DRM interop path.
+    /* STUB: This entry point requires CUDA ↔ DRM interop
+     * (cuMemExportToShareableHandle with CU_MEM_HANDLE_TYPE_DMA_BUF_FD,
+     * CUDA 11.7+). Not yet implemented.
      * The working path is vrm_dmabuf_transfer() with GEM handles. */
     return -1;
 }
