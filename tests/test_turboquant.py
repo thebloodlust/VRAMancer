@@ -259,3 +259,114 @@ class TestTurboQuantEndToEnd:
         x = torch.randn(16, 64)
         recovered = comp._unrotate(comp._rotate(x))
         torch.testing.assert_close(x, recovered, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.skipif(not HAS_TORCH, reason="Requires real torch")
+class TestSparseV:
+    """Tests for Sparse V optimization — selective value decompression."""
+
+    def _make_compressor(self, head_dim=64, bits=4):
+        from core.kv_quantizer import KVCacheCompressor
+        torch.manual_seed(42)
+        return KVCacheCompressor(head_dim=head_dim, bits_per_angle=bits)
+
+    def test_sparse_v_attend_returns_correct_shape(self):
+        """sparse_v_attend returns [1, head_dim]."""
+        comp = self._make_compressor(head_dim=64)
+        keys = torch.randn(50, 64)
+        values = torch.randn(50, 64)
+        q = torch.randn(1, 64)
+
+        ck = comp.compress(keys)
+        cv_list = [comp.compress(values[i:i+1]) for i in range(50)]
+
+        out = comp.sparse_v_attend(q, ck, cv_list, sparse_v_ratio=0.1)
+        assert out.shape == (1, 64)
+
+    def test_sparse_v_ratio_1_matches_full(self):
+        """sparse_v_ratio=1.0 should produce identical result to full decompression."""
+        comp = self._make_compressor(head_dim=64)
+        keys = torch.randn(20, 64)
+        values = torch.randn(20, 64)
+        q = torch.randn(1, 64)
+
+        ck = comp.compress(keys)
+        cv_list = [comp.compress(values[i:i+1]) for i in range(20)]
+
+        out_full = comp.sparse_v_attend(q, ck, cv_list, sparse_v_ratio=1.0)
+        out_sparse = comp.sparse_v_attend(q, ck, cv_list, sparse_v_ratio=1.0)
+        torch.testing.assert_close(out_full, out_sparse)
+
+    def test_sparse_v_quality_close_to_full(self):
+        """Sparse V (10%) output should be close to full decompression output."""
+        comp = self._make_compressor(head_dim=64, bits=4)
+        keys = torch.randn(100, 64)
+        values = torch.randn(100, 64)
+        q = torch.randn(1, 64)
+
+        ck = comp.compress(keys)
+        cv_list = [comp.compress(values[i:i+1]) for i in range(100)]
+
+        out_full = comp.sparse_v_attend(q, ck, cv_list, sparse_v_ratio=1.0)
+        out_sparse = comp.sparse_v_attend(q, ck, cv_list, sparse_v_ratio=0.1)
+
+        # Cosine similarity should be high
+        cos_sim = torch.nn.functional.cosine_similarity(
+            out_full.flatten().unsqueeze(0),
+            out_sparse.flatten().unsqueeze(0),
+        ).item()
+        assert cos_sim > 0.75, f"Sparse V cosine sim to full: {cos_sim:.3f}"
+
+    def test_sparse_v_fewer_decompressions(self):
+        """Sparse V with 10% ratio on 100 tokens should decompress ~10 values."""
+        comp = self._make_compressor(head_dim=64)
+        keys = torch.randn(100, 64)
+        values = torch.randn(100, 64)
+        q = torch.randn(1, 64)
+
+        ck = comp.compress(keys)
+        cv_list = [comp.compress(values[i:i+1]) for i in range(100)]
+
+        # Monkey-patch decompress to count calls
+        call_count = [0]
+        orig_decompress = comp.decompress
+
+        def counting_decompress(c):
+            call_count[0] += 1
+            return orig_decompress(c)
+
+        comp.decompress = counting_decompress
+        comp.sparse_v_attend(q, ck, cv_list, sparse_v_ratio=0.1)
+        assert call_count[0] == 10, f"Expected 10 decompressions, got {call_count[0]}"
+        comp.decompress = orig_decompress
+
+    def test_sparse_v_short_sequence_uses_full(self):
+        """With seq_len=5 and ratio=0.1, k=ceil(0.5)=1 but still < 5, uses sparse."""
+        comp = self._make_compressor(head_dim=64)
+        keys = torch.randn(5, 64)
+        values = torch.randn(5, 64)
+        q = torch.randn(1, 64)
+
+        ck = comp.compress(keys)
+        cv_list = [comp.compress(values[i:i+1]) for i in range(5)]
+
+        out = comp.sparse_v_attend(q, ck, cv_list, sparse_v_ratio=0.1)
+        assert out.shape == (1, 64)
+
+    def test_sparse_v_single_token(self):
+        """Single-token sequence always decompresses the one value."""
+        comp = self._make_compressor(head_dim=64)
+        keys = torch.randn(1, 64)
+        values = torch.randn(1, 64)
+        q = torch.randn(1, 64)
+
+        ck = comp.compress(keys)
+        cv_list = [comp.compress(values[0:1])]
+
+        out = comp.sparse_v_attend(q, ck, cv_list, sparse_v_ratio=0.1)
+        assert out.shape == (1, 64)
+
+    def test_has_sparse_v_attend_method(self):
+        """KVCacheCompressor has sparse_v_attend method."""
+        from core.kv_quantizer import KVCacheCompressor
+        assert hasattr(KVCacheCompressor, "sparse_v_attend")

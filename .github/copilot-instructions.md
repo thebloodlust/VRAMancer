@@ -51,7 +51,7 @@ VRAMancer est un orchestrateur multi-GPU Python (88 fichiers .py dans core/, ~35
 | `benchmark.py` | 700 | B+ | 4 modes bench (tok/s, TTFT, ITL, VRAM). | Mode concurrent bypass scheduler — ne reflete pas les perfs reelles. |
 | `utils.py` | 550 | B+ | detect_backend() (CUDA/ROCm/MPS/XPU/NPU/TPU). BasicTokenizer fallback. | BasicTokenizer = 70% accuracy. Mapping cache forever (pas de hotplug). |
 | `speculative_decoding.py` | 380 | B | Draft model + verifier. Auto-mapping par famille (Qwen->0.5B, Llama->1B). Gamma adaptatif. | Self-drafting supprime (pas de speedup). Cable via pipeline.infer(). |
-| `kv_quantizer.py` | 200+ | B | PolarQuant + QJL (~3.5 bits/dim, ~4.6x reduction). | Pas de benchmarks reels. Integration PagedKVCacheManager incertaine. |
+| `kv_quantizer.py` | 200+ | B | PolarQuant + QJL (~3.5 bits/dim, ~4.6x reduction). Sparse V optimization (selective value decompression, top-k%). | Pas de benchmarks reels. Integration PagedKVCacheManager incertaine. |
 | `transport_factory.py` | 300 | B | Factory par localite (SAME_GPU/SAME_NODE/SAME_RACK/REMOTE). | Detection topologie = string match node_id (fragile). VTP non cable. |
 | `triton_sampling.py` | 200 | B | Kernel Triton fuse temperature+softmax. | top-k en Python avant kernel. Fallback PyTorch toujours utilise en pratique. |
 | `tracing.py` | 75 | B | OpenTelemetry wrapper. No-op si OTEL absent ou VRM_TRACING != 1. | Aucun probleme. |
@@ -217,6 +217,7 @@ VRAMancer est un orchestrateur multi-GPU Python (88 fichiers .py dans core/, ~35
 | `VRM_QUANTIZATION` | `nvfp4` (Blackwell FP4, CC>=10.0), `nf4` (4-bit NormalFloat, BnB), `int8` (LLM.int8, BnB), vide = BF16 |
 | `VRM_KV_COMPRESSION` | `turboquant` (PolarQuant + QJL, ~3.5 bits/dim) |
 | `VRM_KV_COMPRESSION_BITS` | Bits par angle polaire (defaut 3) |
+| `VRM_SPARSE_V_RATIO` | Sparse V: fraction of values to decompress (defaut 1.0 = all, 0.1 = top 10%) |
 | `VRM_VRAM_LENDING` | Active/desactive le VRAM Lending Pool (defaut `1` en multi-GPU) |
 | `VRM_LEND_RATIO` | Ratio max de VRAM libre pretable (defaut `0.70`) |
 | `VRM_RECLAIM_THRESHOLD` | Seuil d'utilisation declenchant le reclaim (defaut `0.80`) |

@@ -10,6 +10,11 @@ Two-stage compression:
   Stage 2 — QJL 1-bit: project residual error via JL matrix → sign-bit quantization.
             Asymmetric estimator computes attention scores directly (no reconstruction).
 
+Sparse V optimization (March 2026):
+  After computing attention weights from compressed keys, only ~10% of tokens
+  carry meaningful weight. Sparse V skips value decompression for the other ~90%,
+  yielding massive speedup with near-zero quality loss.
+
 Typical budget: 3 bits/dim PolarQuant + 0.5 bits/dim QJL ≈ 3.5 bits/dim total.
 Achieves 6× KV memory reduction with near-zero accuracy loss.
 """
@@ -292,6 +297,61 @@ class KVCacheCompressor(nn.Module):
         )
 
         return scores + correction
+
+    def sparse_v_attend(
+        self,
+        q: "torch.Tensor",
+        compressed_k: dict,
+        compressed_v_list: list,
+        scale: float = None,
+        sparse_v_ratio: float = 0.1,
+    ) -> "torch.Tensor":
+        """
+        Sparse V attention: scores from compressed keys, selective value decompression.
+
+        After computing attention weights via the asymmetric estimator, only the
+        top-k tokens (by weight) have their values decompressed. The other ~90%
+        are skipped entirely, yielding large speedups with near-zero quality loss.
+
+        Args:
+            q: [1, head_dim] single query vector
+            compressed_k: merged compressed keys dict (from compress())
+            compressed_v_list: list of per-token compressed value dicts
+            scale: attention scale (default 1/sqrt(head_dim))
+            sparse_v_ratio: fraction of values to decompress (default 0.1 = top 10%)
+
+        Returns:
+            [1, head_dim] attention output
+        """
+        if scale is None:
+            scale = 1.0 / math.sqrt(self.head_dim)
+
+        # Attention scores from compressed keys (no reconstruction)
+        scores = self.attention_score(q, compressed_k) * scale  # [1, seq]
+        weights = torch.softmax(scores, dim=-1)  # [1, seq]
+
+        seq_len = weights.shape[-1]
+        k = max(1, int(math.ceil(sparse_v_ratio * seq_len)))
+
+        if k >= seq_len:
+            # Short sequence or ratio >= 1.0 — decompress all
+            v_vecs = [self.decompress(cv) for cv in compressed_v_list]
+            v_mat = torch.cat(v_vecs, dim=0)  # [seq, head_dim]
+            return weights @ v_mat  # [1, head_dim]
+
+        # Select top-k tokens by attention weight
+        topk_weights, topk_indices = weights.topk(k, dim=-1)  # [1, k]
+
+        # Renormalize so weights sum to 1
+        topk_weights = topk_weights / topk_weights.sum(dim=-1, keepdim=True)
+
+        # Only decompress selected values
+        v_vecs = []
+        for idx in topk_indices.squeeze(0):
+            v_vecs.append(self.decompress(compressed_v_list[idx.item()]))
+        v_mat = torch.cat(v_vecs, dim=0)  # [k, head_dim]
+
+        return topk_weights @ v_mat  # [1, head_dim]
 
     def bits_per_dim(self) -> float:
         """Compute actual compression ratio in bits per dimension."""

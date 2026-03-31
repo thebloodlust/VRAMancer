@@ -287,3 +287,88 @@ class TestTurboQuantEdgeCases:
 
         freed = mgr.free("tofree")
         assert freed >= 1
+
+
+@pytest.mark.skipif(not HAS_TORCH, reason="Requires real torch")
+class TestSparseVIntegration:
+    """Integration tests for Sparse V in PagedKVCacheManager."""
+
+    def test_sparse_v_config_default(self):
+        """PagedKVConfig has sparse_v_ratio defaulting to 1.0."""
+        from core.paged_attention import PagedKVConfig
+        cfg = PagedKVConfig()
+        assert cfg.sparse_v_ratio == 1.0
+
+    def test_sparse_v_config_custom(self):
+        """PagedKVConfig accepts custom sparse_v_ratio."""
+        from core.paged_attention import PagedKVConfig
+        cfg = PagedKVConfig(sparse_v_ratio=0.1)
+        assert cfg.sparse_v_ratio == 0.1
+
+    def test_sparse_v_env_var(self):
+        """VRM_SPARSE_V_RATIO env var is read by from_model."""
+        import os
+        from core.paged_attention import PagedKVConfig
+
+        class FakeModel:
+            class config:
+                num_hidden_layers = 2
+                num_attention_heads = 4
+                num_key_value_heads = 4
+                hidden_size = 64
+
+        old = os.environ.get("VRM_SPARSE_V_RATIO")
+        try:
+            os.environ["VRM_SPARSE_V_RATIO"] = "0.15"
+            cfg = PagedKVConfig.from_model(FakeModel())
+            assert abs(cfg.sparse_v_ratio - 0.15) < 1e-6
+        finally:
+            if old is None:
+                os.environ.pop("VRM_SPARSE_V_RATIO", None)
+            else:
+                os.environ["VRM_SPARSE_V_RATIO"] = old
+
+    def test_compute_attention_turbo_with_sparse_v(self):
+        """compute_attention_turbo works with sparse_v_ratio < 1.0."""
+        from core.paged_attention import PagedKVCacheManager, PagedKVConfig
+        cfg = PagedKVConfig(
+            page_size=16, num_layers=1, num_kv_heads=2,
+            head_dim=64, max_pages=16, device="cpu",
+            kv_compression="turboquant",
+            sparse_v_ratio=0.3,
+        )
+        mgr = PagedKVCacheManager(cfg)
+        mgr.allocate("sparse_req")
+
+        # Write 10 tokens
+        for _ in range(10):
+            result = mgr.append_token("sparse_req")
+            page_id, slot = result
+            mgr.write_kv("sparse_req", 0, page_id, slot,
+                          torch.randn(2, 64), torch.randn(2, 64))
+
+        query = torch.randn(2, 64)
+        result = mgr.compute_attention_turbo(query, "sparse_req", 0)
+        assert result is not None
+        assert result.shape == (2, 64)
+
+    def test_sparse_v_full_vs_sparse_output_shape(self):
+        """Both sparse_v_ratio=1.0 and 0.1 produce same output shape."""
+        from core.paged_attention import PagedKVCacheManager, PagedKVConfig
+
+        for ratio in [1.0, 0.1]:
+            cfg = PagedKVConfig(
+                page_size=16, num_layers=1, num_kv_heads=1,
+                head_dim=64, max_pages=16, device="cpu",
+                kv_compression="turboquant",
+                sparse_v_ratio=ratio,
+            )
+            mgr = PagedKVCacheManager(cfg)
+            mgr.allocate("test_shape")
+            for _ in range(20):
+                page_id, slot = mgr.append_token("test_shape")
+                mgr.write_kv("test_shape", 0, page_id, slot,
+                              torch.randn(1, 64), torch.randn(1, 64))
+            result = mgr.compute_attention_turbo(torch.randn(1, 64), "test_shape", 0)
+            assert result is not None
+            assert result.shape == (1, 64)

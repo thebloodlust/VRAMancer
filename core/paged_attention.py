@@ -102,6 +102,7 @@ class PagedKVConfig:
     kv_compression: Optional[str] = None  # None or "turboquant" (kept for compat)
     compression_bits: int = 3             # bits per polar angle (3 → ~3.5 bits/dim)
     qjl_dim: Optional[int] = None         # QJL projection dim (default head_dim//2)
+    sparse_v_ratio: float = 1.0           # Sparse V: fraction of values to decompress (0.1 = top 10%)
 
     @property
     def page_size_bytes(self) -> int:
@@ -118,11 +119,13 @@ class PagedKVConfig:
         """Auto-detect config from a HuggingFace model."""
         kv_comp = os.environ.get("VRM_KV_COMPRESSION", "").lower() or None
         comp_bits = int(os.environ.get("VRM_KV_COMPRESSION_BITS", "3"))
+        sparse_v = float(os.environ.get("VRM_SPARSE_V_RATIO", "1.0"))
 
         config = getattr(model, 'config', None)
         if config is None:
             return cls(max_pages=max_pages, device=device,
-                       kv_compression=kv_comp, compression_bits=comp_bits)
+                       kv_compression=kv_comp, compression_bits=comp_bits,
+                       sparse_v_ratio=sparse_v)
 
         num_layers = getattr(config, 'num_hidden_layers', 12)
         num_heads = getattr(config, 'num_attention_heads', 12)
@@ -138,6 +141,7 @@ class PagedKVConfig:
             device=device,
             kv_compression=kv_comp,
             compression_bits=comp_bits,
+            sparse_v_ratio=sparse_v,
         )
 
 
@@ -340,9 +344,10 @@ class PagedKVCacheManager:
             ratio = 16.0 / bpd  # fp16 = 16 bits/dim baseline
             _logger.info(
                 "KV cache compression enabled: %.1f bits/dim (%.1fx reduction, "
-                "bits_per_angle=%d, qjl_dim=%d)",
+                "bits_per_angle=%d, qjl_dim=%d, sparse_v=%.0f%%)",
                 bpd, ratio, self.config.compression_bits,
                 self._kv_compressor.qjl_dim,
+                self.config.sparse_v_ratio * 100,
             )
         except Exception as e:
             _logger.warning("KV compression init failed: %s", e)
@@ -1133,14 +1138,29 @@ class PagedKVCacheManager:
                     # Softmax
                     weights = torch.softmax(scores, dim=-1)  # [1, seq]
 
-                    # For values, decompress (values need full reconstruction)
-                    v_vecs = []
-                    for cv in all_cv:
-                        v_dec = self._kv_compressor.decompress(cv)
-                        v_vecs.append(v_dec[kv_head:kv_head+1])  # [1, head_dim]
+                    # Sparse V: only decompress top-k% of values
+                    sparse_ratio = self.config.sparse_v_ratio
+                    seq_len = weights.shape[-1]
+                    k = max(1, int(math.ceil(sparse_ratio * seq_len)))
 
-                    v_mat = torch.cat(v_vecs, dim=0)  # [seq, head_dim]
-                    out_h = weights @ v_mat  # [1, head_dim]
+                    if k < seq_len:
+                        # Sparse V path — skip ~90% of value decompressions
+                        topk_w, topk_idx = weights.topk(k, dim=-1)
+                        topk_w = topk_w / topk_w.sum(dim=-1, keepdim=True)
+                        v_vecs = []
+                        for idx in topk_idx.squeeze(0):
+                            v_dec = self._kv_compressor.decompress(all_cv[idx.item()])
+                            v_vecs.append(v_dec[kv_head:kv_head+1])
+                        v_mat = torch.cat(v_vecs, dim=0)
+                        out_h = topk_w @ v_mat
+                    else:
+                        # Full decompression (short seq or Sparse V disabled)
+                        v_vecs = []
+                        for cv in all_cv:
+                            v_dec = self._kv_compressor.decompress(cv)
+                            v_vecs.append(v_dec[kv_head:kv_head+1])
+                        v_mat = torch.cat(v_vecs, dim=0)
+                        out_h = weights @ v_mat
                     outputs.append(out_h)
 
                 return torch.cat(outputs, dim=0)  # [num_heads, head_dim]

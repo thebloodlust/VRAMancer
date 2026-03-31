@@ -148,3 +148,19 @@
 - [x] **Imports nettoyés** — `production_api.py` (webgpu_node import supprimé), `test_backend_webgpu.py`, `test_production_improvements.py`, `test_observability.py` (imports mis à jour vers `_deprecated.*`).
 - [x] **build-rust.yml** — Ajouté jobs lint (cargo clippy/fmt) + test (cargo test) + Python import verify + dtolnay/rust-toolchain.
 
+---
+
+## TurboQuant + Sparse V ✅
+
+### Sparse V Optimization (Mars 2026)
+
+Implémentation de l'optimisation Sparse V inspirée du papier Google TurboQuant (ICLR 2026)
+et du travail de Tom Turney : après le softmax sur les scores d'attention compressés, seuls
+~10% des tokens portent un poids significatif. On skip la décompression des 90% restants.
+
+- [x] **`kv_quantizer.py` — méthode `sparse_v_attend()`** — Prend query, compressed keys, list de compressed values, `sparse_v_ratio`. Top-k sélection → décompression sélective → renormalisation → weighted sum. API standalone pour usage direct.
+- [x] **`paged_attention.py` — `compute_attention_turbo()` avec Sparse V** — Après softmax, si `sparse_v_ratio < 1.0`, seuls les top-k% tokens sont décompressés. Renormalisation automatique des poids.
+- [x] **`PagedKVConfig.sparse_v_ratio`** — Nouveau champ (defaut `1.0` = all). Env var `VRM_SPARSE_V_RATIO`. Propagé via `from_model()`.
+- [x] **Tests unitaires** — 7 tests : shape, quality (cosine sim > 0.75), decompression count (10/100), single token, short sequence, ratio=1.0 identity. Classe `TestSparseV` dans `test_turboquant.py`.
+- [x] **Tests intégration** — 5 tests : config default, custom ratio, env var, `compute_attention_turbo()` avec Sparse V, shape consistency. Classe `TestSparseVIntegration` dans `test_turboquant_integration.py`.
+- [x] **957 tests passent, 0 échec.**
