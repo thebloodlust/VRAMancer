@@ -183,8 +183,7 @@ def bench_config(
 
         # Warmup
         warmup_prompt = "Hello world"
-        for chunk in pipeline.generate(warmup_prompt, max_new_tokens=8):
-            pass
+        pipeline.generate(warmup_prompt, max_new_tokens=8)
         torch.cuda.synchronize()
         clear_gpu()
         torch.cuda.reset_peak_memory_stats()
@@ -194,13 +193,20 @@ def bench_config(
         total_time = 0.0
         per_prompt = []
 
+        # Get tokenizer for accurate token counting
+        _tokenizer = getattr(pipeline.backend, "tokenizer", None)
+
         for prompt in prompts:
-            tokens = 0
             t0 = time.perf_counter()
-            for chunk in pipeline.generate(prompt, max_new_tokens=max_tokens):
-                tokens += 1
+            result_text = pipeline.generate(prompt, max_new_tokens=max_tokens)
             torch.cuda.synchronize()
             elapsed = time.perf_counter() - t0
+            # Count actual generated tokens (generate() returns only new text, no prompt)
+            if _tokenizer is not None:
+                tokens = len(_tokenizer.encode(result_text))
+                tokens = max(tokens, 1)
+            else:
+                tokens = len(result_text) // 4  # rough estimate
             tps = tokens / elapsed if elapsed > 0 else 0
             per_prompt.append({"tokens": tokens, "time_s": round(elapsed, 3), "tok_s": round(tps, 1)})
             total_tokens += tokens

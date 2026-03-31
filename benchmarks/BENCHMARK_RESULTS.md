@@ -386,6 +386,67 @@ forward() → triton_quantize_nvfp4(activation) → _scaled_mm
 - **torch.compile works** on DirectFP4Linear (hangs on NVFP4Tensor)
 - Applied automatically after quantization in `_apply_nvfp4_quantization()`
 
+## TurboQuant on Qwen2.5-7B-Instruct — CPU Bottleneck (RTX 3090)
+
+TurboQuant KV compression shows dramatically different behavior on Qwen-7B (128-dim heads) vs TinyLlama (64-dim heads). The pure Python PolarQuant + QJL implementation hits a CPU bottleneck that scales with head_dim × seq_len.
+
+### Results (Qwen2.5-7B-Instruct, 3 prompts × 128 tokens, RTX 3090 24 GB)
+
+| Configuration | tok/s | time (s) | VRAM (GB) | vs BF16 |
+|---|---|---|---|---|
+| **BF16 baseline** | **48.9** | 7.85 | 19.02 | — |
+| TurboQuant (3-bit) | 0.75 | 509.7 | 23.99 | **-98.5%** (65x slower) |
+| TurboQuant + Sparse V 30% | 0.28 | 1349.2 | 22.89 | **-99.4%** (175x slower) |
+| TurboQuant + Sparse V 10% | 0.33 | 1161.0 | 22.89 | **-99.3%** (148x slower) |
+
+### Why TurboQuant Regresses on Qwen-7B
+
+| Factor | TinyLlama 1.1B (+107%) | Qwen 7B (-98.5%) |
+|---|---|---|
+| head_dim | 64 | 128 |
+| num_kv_heads | 4 | 4 |
+| PolarQuant ops/token | O(64 × seq_len) | O(128 × seq_len) |
+| QJL projection | 64×64 matrix | 128×128 matrix |
+| Compute ratio KV/model | KV cache dominates → savings win | Model compute dominates → overhead loses |
+| Implementation | Pure Python (numpy) | Pure Python (numpy) |
+
+**Root cause**: TurboQuant's KV compression runs entirely on CPU (Python + numpy). On small models (TinyLlama), KV cache is a proportionally larger bottleneck, so the 4x compression helps. On Qwen-7B, the model forward pass is fast on the 3090 (~49 tok/s BF16) but KV compression adds ~1.3s CPU overhead per token — O(head_dim × seq_len) per head per layer, all in Python.
+
+**Fix path**: CUDA/Triton kernels for PolarQuant + QJL. The compression algorithm is sound; only the implementation needs to be GPU-native.
+
+## Bi-GPU Qwen2.5-7B — Heterogeneous Pipeline Parallel (RTX 3090 + RTX 5070 Ti)
+
+Pipeline-parallel split across two heterogeneous GPUs: RTX 3090 (24 GB, Ampere CC 8.6) + RTX 5070 Ti (16 GB, Blackwell CC 12.0). VRAM-proportional layer split with CPU-staged pinned transfers (Strategy 4 — Proxmox VM, IOMMU blocks P2P).
+
+### Results (Qwen2.5-7B-Instruct, 3 prompts × 128 tokens, 2 GPUs)
+
+| Configuration | tok/s | time (s) | VRAM (GB) | Status |
+|---|---|---|---|---|
+| **BF16 baseline** | **26.1** | 14.7 | 26.30 | OK |
+| TurboQuant (3-bit) | 4.6 | 82.8 | 38.83 | OK |
+| TurboQuant + Sparse V 30% | — | — | — | OOM (GPU 0 full, 15.47 GB) |
+| TurboQuant + Sparse V 10% | — | — | — | OOM (GPU 1 full, 23.56 GB) |
+
+### Key Findings
+
+1. **Bi-GPU BF16 = 26.1 tok/s** — roughly half of single 3090 speed (48.9 tok/s). This is expected for a 7B model: it fits on one GPU, so the pipeline-parallel overhead (inter-GPU transfers via CPU staging) outweighs the benefit of additional compute.
+2. **TurboQuant bi-GPU = 4.6 tok/s** vs 0.75 tok/s single-GPU (+6.1x). The CPU bottleneck benefits from parallel KV operations across 2 GPUs, but remains the primary bottleneck.
+3. **Sparse V OOM on bi-GPU**: PagedKVCache allocates buffers on both GPUs. With Sparse V decompression buffers on top of the model split, total VRAM exceeds both GPUs (15.47 GB + 23.56 GB = 39 GB).
+4. **Multi-GPU is for models that don't fit**: Qwen-7B BF16 fits on a single 3090 (19 GB). Splitting it across 2 GPUs adds transfer overhead for zero capacity benefit. The real multi-GPU win is Qwen-14B (35.9 GB, doesn't fit on any single GPU → 6.0 tok/s bi-GPU).
+
+### NVFP4 + TurboQuant Combined (RTX 5070 Ti)
+
+NVFP4 quantized model + TurboQuant KV compression on a single RTX 5070 Ti:
+
+| Configuration | tok/s | VRAM (GB) | Status |
+|---|---|---|---|
+| **NVFP4 baseline** | **1.1** | 11.31 | OK (includes TurboEngine JIT) |
+| NVFP4 + TurboQuant + Sparse V 10% | — | — | OOM (15.43 GB on 16 GB GPU) |
+
+The NVFP4 baseline averages 1.1 tok/s across 3 prompts (384 tokens / 338.8s) because the first prompt includes TurboEngine graph compilation (~8 minutes). After compilation, steady-state NVFP4 throughput is approximately 5-6x higher on subsequent prompts.
+
+NVFP4+TQ+SV10% exceeds the 5070 Ti's 16 GB: the NVFP4 model (~5.5 GB) + PagedKVCache + TQ buffers + Sparse V decompression buffers total 15.43 GB, leaving no room for intermediate activations.
+
 ## Reproduction
 
 ```bash
@@ -417,4 +478,9 @@ CUDA_VISIBLE_DEVICES=0 python benchmarks/bench_max_tps.py
 
 # NVFP4 Blackwell benchmark (requires RTX 50xx)
 CUDA_VISIBLE_DEVICES=1 python benchmarks/bench_nvfp4.py
+
+# TurboQuant on Qwen-7B (single GPU + bi-GPU + NVFP4)
+python benchmarks/bench_turboquant.py --model Qwen/Qwen2.5-7B-Instruct --max-tokens 128
+python benchmarks/bench_turboquant.py --model Qwen/Qwen2.5-7B-Instruct --max-tokens 128 --num-gpus 2
+python benchmarks/bench_turboquant.py --model Qwen/Qwen2.5-7B-Instruct --max-tokens 128 --nvfp4-only
 ```

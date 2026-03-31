@@ -1,0 +1,78 @@
+[
+  {
+    "config": "BF16 baseline",
+    "model": "Qwen/Qwen2.5-7B-Instruct",
+    "num_gpus": 2,
+    "max_tokens": 128,
+    "load_time_s": 5.0,
+    "kv_compression_active": false,
+    "total_tokens": 384,
+    "total_time_s": 14.735,
+    "avg_tok_s": 26.1,
+    "peak_vram_gb": 26.3,
+    "per_prompt": [
+      {
+        "tokens": 128,
+        "time_s": 4.958,
+        "tok_s": 25.8
+      },
+      {
+        "tokens": 128,
+        "time_s": 4.894,
+        "tok_s": 26.2
+      },
+      {
+        "tokens": 128,
+        "time_s": 4.883,
+        "tok_s": 26.2
+      }
+    ],
+    "status": "OK"
+  },
+  {
+    "config": "TurboQuant (3-bit)",
+    "model": "Qwen/Qwen2.5-7B-Instruct",
+    "num_gpus": 2,
+    "max_tokens": 128,
+    "load_time_s": 13.74,
+    "kv_compression_active": false,
+    "total_tokens": 384,
+    "total_time_s": 82.775,
+    "avg_tok_s": 4.6,
+    "peak_vram_gb": 38.83,
+    "per_prompt": [
+      {
+        "tokens": 128,
+        "time_s": 27.679,
+        "tok_s": 4.6
+      },
+      {
+        "tokens": 128,
+        "time_s": 27.454,
+        "tok_s": 4.7
+      },
+      {
+        "tokens": 128,
+        "time_s": 27.642,
+        "tok_s": 4.6
+      }
+    ],
+    "status": "OK"
+  },
+  {
+    "config": "TurboQuant + Sparse V 30%",
+    "model": "Qwen/Qwen2.5-7B-Instruct",
+    "num_gpus": 2,
+    "max_tokens": 128,
+    "load_time_s": 4.65,
+    "kv_compression_active": false,
+    "status": "FAILED: CUDA out of memory. Tried to allocate 1.02 GiB. GPU 0 has a total capacity of 15.47 GiB of which 573.31 MiB is free. Including non-PyTorch memory, this process has 14.89 GiB memory in use. Of the allocated memory 14.60 GiB is allocated by PyTorch, and 26.00 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+  },
+  {
+    "config": "TurboQuant + Sparse V 10%",
+    "model": "Qwen/Qwen2.5-7B-Instruct",
+    "num_gpus": 2,
+    "max_tokens": 128,
+    "status": "FAILED: CUDA out of memory. Tried to allocate 1.86 GiB. GPU 1 has a total capacity of 23.56 GiB of which 113.38 MiB is free. Including non-PyTorch memory, this process has 23.43 GiB memory in use. Of the allocated memory 23.10 GiB is allocated by PyTorch, and 30.23 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+  }
+]
