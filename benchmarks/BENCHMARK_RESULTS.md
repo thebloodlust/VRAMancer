@@ -262,7 +262,58 @@ At memory-bandwidth saturation (which is the bottleneck for all LLM decode), rea
 - [x] ~~CUDA graphs / reduce-overhead~~ — converges at same ~49 tok/s as torch.compile default (bandwidth ceiling)
 - [x] ~~GGUF/llama.cpp vs BnB NF4~~ — **5.4x speedup** (see above)
 - [x] ~~NVFP4 Blackwell native FP4~~ — **real cublas FP4 kernel working** (see below)
+- [x] ~~TurboQuant KV compression + Sparse V~~ — **+107% throughput on TinyLlama** (see below)
 - [ ] GGUF/llama.cpp comparison (Ollama's backend — likely the 60-100 tok/s reference)
+- [ ] NVFP4 + TurboQuant + Sparse V combined (blocked by GPU contention during benchmark session)
+
+## TurboQuant + Sparse V — KV Cache Compression (31 March 2026)
+
+Google's TurboQuant (ICLR March 2026) compresses KV cache to ~3.5-4.0 bits/dim using PolarQuant + QJL random projection. VRAMancer's implementation adds **Sparse V**: after computing attention weights from compressed keys, only the top-k% of value tokens are decompressed — the other 90% are skipped entirely.
+
+### KV Compressor Microbenchmark (CPU, RTX 3090)
+
+| head_dim | bits/dim | compression | seq=128 compress | seq=512 compress | seq=2048 compress |
+|---|---|---|---|---|---|
+| 64 | 4.0 | **4.0x** | 42ms | 70ms | 470ms |
+| 128 | 3.7 | **4.3x** | 19ms | 25ms | 529ms |
+
+### Pipeline Throughput — GPT-2 124M (RTX 3090, 3 prompts × 64 tokens)
+
+| Configuration | tok/s | VRAM GB | vs BF16 |
+|---|---|---|---|
+| BF16 baseline | 302.5 | 1.59 | — |
+| TurboQuant (3-bit) | 347.7 | 3.25 | **+14.9%** |
+| TurboQuant + Sparse V 30% | 346.2 | 4.90 | **+14.4%** |
+| TurboQuant + Sparse V 10% | 296.7 | 6.48 | -1.9% |
+
+### Pipeline Throughput — TinyLlama 1.1B (RTX 3090, 3 prompts × 128 tokens)
+
+| Configuration | tok/s | VRAM GB | vs BF16 |
+|---|---|---|---|
+| BF16 baseline | 157.0 | 3.69 | — |
+| TurboQuant (3-bit) | 195.6 | 7.37 | **+24.6%** |
+| TurboQuant + Sparse V 30% | 238.7 | 11.05 | **+52.0%** |
+| TurboQuant + Sparse V 10% | **324.9** | 14.73 | **+106.9%** |
+
+### Key Findings
+
+1. **TurboQuant alone adds +15-25%** throughput from compressed KV cache (4x less KV data to read during attention).
+2. **Sparse V 10% doubles throughput** on TinyLlama (157 → 325 tok/s, +107%). By decompressing only the top 10% of values by attention weight, 90% of decompress operations are eliminated.
+3. **Sparse V benefit scales with model size**: GPT-2 (124M) sees -2% with Sparse V 10% (decompression cost exceeds savings), while TinyLlama (1.1B) sees +107% (KV cache is larger relative to model, so savings dominate).
+4. **VRAM reporting includes PagedKVCache accumulation**: The increasing VRAM across configs is an artifact of running sequential configs in the same process — PagedKVCache pages aren't fully freed between runs.
+
+### Activation
+
+```bash
+# TurboQuant KV compression (3-bit polar angles + QJL random projection)
+VRM_KV_COMPRESSION=turboquant python -m vramancer --model gpt2
+
+# TurboQuant + Sparse V (decompress only top 10% of values)
+VRM_KV_COMPRESSION=turboquant VRM_SPARSE_V_RATIO=0.1 python -m vramancer --model gpt2
+
+# Run the benchmark
+python benchmarks/bench_turboquant.py --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --max-tokens 128
+```
 
 ## NVFP4 Blackwell — Native FP4 Quantization (RTX 5070 Ti)
 
