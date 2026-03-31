@@ -263,8 +263,10 @@ At memory-bandwidth saturation (which is the bottleneck for all LLM decode), rea
 - [x] ~~GGUF/llama.cpp vs BnB NF4~~ — **5.4x speedup** (see above)
 - [x] ~~NVFP4 Blackwell native FP4~~ — **real cublas FP4 kernel working** (see below)
 - [x] ~~TurboQuant KV compression + Sparse V~~ — **+107% throughput on TinyLlama** (see below)
+- [x] ~~GPU-accelerated TurboQuant~~ — GPU ops + head-batching: +20% on Qwen-7B TQ (0.75 → 0.9 tok/s). Fundamental call-volume bottleneck remains (56 compress calls/token).
 - [ ] GGUF/llama.cpp comparison (Ollama's backend — likely the 60-100 tok/s reference)
 - [ ] NVFP4 + TurboQuant + Sparse V combined (blocked by GPU contention during benchmark session)
+- [ ] Fused CUDA/Triton kernel for TurboQuant compress (fuse ~80 kernel launches per call into 1-2)
 
 ## TurboQuant + Sparse V — KV Cache Compression (31 March 2026)
 
@@ -446,6 +448,40 @@ NVFP4 quantized model + TurboQuant KV compression on a single RTX 5070 Ti:
 The NVFP4 baseline averages 1.1 tok/s across 3 prompts (384 tokens / 338.8s) because the first prompt includes TurboEngine graph compilation (~8 minutes). After compilation, steady-state NVFP4 throughput is approximately 5-6x higher on subsequent prompts.
 
 NVFP4+TQ+SV10% exceeds the 5070 Ti's 16 GB: the NVFP4 model (~5.5 GB) + PagedKVCache + TQ buffers + Sparse V decompression buffers total 15.43 GB, leaving no room for intermediate activations.
+
+## GPU-Accelerated TurboQuant (31 March 2026)
+
+Moved TurboQuant KV compression operations (Walsh-Hadamard, PolarQuant, QJL) from CPU to GPU-native PyTorch ops (`core/triton_kv_quant.py`). Added GQA head-batching in `_compressed_attention` to reduce call count.
+
+### Changes
+
+1. **GPU ops dispatch** (`core/triton_kv_quant.py`, 310 LOC): All TurboQuant operations (Hadamard transform, polar encode/decode, QJL projection) run as vectorized PyTorch GPU ops on CUDA tensors, eliminating CPU↔GPU transfers.
+2. **KV compressor GPU dispatch** (`core/kv_quantizer.py`): `compress()`, `decompress()`, and `attention_score()` auto-dispatch to GPU ops when input tensors are on CUDA.
+3. **GQA head-batching** (`core/paged_attention.py`): `_compressed_attention` pre-builds merged compressed keys per kv_head (not per attention head). For Qwen-7B's 7:1 GQA ratio, this reduces `attention_score()` calls from 784 → 112 per token (7x). Also caches decompressed values across heads sharing the same kv_head.
+
+### Results (Qwen2.5-7B-Instruct, 3 prompts × 64 tokens, RTX 3090)
+
+| Configuration | tok/s (before) | tok/s (after) | Delta | VRAM |
+|---|---|---|---|---|
+| **BF16 baseline** | 48.9 | 48.1 | -1.6% (noise) | 19.01 GB |
+| **TQ 3bit** | 0.75 | **0.9** | **+20%** | 23.99 GB |
+
+### Analysis
+
+- **+20% improvement** on TQ from GPU ops path (0.75 → 0.9 tok/s), by avoiding CPU↔GPU tensor transfers in compress/decompress/attention_score.
+- **Still 53x slower than BF16** because the bottleneck is **call volume**: 56 `compress()` calls per token (28 layers × 2 KV), each launching ~80 CUDA kernels at ~30µs each = ~2.6ms/call × 56 = 146ms/token overhead.
+- **Head-batching (7x call reduction)** only helps `_compressed_attention` on the read path, which triggers during KV cache eviction (long context). Short-context benchmarks don't exercise it.
+- **BF16 baseline unchanged** (48.1 vs 48.9 = measurement noise, same hardware ceiling of ~49 tok/s).
+
+### Path to Real Performance
+
+The remaining 53x gap requires fusing the ~80 kernel launches per compress() call into 1-2 kernels:
+
+| Approach | Expected Impact | Difficulty |
+|---|---|---|
+| `torch.compile` on compress/decompress | 5-10x (fuses all kernels) | Low — but compilation takes 30-60s, crashes in some environments |
+| Custom CUDA kernel (fused WHT + polar encode + QJL) | 10-50x | High — recursive polar encode maps poorly to SIMT |
+| Reduce compression frequency (compress every N tokens) | N× | Medium — trades memory savings for speed |
 
 ## Reproduction
 

@@ -47,11 +47,12 @@ VRAMancer est un orchestrateur multi-GPU Python (88 fichiers .py dans core/, ~35
 | `layer_profiler.py` | 700 | B+ | Profiling par couche (latence, FLOPS, memoire). DP placement. | Bandwidth PCIe hardcodee 25 GB/s. |
 | `gpu_fault_tolerance.py` | 850 | B+ | State machine HEALTHY->DEGRADED->FAILED->OFFLINE->RECOVERING. | Probe triviale (16x16 tensor). Compteur failures ne decroit pas. |
 | `hetero_config.py` | 580 | B+ | Auto-detection GPU heterogene, VM, P2P, tiers. DB 20+ cartes. | Aucun probleme. |
-| `paged_attention.py` | 300+ | B+ | Block-based KV cache (vLLM-style). KV compression (turboquant). | Integration kv_quantizer pas testee en conditions reelles. |
+| `paged_attention.py` | 300+ | B+ | Block-based KV cache (vLLM-style). KV compression (turboquant). GQA head-batching in _compressed_attention (7x call reduction). | Pool OOM on large models leaves 0 pages. |
 | `benchmark.py` | 700 | B+ | 4 modes bench (tok/s, TTFT, ITL, VRAM). | Mode concurrent bypass scheduler — ne reflete pas les perfs reelles. |
 | `utils.py` | 550 | B+ | detect_backend() (CUDA/ROCm/MPS/XPU/NPU/TPU). BasicTokenizer fallback. | BasicTokenizer = 70% accuracy. Mapping cache forever (pas de hotplug). |
 | `speculative_decoding.py` | 380 | B | Draft model + verifier. Auto-mapping par famille (Qwen->0.5B, Llama->1B). Gamma adaptatif. | Self-drafting supprime (pas de speedup). Cable via pipeline.infer(). |
-| `kv_quantizer.py` | 200+ | B | PolarQuant + QJL (~3.5 bits/dim, ~4.6x reduction). Sparse V optimization (selective value decompression, top-k%). | Pas de benchmarks reels. Integration PagedKVCacheManager incertaine. |
+| `kv_quantizer.py` | 400+ | B | PolarQuant + QJL (~3.5 bits/dim, ~4.6x reduction). Sparse V optimization (selective value decompression, top-k%). GPU dispatch via triton_kv_quant.py. | Bottleneck = call volume (56 compress/token on 7B). |
+| `triton_kv_quant.py` | 310 | B+ | GPU-native ops for TurboQuant: Walsh-Hadamard, polar encode/decode, QJL projection. All vectorized PyTorch GPU ops, zero CPU↔GPU transfers. | Not fused — ~80 kernel launches per compress() call. |
 | `transport_factory.py` | 300 | B | Factory par localite (SAME_GPU/SAME_NODE/SAME_RACK/REMOTE). | Detection topologie = string match node_id (fragile). VTP non cable. |
 | `triton_sampling.py` | 200 | B | Kernel Triton fuse temperature+softmax. | top-k en Python avant kernel. Fallback PyTorch toujours utilise en pratique. |
 | `tracing.py` | 75 | B | OpenTelemetry wrapper. No-op si OTEL absent ou VRM_TRACING != 1. | Aucun probleme. |

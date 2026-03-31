@@ -21,7 +21,10 @@ Achieves 6× KV memory reduction with near-zero accuracy loss.
 from __future__ import annotations
 
 import math
+import logging
 from typing import Optional
+
+_logger = logging.getLogger("vramancer.kv_quantizer")
 
 try:
     import torch
@@ -35,6 +38,15 @@ except ImportError:
         Module = object
     nn = _Stub()  # type: ignore[assignment]
 
+# GPU-accelerated ops (zero CPU transfers)
+_GPU_OPS = None
+try:
+    from core.triton_kv_quant import TritonKVCompressOps, HAS_TORCH as _TKV_TORCH
+    if _TKV_TORCH:
+        _GPU_OPS = TritonKVCompressOps
+except ImportError:
+    pass
+
 
 class KVCacheCompressor(nn.Module):
     """
@@ -47,10 +59,11 @@ class KVCacheCompressor(nn.Module):
     """
 
     def __init__(self, head_dim: int, bits_per_angle: int = 3,
-                 qjl_dim: Optional[int] = None):
+                 qjl_dim: Optional[int] = None, force_cpu: bool = False):
         super().__init__()
         self.head_dim = head_dim
         self.bits_per_angle = bits_per_angle
+        self._force_cpu = force_cpu
 
         # Pad to next power of 2 for recursive polar subdivision
         self._padded_dim = 1 << math.ceil(math.log2(max(head_dim, 2)))
@@ -206,6 +219,12 @@ class KVCacheCompressor(nn.Module):
 
     # ── Public API ─────────────────────────────────────────────────
 
+    def _use_gpu_ops(self, tensor: "torch.Tensor") -> bool:
+        """Check if GPU-accelerated ops should be used."""
+        return (_GPU_OPS is not None
+                and tensor.is_cuda
+                and not self._force_cpu)
+
     def compress(self, kv: "torch.Tensor") -> dict:
         """
         Compress KV cache vectors.
@@ -216,6 +235,12 @@ class KVCacheCompressor(nn.Module):
         Returns:
             dict with keys: radius, angles, qjl_signs, qjl_norms, shape
         """
+        if self._use_gpu_ops(kv):
+            return _GPU_OPS.compress_gpu(
+                kv, self.head_dim, self._padded_dim, self._n_levels,
+                self.bits_per_angle, self._hadamard_signs, self.jl_matrix,
+            )
+
         orig_shape = kv.shape
         flat = kv.reshape(-1, self.head_dim)
 
@@ -253,7 +278,14 @@ class KVCacheCompressor(nn.Module):
         Reconstruct approximate KV vectors (for values or debugging).
         Does NOT use QJL (QJL is for attention scores, not reconstruction).
         """
-        radius = compressed["radius"].float()
+        radius_tensor = compressed["radius"]
+        if self._use_gpu_ops(radius_tensor):
+            return _GPU_OPS.decompress_gpu(
+                compressed, self.head_dim, self._padded_dim,
+                self._n_levels, self.bits_per_angle, self._hadamard_signs,
+            )
+
+        radius = radius_tensor.float()
         reconstructed = self._polar_decode(radius, compressed["angles"])
         unrotated = self._unrotate(reconstructed)
 
@@ -275,6 +307,13 @@ class KVCacheCompressor(nn.Module):
 
         Returns: [n_queries, seq_len] attention scores
         """
+        if self._use_gpu_ops(q):
+            return _GPU_OPS.attention_score_gpu(
+                q, compressed_k, self.head_dim, self._padded_dim,
+                self._n_levels, self.bits_per_angle,
+                self._hadamard_signs, self.jl_matrix, self.qjl_dim,
+            )
+
         flat_q = q.reshape(-1, self.head_dim)
 
         # Pad and rotate query

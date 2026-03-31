@@ -1099,20 +1099,19 @@ class PagedKVCacheManager:
                 n_kv_heads = self.config.num_kv_heads
                 head_dim = self.config.head_dim
 
-                outputs = []
-                for h in range(num_heads):
-                    kv_head = h % n_kv_heads  # GQA mapping
-
-                    # Gather this head's compressed keys across all tokens
+                # ── Pre-build merged compressed keys per kv_head ──
+                # With GQA (e.g. 28 heads / 4 kv_heads = 7:1), multiple
+                # attention heads share the same kv_head. Build merged_ck
+                # only n_kv_heads times, not num_heads times.
+                merged_ck_by_kv = {}
+                for kv_head in range(n_kv_heads):
                     k_radii = []
                     k_angles_by_level = None
                     k_qjl_signs = []
                     k_qjl_norms = []
 
                     for ck in all_ck:
-                        # ck comes from compress() with input [n_kv_heads, head_dim]
-                        # radius: [n_kv_heads, 1], angles: list of [n_kv_heads, ...]
-                        r = ck["radius"][kv_head:kv_head+1]  # [1, 1]
+                        r = ck["radius"][kv_head:kv_head+1]
                         k_radii.append(r)
                         if k_angles_by_level is None:
                             k_angles_by_level = [[] for _ in ck["angles"]]
@@ -1121,47 +1120,66 @@ class PagedKVCacheManager:
                         k_qjl_signs.append(ck["qjl_signs"][kv_head:kv_head+1])
                         k_qjl_norms.append(ck["qjl_norms"][kv_head:kv_head+1])
 
-                    # Stack across sequence dimension
-                    merged_ck = {
-                        "radius": torch.cat(k_radii, dim=0),  # [seq, 1]
+                    merged_ck_by_kv[kv_head] = {
+                        "radius": torch.cat(k_radii, dim=0),
                         "angles": [torch.cat(lvl, dim=0) for lvl in k_angles_by_level],
-                        "qjl_signs": torch.cat(k_qjl_signs, dim=0),  # [seq, m]
-                        "qjl_norms": torch.cat(k_qjl_norms, dim=0),  # [seq, 1]
+                        "qjl_signs": torch.cat(k_qjl_signs, dim=0),
+                        "qjl_norms": torch.cat(k_qjl_norms, dim=0),
                         "shape": (len(all_ck), head_dim),
                     }
 
-                    # Compute attention scores directly (no reconstruction)
-                    q_h = q_heads[h:h+1]  # [1, head_dim]
-                    scores = self._kv_compressor.attention_score(q_h, merged_ck)
-                    scores = scores * scale  # [1, seq]
+                # ── Pre-decompress values that may be needed ──
+                # For Sparse V, cache decompressed values per kv_head
+                # to avoid redundant decompress calls.
+                v_dec_cache = {}  # token_idx → full decompressed [n_kv_heads, head_dim]
 
-                    # Softmax
-                    weights = torch.softmax(scores, dim=-1)  # [1, seq]
+                # ── Batch attention scores by kv_head group ──
+                # Group attention heads by their kv_head mapping
+                sparse_ratio = self.config.sparse_v_ratio
+                outputs = [None] * num_heads
 
-                    # Sparse V: only decompress top-k% of values
-                    sparse_ratio = self.config.sparse_v_ratio
+                for kv_head in range(n_kv_heads):
+                    # Find all attention heads mapping to this kv_head
+                    group = [h for h in range(num_heads) if h % n_kv_heads == kv_head]
+                    if not group:
+                        continue
+
+                    merged_ck = merged_ck_by_kv[kv_head]
+
+                    # Batch queries: [group_size, head_dim]
+                    q_group = q_heads[group]
+                    # Single batched attention_score call for all heads in group
+                    scores = self._kv_compressor.attention_score(q_group, merged_ck)
+                    scores = scores * scale  # [group_size, seq]
+
+                    weights = torch.softmax(scores, dim=-1)  # [group_size, seq]
+
                     seq_len = weights.shape[-1]
-                    k = max(1, int(math.ceil(sparse_ratio * seq_len)))
+                    k_topk = max(1, int(math.ceil(sparse_ratio * seq_len)))
 
-                    if k < seq_len:
-                        # Sparse V path — skip ~90% of value decompressions
-                        topk_w, topk_idx = weights.topk(k, dim=-1)
-                        topk_w = topk_w / topk_w.sum(dim=-1, keepdim=True)
-                        v_vecs = []
-                        for idx in topk_idx.squeeze(0):
-                            v_dec = self._kv_compressor.decompress(all_cv[idx.item()])
-                            v_vecs.append(v_dec[kv_head:kv_head+1])
-                        v_mat = torch.cat(v_vecs, dim=0)
-                        out_h = topk_w @ v_mat
-                    else:
-                        # Full decompression (short seq or Sparse V disabled)
-                        v_vecs = []
-                        for cv in all_cv:
-                            v_dec = self._kv_compressor.decompress(cv)
-                            v_vecs.append(v_dec[kv_head:kv_head+1])
-                        v_mat = torch.cat(v_vecs, dim=0)
-                        out_h = weights @ v_mat
-                    outputs.append(out_h)
+                    # Process each head in the group for Sparse V
+                    for gi, h in enumerate(group):
+                        w_h = weights[gi:gi+1]  # [1, seq]
+
+                        if k_topk < seq_len:
+                            topk_w, topk_idx = w_h.topk(k_topk, dim=-1)
+                            topk_w = topk_w / topk_w.sum(dim=-1, keepdim=True)
+                            v_vecs = []
+                            for idx in topk_idx.squeeze(0):
+                                ti = idx.item()
+                                if ti not in v_dec_cache:
+                                    v_dec_cache[ti] = self._kv_compressor.decompress(all_cv[ti])
+                                v_vecs.append(v_dec_cache[ti][kv_head:kv_head+1])
+                            v_mat = torch.cat(v_vecs, dim=0)
+                            outputs[h] = topk_w @ v_mat
+                        else:
+                            v_vecs = []
+                            for ti, cv in enumerate(all_cv):
+                                if ti not in v_dec_cache:
+                                    v_dec_cache[ti] = self._kv_compressor.decompress(cv)
+                                v_vecs.append(v_dec_cache[ti][kv_head:kv_head+1])
+                            v_mat = torch.cat(v_vecs, dim=0)
+                            outputs[h] = w_h @ v_mat
 
                 return torch.cat(outputs, dim=0)  # [num_heads, head_dim]
         except Exception as e:
