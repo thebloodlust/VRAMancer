@@ -70,8 +70,9 @@ def bench_model(model_name, dtype_str="float16", quant=None, max_new=50):
 
     prompt = "The future of artificial intelligence is"
     inputs = tokenizer(prompt, return_tensors="pt")
-    if quant != "nf4":
-        inputs = {k: v.to(device) for k, v in inputs.items()}
+    # Always move inputs to the device where the model lives
+    model_device = next(model.parameters()).device
+    inputs = {k: v.to(model_device) for k, v in inputs.items()}
 
     # Warmup
     with torch.no_grad():
