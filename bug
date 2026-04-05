@@ -1,13 +1,13 @@
 
 REM ============================================
-REM  FIX TRITON - 5 avril 2026
+REM  CROSS-NODE INFERENCE - 5 avril 2026
 REM ============================================
 REM
-REM ETAPE 1 : Pull le fix (skip TurboEngine/torch.compile sur Windows)
+REM ETAPE 1 : Pull le nouveau code (cross-node inference)
 cd C:\Users\the_b\Downloads\VRAMancer-main\VRAMancer-main
 git pull
 REM
-REM ETAPE 2 : Relancer l'API (nouveau terminal PROPRE, sans VRM_MINIMAL_TEST)
+REM ETAPE 2 : Relancer l'API
 .venv\Scripts\activate
 set VRM_DISABLE_RATE_LIMIT=1
 set VRM_API_TOKEN=testtoken
@@ -15,8 +15,11 @@ set VRM_CLUSTER_SECRET=testtoken
 set VRM_BACKEND_ALLOW_STUB=1
 python -m core.production_api
 REM
-REM Le fix desactive torch.compile sur Windows (Triton absent)
-REM L'inference marchera en mode eager (un peu plus lent mais fonctionnel)
+REM ETAPE 3 : Charger GPT-2 (si pas deja fait)
+REM curl -X POST http://localhost:5030/api/models/load -H "Content-Type: application/json" -H "Authorization: Bearer testtoken" -d "{\"model\": \"gpt2\", \"num_gpus\": 1}"
+REM
+REM Le nouveau endpoint /api/worker/forward_layers permet au master
+REM d'envoyer des hidden states pour execution sur les layers du worker
 REM ============================================
 
 ============================= test session starts =============================
