@@ -11,6 +11,7 @@ psutil==5.9.8
 tokenizers>=0.20.0    # Has Windows wheels for Py3.12
 transformers>=4.46.0  # Compatible with tokenizers 0.20.x
 accelerate>=0.27.0
+bitsandbytes>=0.43.0  # NF4 quantization (requires CUDA GPU)
 flask==3.0.2
 pydantic==2.8.2
 pycryptodome==3.20.0

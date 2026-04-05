@@ -38,21 +38,27 @@ def bench_model(model_name, dtype_str="float16", quant=None, max_new=50):
     load_kwargs = {"trust_remote_code": True}
     if quant == "nf4":
         try:
+            import bitsandbytes  # noqa: F401 — verify BnB itself loads
             from transformers import BitsAndBytesConfig
             load_kwargs["quantization_config"] = BitsAndBytesConfig(
                 load_in_4bit=True,
                 bnb_4bit_quant_type="nf4",
                 bnb_4bit_compute_dtype=torch.float16,
             )
-        except ImportError:
-            print("  bitsandbytes not installed, skip NF4")
+        except (ImportError, RuntimeError) as e:
+            print(f"  bitsandbytes not available: {e}")
+            print("  Install: pip install bitsandbytes>=0.43.0")
             return None
     else:
         load_kwargs["torch_dtype"] = getattr(torch, dtype_str)
         load_kwargs["device_map"] = device
 
     t0 = time.perf_counter()
-    model = AutoModelForCausalLM.from_pretrained(model_name, **load_kwargs)
+    try:
+        model = AutoModelForCausalLM.from_pretrained(model_name, **load_kwargs)
+    except Exception as e:
+        print(f"  Failed to load model: {e}")
+        return None
     load_time = time.perf_counter() - t0
     model.eval()
 
