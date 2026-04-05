@@ -709,6 +709,9 @@ class InferencePipeline:
         """
         if os.environ.get("VRM_MINIMAL_TEST") or os.environ.get("VRM_DISABLE_TURBO"):
             return
+        if sys.platform == 'win32':
+            _logger.info("TurboEngine skipped on Windows (Triton not available)")
+            return
 
         backend_type = getattr(self.backend, 'backend_type', 'huggingface')
         if backend_type in ('vllm', 'ollama', 'llamacpp'):

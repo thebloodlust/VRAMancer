@@ -10,6 +10,7 @@ Provides:
 from abc import ABC, abstractmethod
 from typing import Any, List, Optional
 import os
+import sys
 import logging
 logger = logging.getLogger(__name__)
 
@@ -520,6 +521,9 @@ class HuggingFaceBackend(BaseLLMBackend):
         tight custom decode loop with torch.compile + Inductor fusion.
         """
         if os.environ.get("VRM_MINIMAL_TEST") or os.environ.get("VRM_DISABLE_TURBO"):
+            return
+        if sys.platform == 'win32':
+            self.log.info("TurboEngine skipped on Windows (Triton not available)")
             return
         if self.model is None or self.tokenizer is None:
             return
