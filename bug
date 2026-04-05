@@ -1,12 +1,18 @@
-=== INSTRUCTIONS WINDOWS - 14B Cross-Node (v2) ===
+=== INSTRUCTIONS WINDOWS - Setup venv + API (v3) ===
 
-Le premier essai a planté : le modèle met TOUTES les couches en RAM = OOM.
-Nouveau code met les couches non-GPU sur disque.
-
-ETAPES :
-1) Fermer le serveur VRAMancer (Ctrl+C)
+1) Ouvrir un CMD dans le dossier VRAMancer
 2) git pull
-3) Relancer le serveur :
+3) Creer le venv :
+
+python -m venv .venv
+.venv\Scripts\activate
+
+4) Installer les deps :
+
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+pip install flask transformers accelerate safetensors requests huggingface_hub sentencepiece protobuf
+
+5) Lancer le serveur :
 
 set VRM_DISABLE_RATE_LIMIT=1
 set VRM_API_TOKEN=testtoken
@@ -14,11 +20,4 @@ set VRM_CLUSTER_SECRET=testtoken
 set VRM_BACKEND_ALLOW_STUB=1
 python -m core.production_api
 
-4) Confirme quand c'est relancé dans le chat
-
-NOTE: Le chargement du Qwen2.5-14B va d'abord TELECHARGER le modèle (~28 GB).
-Ça peut prendre 10-30 min selon ta connexion.
-Tu verras des barres de progression dans le terminal Windows.
-C'est normal que ça prenne du temps.
-
-On lance le chargement depuis Ubuntu une fois le serveur up.
+6) Confirme dans le chat quand le serveur affiche "Running on http://0.0.0.0:5030"
