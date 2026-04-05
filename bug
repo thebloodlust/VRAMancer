@@ -1,35 +1,22 @@
 
 REM ============================================
-REM  GPU MODE - 5 avril 2026
+REM  FIX TRITON - 5 avril 2026
 REM ============================================
 REM
-REM ETAPE 1 : ARRETER l'ancien python (Ctrl+C dans le cmd qui tourne)
-REM
-REM ETAPE 1b : EFFACER les anciennes variables (TRES IMPORTANT)
-set VRM_MINIMAL_TEST=
-set VRM_TEST_MODE=
-REM
-REM ETAPE 2 : Verifier si torch voit le GPU
+REM ETAPE 1 : Pull le fix (skip TurboEngine/torch.compile sur Windows)
 cd C:\Users\the_b\Downloads\VRAMancer-main\VRAMancer-main
+git pull
+REM
+REM ETAPE 2 : Relancer l'API (nouveau terminal PROPRE, sans VRM_MINIMAL_TEST)
 .venv\Scripts\activate
-python -c "import torch; print('CUDA:', torch.cuda.is_available()); print('GPU:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'NONE')"
-REM
-REM Si ca dit CUDA: False, il faut installer torch CUDA :
-pip install torch --index-url https://download.pytorch.org/whl/cu128
-REM (ca prend ~2 GB, attendre que ca finisse)
-REM Puis re-verifier :
-python -c "import torch; print('CUDA:', torch.cuda.is_available()); print('GPU:', torch.cuda.get_device_name(0))"
-REM
-REM ETAPE 3 : Relancer SANS VRM_MINIMAL_TEST (c'est ca qui stubbait le GPU)
 set VRM_DISABLE_RATE_LIMIT=1
 set VRM_API_TOKEN=testtoken
 set VRM_CLUSTER_SECRET=testtoken
 set VRM_BACKEND_ALLOW_STUB=1
 python -m core.production_api
 REM
-REM ETAPE 4 : Quand ca tourne, ouvrir un 2e cmd et tester :
-REM curl http://localhost:5030/api/gpu
-REM Ca devrait montrer la RTX 4060 avec 8 GB VRAM
+REM Le fix desactive torch.compile sur Windows (Triton absent)
+REM L'inference marchera en mode eager (un peu plus lent mais fonctionnel)
 REM ============================================
 
 ============================= test session starts =============================
