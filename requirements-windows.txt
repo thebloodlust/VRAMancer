@@ -12,7 +12,7 @@ tokenizers>=0.20.0    # Has Windows wheels for Py3.12
 transformers>=4.46.0  # Compatible with tokenizers 0.20.x
 accelerate>=0.27.0
 bitsandbytes>=0.44.0  # NF4 quantization — Windows wheels since 0.44
-llama-cpp-python>=0.2.80  # GGUF inference (CPU by default, see notes for GPU)
+# llama-cpp-python: OPTIONAL, install separately (see notes at bottom)
 flask==3.0.2
 pydantic==2.8.2
 pycryptodome==3.20.0
@@ -55,6 +55,15 @@ click==8.1.7
 #   Needs CUDA toolkit DLLs in PATH. Check: python -c "import bitsandbytes; print(bitsandbytes.__version__)"
 #
 # llama-cpp-python GPU acceleration:
-#   CPU-only is installed by default. For CUDA GPU acceleration:
-#     set CMAKE_ARGS=-DGGML_CUDA=on
-#     pip install llama-cpp-python --no-cache-dir --force-reinstall
+#   Requires CMake + Visual Studio Build Tools. Pre-built wheels are easier:
+#
+#   CUDA (RTX 4060, etc):
+#     pip install llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu124
+#
+#   CPU only (no build tools needed):
+#     pip install llama-cpp-python --prefer-binary
+#
+#   If that still fails, install Visual Studio Build Tools first:
+#     https://visualstudio.microsoft.com/visual-cpp-build-tools/
+#     (select "Desktop development with C++")
+#     Then: pip install llama-cpp-python
