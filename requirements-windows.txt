@@ -8,9 +8,9 @@ numpy>=1.26.0
 pyyaml==6.0.1
 psutil==5.9.8
 # Explicit newer tokenizers before transformers to lock compatible wheel
-tokenizers==0.20.1    # Has Windows wheels for Py3.12
-transformers==4.46.2  # Compatible with tokenizers 0.20.x
-accelerate==0.27.2
+tokenizers>=0.20.0    # Has Windows wheels for Py3.12
+transformers>=4.46.0  # Compatible with tokenizers 0.20.x
+accelerate>=0.27.0
 flask==3.0.2
 pydantic==2.8.2
 pycryptodome==3.20.0
@@ -22,7 +22,7 @@ PyJWT==2.9.0
 
 # Dashboard GUI dependencies - CRITIQUE pour dashboards !
 PyQt5==5.15.10
-flask-socketio==5.10.0
+flask-socketio==5.5.1
 eventlet==0.35.2
 python-engineio==4.9.0
 
