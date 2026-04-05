@@ -1105,6 +1105,143 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
         })
 
     # ====================================================================
+    # Cross-node distributed inference (worker + master endpoints)
+    # ====================================================================
+
+    @application.route('/api/worker/forward_layers', methods=['POST'])
+    def worker_forward_layers():
+        """Run a range of transformer layers on hidden states (worker role).
+
+        Receives a serialised tensor, runs layers [start, end), returns
+        the processed tensor.
+        """
+        try:
+            from core.cross_node import worker_forward
+        except ImportError as e:
+            return jsonify({'error': f'cross_node import failed: {e}'}), 500
+
+        if not _registry.is_loaded:
+            return jsonify({'error': 'No model loaded on this worker'}), 400
+
+        start_layer = int(request.args.get('start_layer', 0))
+        end_layer = int(request.args.get('end_layer', 0))
+        seq_len = int(request.args.get('seq_len', 0))
+
+        if end_layer <= start_layer:
+            return jsonify({'error': 'end_layer must be > start_layer'}), 400
+
+        hidden_bytes = request.get_data()
+        if not hidden_bytes:
+            return jsonify({'error': 'Empty payload'}), 400
+
+        try:
+            model = _registry._pipeline.backend.model
+            result_bytes = worker_forward(model, hidden_bytes,
+                                          start_layer, end_layer,
+                                          seq_len=seq_len)
+            return Response(result_bytes,
+                            content_type='application/octet-stream')
+        except Exception as e:
+            logger.error("worker_forward_layers failed: %s", e, exc_info=True)
+            return jsonify({'error': str(e)}), 500
+
+    @application.route('/api/worker/model_info', methods=['GET'])
+    def worker_model_info():
+        """Return model architecture info for layer-split planning."""
+        if not _registry.is_loaded:
+            return jsonify({'error': 'No model loaded'}), 400
+        try:
+            from core.cross_node import get_model_info
+            model = _registry._pipeline.backend.model
+            info = get_model_info(model)
+            info['model_name'] = getattr(_registry._pipeline, 'model_name', '')
+            return jsonify(info)
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    @application.route('/api/distributed/generate', methods=['POST'])
+    def distributed_generate_endpoint():
+        """Master endpoint: generate text with layers distributed across nodes.
+
+        Body JSON::
+
+            {
+                "prompt": "Hello",
+                "max_tokens": 50,
+                "temperature": 0.7,
+                "remote_workers": [
+                    {"url": "http://192.168.1.23:5030",
+                     "start_layer": 8, "end_layer": 12}
+                ],
+                "local_layers": [0, 8]
+            }
+        """
+        try:
+            from core.cross_node import distributed_generate, RemoteWorker
+        except ImportError as e:
+            return jsonify({'error': f'cross_node import failed: {e}'}), 500
+
+        if not _registry.is_loaded:
+            return jsonify({'error': 'No model loaded on master'}), 400
+
+        data = request.get_json(silent=True) or {}
+        prompt = data.get('prompt', '')
+        if not prompt:
+            return jsonify({'error': 'Missing "prompt"'}), 400
+
+        max_tokens = int(data.get('max_tokens', 50))
+        temperature = float(data.get('temperature', 0.7))
+        top_k = int(data.get('top_k', 50))
+        top_p = float(data.get('top_p', 0.9))
+
+        remote_defs = data.get('remote_workers', [])
+        local_layers = data.get('local_layers', [0, 0])
+        if len(local_layers) != 2:
+            return jsonify({'error': '"local_layers" must be [start, end]'}), 400
+
+        token = os.environ.get('VRM_API_TOKEN', '')
+        workers = []
+        for rd in remote_defs:
+            url = rd.get('url', '')
+            sl = int(rd.get('start_layer', 0))
+            el = int(rd.get('end_layer', 0))
+            if not url or el <= sl:
+                return jsonify({'error': f'Invalid worker def: {rd}'}), 400
+            workers.append(RemoteWorker(url, token, sl, el))
+
+        try:
+            backend = _registry._pipeline.backend
+            result = distributed_generate(
+                backend, prompt, workers,
+                local_layer_range=(local_layers[0], local_layers[1]),
+                max_new_tokens=max_tokens,
+                temperature=temperature,
+                top_k=top_k,
+                top_p=top_p,
+            )
+            return jsonify({
+                'object': 'text_completion',
+                'model': getattr(_registry._pipeline, 'model_name', ''),
+                'prompt': prompt,
+                'text': result['text'],
+                'usage': {'completion_tokens': result['tokens']},
+                'timing': {
+                    'total_seconds': result['total_seconds'],
+                    'tokens_per_second': result['tokens_per_second'],
+                },
+                'distributed': {
+                    'local_layers': local_layers,
+                    'remote_workers': [
+                        {'url': rd.get('url'), 'layers': [rd.get('start_layer'), rd.get('end_layer')]}
+                        for rd in remote_defs
+                    ],
+                },
+            })
+        except Exception as e:
+            logger.error("distributed_generate failed: %s", e, exc_info=True)
+            return jsonify({'error': str(e)}), 500
+
+    # ====================================================================
     # Health / readiness / liveness — now in core.api.routes_ops blueprint
     # ====================================================================
     # Routes: /health, /ready, /live, /metrics, /api/status,
@@ -1238,7 +1375,7 @@ def run_server(host: str = None, port: int = None):
             'accesslog': '-' if API_DEBUG else None,
             'errorlog': '-',
             'loglevel': 'info',
-            'preload_app': True,
+            'preload_app': False,
         }
         logger.info("Starting gunicorn (%d worker(s), %d thread(s))", workers, threads)
         VRAMancerGunicorn(app, gunicorn_opts).run()
