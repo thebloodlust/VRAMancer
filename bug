@@ -5,6 +5,10 @@ REM ============================================
 REM
 REM ETAPE 1 : ARRETER l'ancien python (Ctrl+C dans le cmd qui tourne)
 REM
+REM ETAPE 1b : EFFACER les anciennes variables (TRES IMPORTANT)
+set VRM_MINIMAL_TEST=
+set VRM_TEST_MODE=
+REM
 REM ETAPE 2 : Verifier si torch voit le GPU
 cd C:\Users\the_b\Downloads\VRAMancer-main\VRAMancer-main
 .venv\Scripts\activate
