@@ -81,7 +81,7 @@ def _get_cluster_secret() -> bytes:
 class AITPProtocol:
     """UDP-based tensor transport with HMAC authentication and optional FEC."""
 
-    def __init__(self, port=9109, anycast_ipv6="ff02::vrm:1"):
+    def __init__(self, port=9109, anycast_ipv6="ff02::1:ff00:1"):
         self.port = port
         self.anycast_ipv6 = anycast_ipv6
         self._fec = None

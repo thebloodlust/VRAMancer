@@ -46,70 +46,55 @@ def test_cluster_discovery():
     try:
         from core.network.cluster_discovery import ClusterDiscovery
 
-        discovery = ClusterDiscovery(
-            service_port=9742,
-            node_id=f"test-{socket.gethostname()}",
-        )
+        discovery = ClusterDiscovery(port=55555, heartbeat_interval=5.0)
         discovery.start()
         print("      Discovery started (mDNS + UDP broadcast)")
         print("      Waiting 10s for peer discovery...")
         time.sleep(10)
-        peers = discovery.get_peers()
+        nodes = discovery.get_nodes()
         discovery.stop()
 
-        if peers:
-            print(f"      Found {len(peers)} peer(s):")
-            for p in peers:
-                print(f"        - {p}")
+        if nodes:
+            print(f"      Found {len(nodes)} node(s):")
+            for n in nodes:
+                name = n.get("hostname", n.get("node_id", "?"))
+                ip = n.get("ip", "?")
+                gpus = n.get("gpu_count", "?")
+                print(f"        - {name} ({ip}) — {gpus} GPU(s)")
             print("      PASS\n")
         else:
             print("      No peers found (run on another machine too)")
             print("      SKIP\n")
-        return len(peers) > 0
+        return len(nodes) > 0
     except Exception as e:
         print(f"      ERROR: {e}\n")
         return False
 
 
 def test_aitp_protocol():
-    """Test AITP UDP + HMAC + FEC between two endpoints."""
+    """Test AITP UDP protocol (loopback)."""
     print("[2/4] AITP Protocol (local loopback test)")
 
     try:
-        from core.network.aitp_protocol import AitpSender, AitpReceiver
+        from core.network.aitp_protocol import AITPProtocol
 
-        secret = b"test_secret_key_32bytes_padding!"
-        port = 9843
+        proto = AITPProtocol(port=9843)
+        test_data = b"Hello from VRAMancer AITP test!" * 10  # ~310 bytes
 
-        received = []
+        # Create a packet and parse it back (round-trip test)
+        packet = proto.create_packet(layer_id=42, tensor_bytes=test_data)
+        parsed = proto.parse_packet(packet)
 
-        def receiver_thread():
-            rx = AitpReceiver(port=port, secret=secret)
-            msg = rx.recv(timeout=5.0)
-            if msg:
-                received.append(msg)
-
-        t = threading.Thread(target=receiver_thread, daemon=True)
-        t.start()
-        time.sleep(0.5)  # Let receiver bind
-
-        tx = AitpSender(secret=secret)
-        test_data = b"Hello from VRAMancer AITP test!"
-        tx.send("127.0.0.1", port, test_data)
-        print("      Sent AITP packet (HMAC + FEC)")
-
-        t.join(timeout=6)
-
-        if received:
-            print(f"      Received: {received[0][:50]}")
+        if parsed and parsed["layer_id"] == 42 and parsed["tensor_data"] == test_data:
+            print(f"      Packet round-trip OK (layer_id=42, {len(test_data)} bytes)")
             print("      PASS\n")
+            return True
         else:
-            print("      No response (receiver timeout)")
+            print("      Packet parse mismatch")
             print("      FAIL\n")
-        return len(received) > 0
+            return False
     except ImportError:
-        # Try simpler UDP test
-        print("      AITP classes not importable, testing raw UDP...")
+        print("      AITP not importable, testing raw UDP...")
         return test_raw_udp()
     except Exception as e:
         print(f"      ERROR: {e}\n")
@@ -154,26 +139,30 @@ def test_peer_sensing():
     print("[3/4] Peer Sensing (heartbeat)")
 
     try:
-        from core.network.aitp_sensing import PeerSensor
+        from core.network.aitp_sensing import AITPSensor
 
-        sensor = PeerSensor(
-            node_id=f"test-{socket.gethostname()}",
-            port=9845,
-            secret=b"test_secret_012345678901234567",
+        sensor = AITPSensor(
+            node_uid=f"test-{socket.gethostname()}",
+            hw_specs={"type": "gpu", "compute": 100, "vram": 8_000_000_000},
         )
-        sensor.start()
+        sensor.start_listening()
         print("      Sensor started, broadcasting heartbeat...")
-        time.sleep(5)
-        peers = sensor.get_alive_peers()
+
+        # Broadcast a few times
+        for _ in range(3):
+            sensor.broadcast_presence()
+            time.sleep(2)
+
+        peers = sensor.get_available_peers()
         sensor.stop()
 
         print(f"      Alive peers: {len(peers)}")
-        for p in peers:
-            print(f"        - {p}")
+        for uid, info in peers.items():
+            print(f"        - {uid}: {info.get('hw', {}).get('type', '?')}")
         if peers:
             print("      PASS\n")
         else:
-            print("      No peers (run on another machine)\n")
+            print("      No peers (run on another machine too)")
             print("      SKIP\n")
         return len(peers) > 0
     except Exception as e:

@@ -18,7 +18,7 @@ import hashlib
 
 logger = logging.getLogger(__name__)
 
-AITP_SENSING_GROUP = "ff02::vrm:1"
+AITP_SENSING_GROUP = "ff02::1:ff00:1"  # link-local multicast (VRAMancer)
 AITP_SENSING_PORT = 9110
 
 # Heartbeat interval (seconds)

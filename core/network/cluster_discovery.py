@@ -553,7 +553,7 @@ class ClusterDiscovery:
             s6.bind(('::', self.port))
             # Join the VRAMancer multicast group on all interfaces
             import struct as _struct
-            mcast_group = socket.inet_pton(socket.AF_INET6, "ff02::vrm:1")
+            mcast_group = socket.inet_pton(socket.AF_INET6, "ff02::1:ff00:1")
             mreq = mcast_group + _struct.pack("@I", 0)  # interface 0 = all
             s6.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_JOIN_GROUP, mreq)
             s6.settimeout(2.0)
@@ -615,7 +615,7 @@ class ClusterDiscovery:
                     s6.settimeout(2.0)
                     # Set multicast hop limit (link-local = 1, site-local = up to 32)
                     s6.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_HOPS, 32)
-                    s6.sendto(msg, ("ff02::vrm:1", self.port))
+                    s6.sendto(msg, ("ff02::1:ff00:1", self.port))
                     s6.close()
                 except Exception as exc:
                     _logger.debug("IPv6 multicast heartbeat failed: %s", exc)
