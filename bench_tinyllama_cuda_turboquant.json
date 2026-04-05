@@ -1,0 +1,122 @@
+[
+  {
+    "config": "BF16 baseline",
+    "model": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+    "num_gpus": 1,
+    "max_tokens": 128,
+    "load_time_s": 4.58,
+    "kv_compression_active": false,
+    "total_tokens": 340,
+    "total_time_s": 9.292,
+    "avg_tok_s": 36.6,
+    "peak_vram_gb": 1.93,
+    "per_prompt": [
+      {
+        "tokens": 82,
+        "time_s": 2.246,
+        "tok_s": 36.5
+      },
+      {
+        "tokens": 129,
+        "time_s": 3.48,
+        "tok_s": 37.1
+      },
+      {
+        "tokens": 129,
+        "time_s": 3.566,
+        "tok_s": 36.2
+      }
+    ],
+    "status": "OK"
+  },
+  {
+    "config": "TurboQuant (3-bit)",
+    "model": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+    "num_gpus": 1,
+    "max_tokens": 128,
+    "load_time_s": 1.37,
+    "kv_compression_active": false,
+    "total_tokens": 340,
+    "total_time_s": 9.294,
+    "avg_tok_s": 36.6,
+    "peak_vram_gb": 3.86,
+    "per_prompt": [
+      {
+        "tokens": 82,
+        "time_s": 2.259,
+        "tok_s": 36.3
+      },
+      {
+        "tokens": 129,
+        "time_s": 3.513,
+        "tok_s": 36.7
+      },
+      {
+        "tokens": 129,
+        "time_s": 3.521,
+        "tok_s": 36.6
+      }
+    ],
+    "status": "OK"
+  },
+  {
+    "config": "TurboQuant + Sparse V 30%",
+    "model": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+    "num_gpus": 1,
+    "max_tokens": 128,
+    "load_time_s": 1.33,
+    "kv_compression_active": false,
+    "total_tokens": 340,
+    "total_time_s": 9.231,
+    "avg_tok_s": 36.8,
+    "peak_vram_gb": 5.89,
+    "per_prompt": [
+      {
+        "tokens": 82,
+        "time_s": 2.233,
+        "tok_s": 36.7
+      },
+      {
+        "tokens": 129,
+        "time_s": 3.504,
+        "tok_s": 36.8
+      },
+      {
+        "tokens": 129,
+        "time_s": 3.493,
+        "tok_s": 36.9
+      }
+    ],
+    "status": "OK"
+  },
+  {
+    "config": "TurboQuant + Sparse V 10%",
+    "model": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+    "num_gpus": 1,
+    "max_tokens": 128,
+    "load_time_s": 1.33,
+    "kv_compression_active": false,
+    "total_tokens": 340,
+    "total_time_s": 9.263,
+    "avg_tok_s": 36.7,
+    "peak_vram_gb": 7.94,
+    "per_prompt": [
+      {
+        "tokens": 82,
+        "time_s": 2.248,
+        "tok_s": 36.5
+      },
+      {
+        "tokens": 129,
+        "time_s": 3.505,
+        "tok_s": 36.8
+      },
+      {
+        "tokens": 129,
+        "time_s": 3.51,
+        "tok_s": 36.7
+      }
+    ],
+    "status": "OK"
+  }
+]

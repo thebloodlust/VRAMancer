@@ -1,0 +1,139 @@
+VRAMancer TurboQuant + Sparse V Benchmark
+============================================================
+PyTorch 2.10.0+cu128, CUDA 12.8
+GPU 0: NVIDIA GeForce RTX 5070 Ti CC=12.0, 1.1/16.6 GB
+
+
+============================================================
+  KV Compressor Microbenchmark
+============================================================
+
+  head_dim=64, 4.0 bits/dim (4.0x compression)
+   seq_len    compress  decompress       score
+  --------  ----------  ----------  ----------
+       128     33.38ms     18.26ms     18.46ms
+       512     96.76ms     34.73ms     38.37ms
+      2048    570.27ms    342.83ms    184.03ms
+
+  head_dim=128, 3.7 bits/dim (4.3x compression)
+   seq_len    compress  decompress       score
+  --------  ----------  ----------  ----------
+       128     71.30ms     52.58ms     49.50ms
+       512    233.48ms    141.70ms    111.02ms
+      2048   1133.05ms    466.04ms    260.09ms
+
+>>> NVFP4 baseline
+[03/31/26 20:15:09] INFO     Loading model: Qwen/Qwen2.5-7B-Instruct            
+                             (backend=auto)                                     
+                    INFO     GPUs: 1 available, using 1                         
+Exception in thread Thread-1 (start_wsgi_server):
+Traceback (most recent call last):
+  File "/usr/lib/python3.12/threading.py", line 1073, in _bootstrap_inner
+    self.run()
+  File "/usr/lib/python3.12/threading.py", line 1010, in run
+    self._target(*self._args, **self._kwargs)
+  File "/home/jeremie/VRAMancer/VRAMancer/.venv/lib/python3.12/site-packages/prometheus_client/exposition.py", line 233, in start_wsgi_server
+    httpd = make_server(addr, port, app, TmpServer, handler_class=_SilentHandler)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/wsgiref/simple_server.py", line 154, in make_server
+    server = server_class((host, port), handler_class)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/socketserver.py", line 457, in __init__
+    self.server_bind()
+  File "/usr/lib/python3.12/wsgiref/simple_server.py", line 50, in server_bind
+    HTTPServer.server_bind(self)
+  File "/usr/lib/python3.12/http/server.py", line 136, in server_bind
+    socketserver.TCPServer.server_bind(self)
+  File "/usr/lib/python3.12/socketserver.py", line 473, in server_bind
+    self.socket.bind(self.server_address)
+OSError: [Errno 98] Address already in use
+[03/31/26 20:15:11] INFO     VM environment detected — VFIO-passthrough adds    
+                             ~10-15%% PCIe overhead. CPU-staged transfers       
+                             expected ~11 GB/s (vs ~13 GB/s bare metal).        
+                    INFO     GPU 0: NVIDIA GeForce RTX 5070 Ti (SM 12.0,        
+                             consumer)                                          
+                    INFO     Consumer GPU(s) detected but P2P is available.     
+                             Ensure IOMMU/ACS settings remain stable for        
+                             reliability.                                       
+                    INFO     Chargement modèle HuggingFace:                     
+                             Qwen/Qwen2.5-7B-Instruct                           
+                    INFO     NVFP4 Blackwell: loading model on CPU for post-load
+                             quantization via torchao                           
+`torch_dtype` is deprecated! Use `dtype` instead!
+Loading weights:   0%|          | 0/339 [00:00<?, ?it/s]Loading weights: 100%|██████████| 339/339 [00:00<00:00, 11053.43it/s]
+                    INFO     NVFP4 Blackwell: quantizing with Dynamic W+A mode  
+                             (cublas scaled_mm FP4 kernel, excluding lm_head)   
+[03/31/26 20:18:39] INFO     NVFP4 quantization completed in 208.2s             
+                    INFO     NVFP4: moving model to cuda:0 (1.0 GiB free)       
+                    ERROR    Model load failed: CUDA out of memory. Tried to    
+                             allocate 2.00 MiB. GPU 0 has a total capacity of   
+                             15.47 GiB of which 2.00 MiB is free. Process       
+                             1004727 has 14.07 GiB memory in use. Including     
+                             non-PyTorch memory, this process has 1.38 GiB      
+                             memory in use. Of the allocated memory 1.14 GiB is 
+                             allocated by PyTorch, and 14.83 MiB is reserved by 
+                             PyTorch but unallocated. If reserved but           
+                             unallocated memory is large try setting            
+                             PYTORCH_ALLOC_CONF=expandable_segments:True to     
+                             avoid fragmentation.  See documentation for Memory 
+                             Management                                         
+                             (https://pytorch.org/docs/stable/notes/cuda.html#en
+                             vironment-variables)                               
+[03/31/26 20:18:40] INFO     Shutting down inference pipeline...                
+                    INFO     Dynamic rebalancing stopped                        
+                    INFO     GPU polling stopped                                
+                    INFO     Pipeline shutdown complete                         
+                    INFO     GPU polling stopped                                
+                    INFO     GPU polling stopped                                
+  FAILED: CUDA out of memory. Tried to allocate 2.00 MiB. GPU 0 has a total capacity of 15.47 GiB of which 2.00 MiB is free. Process 1004727 has 14.07 GiB memory in use. Including non-PyTorch memory, this process has 1.38 GiB memory in use. Of the allocated memory 1.14 GiB is allocated by PyTorch, and 14.83 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+
+>>> NVFP4 + TurboQuant + Sparse V 10%
+                    INFO     Loading model: Qwen/Qwen2.5-7B-Instruct            
+                             (backend=auto)                                     
+                    INFO     GPUs: 1 available, using 1                         
+                    INFO     VM environment detected — VFIO-passthrough adds    
+                             ~10-15%% PCIe overhead. CPU-staged transfers       
+                             expected ~11 GB/s (vs ~13 GB/s bare metal).        
+                    INFO     GPU 0: NVIDIA GeForce RTX 5070 Ti (SM 12.0,        
+                             consumer)                                          
+                    INFO     Consumer GPU(s) detected but P2P is available.     
+                             Ensure IOMMU/ACS settings remain stable for        
+                             reliability.                                       
+                    INFO     Chargement modèle HuggingFace:                     
+                             Qwen/Qwen2.5-7B-Instruct                           
+                    INFO     NVFP4 Blackwell: loading model on CPU for post-load
+                             quantization via torchao                           
+Loading weights:   0%|          | 0/339 [00:00<?, ?it/s]Loading weights: 100%|██████████| 339/339 [00:00<00:00, 12343.58it/s]
+[03/31/26 20:18:41] INFO     NVFP4 Blackwell: quantizing with Dynamic W+A mode  
+                             (cublas scaled_mm FP4 kernel, excluding lm_head)   
+[03/31/26 20:22:53] INFO     NVFP4 quantization completed in 252.0s             
+                    INFO     NVFP4: moving model to cuda:0 (1.2 GiB free)       
+                    ERROR    Model load failed: CUDA out of memory. Tried to    
+                             allocate 20.00 MiB. GPU 0 has a total capacity of  
+                             15.47 GiB of which 10.00 MiB is free. Process      
+                             1004727 has 14.05 GiB memory in use. Including     
+                             non-PyTorch memory, this process has 1.38 GiB      
+                             memory in use. Of the allocated memory 1.15 GiB is 
+                             allocated by PyTorch, and 16.09 MiB is reserved by 
+                             PyTorch but unallocated. If reserved but           
+                             unallocated memory is large try setting            
+                             PYTORCH_ALLOC_CONF=expandable_segments:True to     
+                             avoid fragmentation.  See documentation for Memory 
+                             Management                                         
+                             (https://pytorch.org/docs/stable/notes/cuda.html#en
+                             vironment-variables)                               
+                    INFO     Shutting down inference pipeline...                
+                    INFO     Dynamic rebalancing stopped                        
+                    INFO     GPU polling stopped                                
+                    INFO     Pipeline shutdown complete                         
+                    INFO     GPU polling stopped                                
+                    INFO     GPU polling stopped                                
+  FAILED: CUDA out of memory. Tried to allocate 20.00 MiB. GPU 0 has a total capacity of 15.47 GiB of which 10.00 MiB is free. Process 1004727 has 14.05 GiB memory in use. Including non-PyTorch memory, this process has 1.38 GiB memory in use. Of the allocated memory 1.15 GiB is allocated by PyTorch, and 16.09 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+
+================================================================================
+  BENCHMARK RESULTS
+================================================================================
+  Configuration                                tok/s   VRAM GB      Status
+  ----------------------------------------  --------  --------  ----------
+  NVFP4 baseline                                   —         —      FAILED
+  NVFP4 + TurboQuant + Sparse V 10%                —         —      FAILED

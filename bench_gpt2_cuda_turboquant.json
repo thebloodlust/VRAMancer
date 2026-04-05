@@ -1,0 +1,162 @@
+[
+  {
+    "config": "BF16 baseline",
+    "model": "gpt2",
+    "num_gpus": 1,
+    "max_tokens": 128,
+    "load_time_s": 4.79,
+    "kv_compression_active": false,
+    "total_tokens": 638,
+    "total_time_s": 7.404,
+    "avg_tok_s": 86.2,
+    "peak_vram_gb": 1.59,
+    "per_prompt": [
+      {
+        "tokens": 127,
+        "time_s": 1.487,
+        "tok_s": 85.4
+      },
+      {
+        "tokens": 127,
+        "time_s": 1.481,
+        "tok_s": 85.7
+      },
+      {
+        "tokens": 128,
+        "time_s": 1.478,
+        "tok_s": 86.6
+      },
+      {
+        "tokens": 128,
+        "time_s": 1.478,
+        "tok_s": 86.6
+      },
+      {
+        "tokens": 128,
+        "time_s": 1.479,
+        "tok_s": 86.5
+      }
+    ],
+    "status": "OK"
+  },
+  {
+    "config": "TurboQuant (3-bit)",
+    "model": "gpt2",
+    "num_gpus": 1,
+    "max_tokens": 128,
+    "load_time_s": 1.36,
+    "kv_compression_active": false,
+    "total_tokens": 640,
+    "total_time_s": 7.134,
+    "avg_tok_s": 89.7,
+    "peak_vram_gb": 3.25,
+    "per_prompt": [
+      {
+        "tokens": 128,
+        "time_s": 1.423,
+        "tok_s": 90.0
+      },
+      {
+        "tokens": 128,
+        "time_s": 1.483,
+        "tok_s": 86.3
+      },
+      {
+        "tokens": 128,
+        "time_s": 1.416,
+        "tok_s": 90.4
+      },
+      {
+        "tokens": 128,
+        "time_s": 1.406,
+        "tok_s": 91.1
+      },
+      {
+        "tokens": 128,
+        "time_s": 1.407,
+        "tok_s": 91.0
+      }
+    ],
+    "status": "OK"
+  },
+  {
+    "config": "TurboQuant + Sparse V 30%",
+    "model": "gpt2",
+    "num_gpus": 1,
+    "max_tokens": 128,
+    "load_time_s": 1.38,
+    "kv_compression_active": false,
+    "total_tokens": 640,
+    "total_time_s": 7.12,
+    "avg_tok_s": 89.9,
+    "peak_vram_gb": 4.9,
+    "per_prompt": [
+      {
+        "tokens": 128,
+        "time_s": 1.426,
+        "tok_s": 89.8
+      },
+      {
+        "tokens": 128,
+        "time_s": 1.425,
+        "tok_s": 89.8
+      },
+      {
+        "tokens": 128,
+        "time_s": 1.423,
+        "tok_s": 89.9
+      },
+      {
+        "tokens": 128,
+        "time_s": 1.42,
+        "tok_s": 90.1
+      },
+      {
+        "tokens": 128,
+        "time_s": 1.426,
+        "tok_s": 89.8
+      }
+    ],
+    "status": "OK"
+  },
+  {
+    "config": "TurboQuant + Sparse V 10%",
+    "model": "gpt2",
+    "num_gpus": 1,
+    "max_tokens": 128,
+    "load_time_s": 3.45,
+    "kv_compression_active": false,
+    "total_tokens": 638,
+    "total_time_s": 7.426,
+    "avg_tok_s": 85.9,
+    "peak_vram_gb": 6.48,
+    "per_prompt": [
+      {
+        "tokens": 127,
+        "time_s": 1.491,
+        "tok_s": 85.2
+      },
+      {
+        "tokens": 127,
+        "time_s": 1.49,
+        "tok_s": 85.2
+      },
+      {
+        "tokens": 128,
+        "time_s": 1.49,
+        "tok_s": 85.9
+      },
+      {
+        "tokens": 128,
+        "time_s": 1.475,
+        "tok_s": 86.8
+      },
+      {
+        "tokens": 128,
+        "time_s": 1.479,
+        "tok_s": 86.5
+      }
+    ],
+    "status": "OK"
+  }
+]

@@ -10,6 +10,7 @@ Worker:  POST /api/worker/forward_layers  (runs assigned layers)
 """
 
 import io
+import os
 import time
 import struct
 from typing import List, Tuple, Optional
@@ -29,6 +30,9 @@ except ImportError:
 from core.logger import get_logger
 
 logger = get_logger("cross_node")
+
+# Partially loaded model for worker role
+_partial_model = None
 
 
 # ─── Tensor serialisation (torch.save/load, all dtypes) ──────────
@@ -68,6 +72,74 @@ def get_model_info(model) -> dict:
     }
 
 
+# ─── Partial model loading (worker role) ─────────────────────────
+
+def load_partial_model(model_name: str, start_layer: int, end_layer: int,
+                       device: str = "cuda:0",
+                       dtype_str: str = "bfloat16") -> dict:
+    """Load model with only [start_layer, end_layer) on GPU, rest on CPU.
+
+    Memory-efficient: unused layers stay on CPU with disk offload.
+    Only the specified layers consume GPU VRAM.
+    """
+    global _partial_model
+    from transformers import AutoModelForCausalLM, AutoConfig
+    import tempfile
+
+    dtype_map = {"bfloat16": torch.bfloat16, "float16": torch.float16,
+                 "float32": torch.float32}
+    dtype = dtype_map.get(dtype_str, torch.bfloat16)
+
+    config = AutoConfig.from_pretrained(model_name)
+    num_layers = config.num_hidden_layers
+    end_layer = min(end_layer, num_layers)
+    model_type = getattr(config, "model_type", "")
+
+    if model_type in ("llama", "qwen2", "mistral", "gemma", "phi", "phi3"):
+        layer_prefix = "model.layers"
+        device_map = {
+            "model.embed_tokens": "cpu",
+            "model.norm": "cpu",
+            "model.rotary_emb": "cpu",
+            "lm_head": "cpu",
+        }
+    elif model_type == "gpt2":
+        layer_prefix = "transformer.h"
+        device_map = {
+            "transformer.wte": "cpu", "transformer.wpe": "cpu",
+            "transformer.ln_f": "cpu", "transformer.drop": "cpu",
+            "lm_head": "cpu",
+        }
+    else:
+        raise ValueError(f"Unsupported model_type for partial load: {model_type}")
+
+    for i in range(num_layers):
+        key = f"{layer_prefix}.{i}"
+        device_map[key] = device if start_layer <= i < end_layer else "cpu"
+
+    offload_dir = os.path.join(tempfile.gettempdir(), "vramancer_offload")
+    os.makedirs(offload_dir, exist_ok=True)
+
+    logger.info("Loading partial model %s: layers %d-%d on %s",
+                model_name, start_layer, end_layer, device)
+    t0 = time.time()
+    _partial_model = AutoModelForCausalLM.from_pretrained(
+        model_name, device_map=device_map, torch_dtype=dtype,
+        low_cpu_mem_usage=True, offload_folder=offload_dir,
+    )
+    _partial_model.eval()
+    elapsed = time.time() - t0
+
+    logger.info("Partial model loaded in %.1fs", elapsed)
+    return {
+        "model_name": model_name,
+        "num_layers": num_layers,
+        "layers_on_gpu": list(range(start_layer, end_layer)),
+        "gpu_device": device,
+        "load_seconds": round(elapsed, 1),
+    }
+
+
 # ─── Worker-side: run a range of layers ──────────────────────────
 
 def worker_forward(model, hidden_bytes: bytes, start_layer: int, end_layer: int,
@@ -75,11 +147,13 @@ def worker_forward(model, hidden_bytes: bytes, start_layer: int, end_layer: int,
     """Execute layers [start_layer, end_layer) on *hidden_bytes*.
 
     Called on the worker node.  Computes position_ids & rotary embeddings
-    internally when needed (Llama/Qwen).
+    internally when needed (Llama/Qwen).  Handles multi-device models
+    (partial-load or multi-GPU).
     """
-    device = str(next(model.parameters()).device)
-    hidden = bytes_to_tensor(hidden_bytes, device)
     layers = get_model_layers(model)
+    # Device of the first layer we'll actually run
+    device = str(next(layers[start_layer].parameters()).device)
+    hidden = bytes_to_tensor(hidden_bytes, device)
     gpt2 = _is_gpt2(model)
 
     # Position IDs & rotary (Llama / Qwen only)
@@ -89,18 +163,25 @@ def worker_forward(model, hidden_bytes: bytes, start_layer: int, end_layer: int,
         position_ids = torch.arange(seq_len, device=device).unsqueeze(0)
         if hasattr(model, "model") and hasattr(model.model, "rotary_emb"):
             try:
-                pe = model.model.rotary_emb(hidden, position_ids)
+                bufs = list(model.model.rotary_emb.buffers())
+                re_dev = bufs[0].device if bufs else device
+                pe = model.model.rotary_emb(
+                    hidden.to(re_dev), position_ids.to(re_dev))
                 position_embeddings = tuple(t.to(device) for t in pe)
             except Exception:
                 pass
 
     with torch.no_grad():
         for i in range(start_layer, end_layer):
+            layer_dev = next(layers[i].parameters()).device
+            if hidden.device != layer_dev:
+                hidden = hidden.to(layer_dev)
             kwargs = {}
             if position_ids is not None:
-                kwargs["position_ids"] = position_ids
+                kwargs["position_ids"] = position_ids.to(layer_dev)
             if position_embeddings is not None:
-                kwargs["position_embeddings"] = position_embeddings
+                kwargs["position_embeddings"] = tuple(
+                    t.to(layer_dev) for t in position_embeddings)
             try:
                 out = layers[i](hidden, **kwargs)
             except TypeError:
@@ -167,9 +248,14 @@ def distributed_generate(
     """
     model = backend.model
     tokenizer = backend.tokenizer
-    device = str(next(model.parameters()).device)
     gpt2 = _is_gpt2(model)
     layers = get_model_layers(model)
+
+    # Primary device (embedding location)
+    if gpt2:
+        device = str(next(model.transformer.wte.parameters()).device)
+    else:
+        device = str(next(model.model.embed_tokens.parameters()).device)
 
     # Execution plan — sorted by layer index
     segments = [{"type": "local", "start": local_layer_range[0],
@@ -196,17 +282,22 @@ def distributed_generate(
                 if getattr(model.transformer, "drop", None) is not None:
                     hidden = model.transformer.drop(hidden)
             else:
-                hidden = model.model.embed_tokens(generated)
+                hidden = model.model.embed_tokens(generated.to(device))
 
             # Position IDs & rotary for local Llama/Qwen layers
             position_ids = None
             position_embeddings = None
             if not gpt2:
-                position_ids = torch.arange(seq_len, device=device).unsqueeze(0)
+                position_ids = torch.arange(
+                    seq_len, device=hidden.device).unsqueeze(0)
                 if hasattr(model.model, "rotary_emb"):
                     try:
-                        pe = model.model.rotary_emb(hidden, position_ids)
-                        position_embeddings = tuple(t.to(device) for t in pe)
+                        bufs = list(model.model.rotary_emb.buffers())
+                        re_dev = bufs[0].device if bufs else hidden.device
+                        pe = model.model.rotary_emb(
+                            hidden.to(re_dev), position_ids.to(re_dev))
+                        position_embeddings = tuple(
+                            t.to(hidden.device) for t in pe)
                     except Exception:
                         pass
 
@@ -214,11 +305,17 @@ def distributed_generate(
             for seg in segments:
                 if seg["type"] == "local":
                     for i in range(seg["start"], seg["end"]):
+                        layer_dev = next(layers[i].parameters()).device
+                        if hidden.device != layer_dev:
+                            hidden = hidden.to(layer_dev)
                         kwargs = {}
                         if position_ids is not None:
-                            kwargs["position_ids"] = position_ids
+                            kwargs["position_ids"] = position_ids.to(
+                                layer_dev)
                         if position_embeddings is not None:
-                            kwargs["position_embeddings"] = position_embeddings
+                            kwargs["position_embeddings"] = tuple(
+                                t.to(layer_dev) for t in
+                                position_embeddings)
                         try:
                             out = layers[i](hidden, **kwargs)
                         except TypeError:
@@ -227,7 +324,7 @@ def distributed_generate(
                 else:
                     # ── Remote forward ────────────────────────────
                     worker = seg["worker"]
-                    hidden = worker.forward(hidden, seq_len=seq_len).to(device)
+                    hidden = worker.forward(hidden, seq_len=seq_len)
 
             # ── Norm + LM head ────────────────────────────────────
             if gpt2:

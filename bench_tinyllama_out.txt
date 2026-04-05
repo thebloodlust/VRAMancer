@@ -1,0 +1,482 @@
+VRAMancer TurboQuant + Sparse V Benchmark
+============================================================
+PyTorch 2.10.0+cu128, CUDA 12.8
+GPU 0: NVIDIA GeForce RTX 3090 CC=8.6, 25.0/25.3 GB
+GPU 1: NVIDIA GeForce RTX 5070 Ti CC=12.0, 16.1/16.6 GB
+
+
+============================================================
+  KV Compressor Microbenchmark
+============================================================
+
+  head_dim=64, 4.0 bits/dim (4.0x compression)
+   seq_len    compress  decompress       score
+  --------  ----------  ----------  ----------
+       128     34.28ms      3.07ms      0.77ms
+       512      7.85ms      1.48ms      8.51ms
+      2048    122.65ms    159.06ms     13.16ms
+
+  head_dim=128, 3.7 bits/dim (4.3x compression)
+   seq_len    compress  decompress       score
+  --------  ----------  ----------  ----------
+       128     11.16ms     11.90ms     10.86ms
+       512     66.86ms      9.77ms      8.60ms
+      2048    128.92ms     51.16ms     24.30ms
+
+>>> BF16 baseline
+[03/31/26 20:08:57] INFO     Loading model: TinyLlama/TinyLlama-1.1B-Chat-v1.0  
+                             (backend=auto)                                     
+                    INFO     GPUs: 2 available, using 2                         
+Exception in thread Thread-1 (start_wsgi_server):
+Traceback (most recent call last):
+  File "/usr/lib/python3.12/threading.py", line 1073, in _bootstrap_inner
+    self.run()
+  File "/usr/lib/python3.12/threading.py", line 1010, in run
+    self._target(*self._args, **self._kwargs)
+  File "/home/jeremie/VRAMancer/VRAMancer/.venv/lib/python3.12/site-packages/prometheus_client/exposition.py", line 233, in start_wsgi_server
+    httpd = make_server(addr, port, app, TmpServer, handler_class=_SilentHandler)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/wsgiref/simple_server.py", line 154, in make_server
+    server = server_class((host, port), handler_class)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/socketserver.py", line 457, in __init__
+    self.server_bind()
+  File "/usr/lib/python3.12/wsgiref/simple_server.py", line 50, in server_bind
+    HTTPServer.server_bind(self)
+  File "/usr/lib/python3.12/http/server.py", line 136, in server_bind
+    socketserver.TCPServer.server_bind(self)
+  File "/usr/lib/python3.12/socketserver.py", line 473, in server_bind
+    self.socket.bind(self.server_address)
+OSError: [Errno 98] Address already in use
+                    INFO     Model TinyLlama/TinyLlama-1.1B-Chat-v1.0 fits on   
+                             single GPU 0 (estimated 2.2 GB, GPU has 23.3 GB    
+                             free → skipping multi-GPU overhead)                
+[03/31/26 20:08:58] INFO     VM environment detected — VFIO-passthrough adds    
+                             ~10-15%% PCIe overhead. CPU-staged transfers       
+                             expected ~11 GB/s (vs ~13 GB/s bare metal).        
+                    INFO     GPU 0: NVIDIA GeForce RTX 3090 (SM 8.6, consumer)  
+                    INFO     GPU 1: NVIDIA GeForce RTX 5070 Ti (SM 12.0,        
+                             consumer)                                          
+                    INFO     GPU 0 <-> GPU 1: CPU staging required              
+                    WARNING  Consumer GPU(s) detected with P2P restrictions.    
+                             NVIDIA blocks P2P on some GeForce/RTX              
+                             configurations (IOMMU, >2 GPUs, mixed              
+                             architectures). VRAMancer will use CPU-staged      
+                             transfers automatically. NCCL (if used in          
+                             distributed mode) falls back to SHM transport.     
+                             Performance impact: ~10-30%% slower than           
+                             P2P/NVLink. Workaround: use PCIe ACS override or   
+                             professional GPUs (A100/H100).                     
+                    INFO     Chargement modèle HuggingFace:                     
+                             TinyLlama/TinyLlama-1.1B-Chat-v1.0                 
+                    INFO     Detected GPU 0: NVIDIA GeForce RTX 3090 (23.6 GB,  
+                             CC 8.6, profile=Ampere)                            
+                    INFO     Detected GPU 1: NVIDIA GeForce RTX 5070 Ti (15.5   
+                             GB, CC 12.0, profile=Blackwell)                    
+                    INFO     VM environment detected — P2P typically blocked by 
+                             vfio-pci/IOMMU. Using CPU-staged transfers (pinned 
+                             memory). To force P2P probing, set                 
+                             VRM_TRANSFER_P2P=true.                             
+                    INFO     Auto-config: 2 GPUs, 37.0 GB pool,                 
+                             strategy=balanced, transfer=cpu_staged             
+                    INFO     Compute-aware placement: primary GPU 1 (NVIDIA     
+                             GeForce RTX 5070 Ti, Blackwell, 94.6 TFLOPS)       
+                    INFO       GPU 0: NVIDIA GeForce RTX 3090 — 21.7GiB budget, 
+                             tier 1, ratio 56.9%                                
+                    INFO       GPU 1: NVIDIA GeForce RTX 5070 Ti — 14.2GiB      
+                             budget, tier 0, ratio 43.1% [NVFP4, FP8,           
+                             MicroTensor]                                       
+                    INFO     Blackwell GPU detected (CC 12.0) — using bfloat16  
+                             (NVFP4 quantization available via BitsAndBytes)    
+Loading weights:   0%|          | 0/201 [00:00<?, ?it/s]Loading weights:   0%|          | 1/201 [00:00<00:32,  6.12it/s]Loading weights:   5%|▍         | 10/201 [00:00<00:04, 39.09it/s]Loading weights:   9%|▉         | 19/201 [00:00<00:03, 56.81it/s]Loading weights:  15%|█▍        | 30/201 [00:00<00:02, 70.40it/s]Loading weights:  20%|█▉        | 40/201 [00:00<00:02, 76.97it/s]Loading weights:  24%|██▍       | 49/201 [00:00<00:01, 78.37it/s]Loading weights:  29%|██▉       | 58/201 [00:00<00:02, 68.73it/s]Loading weights:  36%|███▌      | 72/201 [00:01<00:01, 85.73it/s]Loading weights:  41%|████      | 82/201 [00:01<00:01, 87.82it/s]Loading weights:  46%|████▌     | 92/201 [00:01<00:01, 89.83it/s]Loading weights:  51%|█████     | 103/201 [00:01<00:01, 93.76it/s]Loading weights:  56%|█████▌    | 113/201 [00:01<00:01, 83.36it/s]Loading weights:  61%|██████    | 123/201 [00:01<00:00, 86.17it/s]Loading weights:  68%|██████▊   | 136/201 [00:01<00:00, 94.40it/s]Loading weights:  73%|███████▎  | 146/201 [00:01<00:00, 92.90it/s]Loading weights:  79%|███████▉  | 159/201 [00:01<00:00, 102.71it/s]Loading weights:  86%|████████▌ | 172/201 [00:02<00:00, 100.99it/s]Loading weights:  92%|█████████▏| 185/201 [00:02<00:00, 107.28it/s]Loading weights:  99%|█████████▊| 198/201 [00:02<00:00, 112.40it/s]Loading weights: 100%|██████████| 201/201 [00:02<00:00, 88.65it/s] 
+[03/31/26 20:09:04] INFO     Single GPU/CPU mode, no split needed               
+                    INFO     Pipeline ready:                                    
+                             model=TinyLlama/TinyLlama-1.1B-Chat-v1.0, gpus=1,  
+                             blocks=0                                           
+                    INFO     GPU hot-plug monitoring started (interval=5.0s,    
+                             known=2 GPUs)                                      
+                    INFO     VRAMLendingPool initialized (policy:               
+                             lend_ratio=70%, reclaim_threshold=80%)             
+                    INFO     VRAMLendingPool connected (L1↔L2 cooperative       
+                             lending active)                                    
+                    WARNING  Extension C++ 'vtp_core' non disponible. Fallback  
+                             sur Python pur 🐢                                  
+                    INFO     Parity: using Rust native XOR (SIMD)               
+                    INFO     KV cache distributed: 4096 pages across ['cuda:0', 
+                             'cuda:1'] (1476.4 MB total, 23.9 GiB free across   
+                             GPUs)                                              
+                    INFO     Pool allocated: 3829 pages (1380.2 MB) on cuda:0   
+                    INFO     Pool allocated: 266 pages (95.9 MB) on cuda:1      
+                    INFO     PagedKVCache: 4095 pages @ 16 tok/page = 1476.4 MB 
+                             (devices=['cuda:0', 'cuda:1'])                     
+                    INFO     PagedKVCache initialized:                          
+                             PagedKVCache(pages=0/4096, requests=0,             
+                             mem=1476.4MB)                                      
+                    INFO     ContinuousBatcher ready (call pipeline.submit() to 
+                             use)                                               
+                    INFO     VRAMLendingPool connected (L1↔L2 cooperative       
+                             lending active)                                    
+                    WARNING  Extension C++ 'vtp_core' non disponible. Fallback  
+                             sur Python pur 🐢                                  
+                    INFO     Hierarchical Memory Manager active (L1-L6)         
+                    INFO     GPUFaultManager: tracking 1 GPUs                   
+                    INFO     GPU fault tolerance active: 1 GPUs monitored,      
+                             max_consecutive_failures=3,                        
+                             recovery_probe_interval=10s                        
+                    WARNING  TurboEngine init failed ('MultiGPUTurboEngine'     
+                             object has no attribute 'warmup'), using standard  
+                             decode                                             
+Both `max_new_tokens` (=8) and `max_length`(=2048) seem to have been set. `max_new_tokens` will take precedence. Please refer to the documentation for more information. (https://huggingface.co/docs/transformers/main/en/main_classes/text_generation)
+[03/31/26 20:09:06] INFO     Generated 13 chars in 1.24s                        
+Both `max_new_tokens` (=128) and `max_length`(=2048) seem to have been set. `max_new_tokens` will take precedence. Please refer to the documentation for more information. (https://huggingface.co/docs/transformers/main/en/main_classes/text_generation)
+[03/31/26 20:09:08] INFO     Generated 339 chars in 2.32s                       
+Both `max_new_tokens` (=128) and `max_length`(=2048) seem to have been set. `max_new_tokens` will take precedence. Please refer to the documentation for more information. (https://huggingface.co/docs/transformers/main/en/main_classes/text_generation)
+[03/31/26 20:09:11] INFO     Generated 520 chars in 3.52s                       
+Both `max_new_tokens` (=128) and `max_length`(=2048) seem to have been set. `max_new_tokens` will take precedence. Please refer to the documentation for more information. (https://huggingface.co/docs/transformers/main/en/main_classes/text_generation)
+[03/31/26 20:09:15] INFO     Generated 608 chars in 3.74s                       
+  153.0 tok/s, 3.70 GB VRAM, 1467 tokens in 9.6s
+
+>>> TurboQuant (3-bit)
+[03/31/26 20:09:16] INFO     Loading model: TinyLlama/TinyLlama-1.1B-Chat-v1.0  
+                             (backend=auto)                                     
+                    INFO     GPUs: 2 available, using 2                         
+                    INFO     Model TinyLlama/TinyLlama-1.1B-Chat-v1.0 fits on   
+                             single GPU 0 (estimated 2.2 GB, GPU has 21.0 GB    
+                             free → skipping multi-GPU overhead)                
+                    INFO     VM environment detected — VFIO-passthrough adds    
+                             ~10-15%% PCIe overhead. CPU-staged transfers       
+                             expected ~11 GB/s (vs ~13 GB/s bare metal).        
+                    INFO     GPU 0: NVIDIA GeForce RTX 3090 (SM 8.6, consumer)  
+                    INFO     GPU 1: NVIDIA GeForce RTX 5070 Ti (SM 12.0,        
+                             consumer)                                          
+                    INFO     GPU 0 <-> GPU 1: CPU staging required              
+                    WARNING  Consumer GPU(s) detected with P2P restrictions.    
+                             NVIDIA blocks P2P on some GeForce/RTX              
+                             configurations (IOMMU, >2 GPUs, mixed              
+                             architectures). VRAMancer will use CPU-staged      
+                             transfers automatically. NCCL (if used in          
+                             distributed mode) falls back to SHM transport.     
+                             Performance impact: ~10-30%% slower than           
+                             P2P/NVLink. Workaround: use PCIe ACS override or   
+                             professional GPUs (A100/H100).                     
+                    INFO     Chargement modèle HuggingFace:                     
+                             TinyLlama/TinyLlama-1.1B-Chat-v1.0                 
+                    INFO     Detected GPU 0: NVIDIA GeForce RTX 3090 (23.6 GB,  
+                             CC 8.6, profile=Ampere)                            
+                    INFO     Detected GPU 1: NVIDIA GeForce RTX 5070 Ti (15.5   
+                             GB, CC 12.0, profile=Blackwell)                    
+                    INFO     VM environment detected — P2P typically blocked by 
+                             vfio-pci/IOMMU. Using CPU-staged transfers (pinned 
+                             memory). To force P2P probing, set                 
+                             VRM_TRANSFER_P2P=true.                             
+                    INFO     Auto-config: 2 GPUs, 33.6 GB pool,                 
+                             strategy=balanced, transfer=cpu_staged             
+                    INFO     Compute-aware placement: primary GPU 1 (NVIDIA     
+                             GeForce RTX 5070 Ti, Blackwell, 94.6 TFLOPS)       
+                    INFO       GPU 0: NVIDIA GeForce RTX 3090 — 19.6GiB budget, 
+                             tier 1, ratio 56.4%                                
+                    INFO       GPU 1: NVIDIA GeForce RTX 5070 Ti — 13.1GiB      
+                             budget, tier 0, ratio 43.6% [NVFP4, FP8,           
+                             MicroTensor]                                       
+                    INFO     Blackwell GPU detected (CC 12.0) — using bfloat16  
+                             (NVFP4 quantization available via BitsAndBytes)    
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+WARNING:huggingface_hub.utils._http:Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+                    ERROR    from_pretrained failed:                            
+                             Traceback (most recent call last):                 
+                               File                                             
+                             "/home/jeremie/VRAMancer/VRAMancer/core/backends.py
+                             ", line 1147, in load_model                        
+                                 self.model =                                   
+                             AutoModelForCausalLM.from_pretrained(model_name,   
+                             **kwargs)                                          
+                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                             ^^^^^^^^^^^^^^^^^^^^^^^^                           
+                               File                                             
+                             "/home/jeremie/VRAMancer/VRAMancer/.venv/lib/python
+                             3.12/site-packages/transformers/models/auto/auto_fa
+                             ctory.py", line 374, in from_pretrained            
+                                 return model_class.from_pretrained(            
+                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^            
+                               File                                             
+                             "/home/jeremie/VRAMancer/VRAMancer/.venv/lib/python
+                             3.12/site-packages/transformers/modeling_utils.py",
+                              line 4137, in from_pretrained                     
+                                 loading_info, disk_offload_index =             
+                             cls._load_pretrained_model(model, state_dict,      
+                             checkpoint_files, load_config)                     
+                                                                    ^^^^^^^^^^^^
+                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                             ^^^^^^^^^^^^^                                      
+                               File                                             
+                             "/home/jeremie/VRAMancer/VRAMancer/.venv/lib/python
+                             3.12/site-packages/transformers/modeling_utils.py",
+                              line 4216, in _load_pretrained_model              
+                                 caching_allocator_warmup(model,                
+                             expanded_device_map, load_config.hf_quantizer)     
+                               File                                             
+                             "/home/jeremie/VRAMancer/VRAMancer/.venv/lib/python
+                             3.12/site-packages/transformers/modeling_utils.py",
+                              line 4810, in caching_allocator_warmup            
+                                 _ = torch.empty(int(byte_count // 2),          
+                             dtype=torch.float16, device=device,                
+                             requires_grad=False)                               
+                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^    
+                             torch.OutOfMemoryError: CUDA out of memory. Tried  
+                             to allocate 1.09 GiB. GPU 1 has a total capacity of
+                             15.47 GiB of which 350.00 MiB is free. Process     
+                             1004727 has 13.61 GiB memory in use. Including     
+                             non-PyTorch memory, this process has 1.49 GiB      
+                             memory in use. Of the allocated memory 1.20 GiB is 
+                             allocated by PyTorch, and 16.77 MiB is reserved by 
+                             PyTorch but unallocated. If reserved but           
+                             unallocated memory is large try setting            
+                             PYTORCH_ALLOC_CONF=expandable_segments:True to     
+                             avoid fragmentation.  See documentation for Memory 
+                             Management                                         
+                             (https://pytorch.org/docs/stable/notes/cuda.html#en
+                             vironment-variables)                               
+                                                                                
+                    ERROR    Model load failed: CUDA out of memory. Tried to    
+                             allocate 1.09 GiB. GPU 1 has a total capacity of   
+                             15.47 GiB of which 350.00 MiB is free. Process     
+                             1004727 has 13.61 GiB memory in use. Including     
+                             non-PyTorch memory, this process has 1.49 GiB      
+                             memory in use. Of the allocated memory 1.20 GiB is 
+                             allocated by PyTorch, and 16.77 MiB is reserved by 
+                             PyTorch but unallocated. If reserved but           
+                             unallocated memory is large try setting            
+                             PYTORCH_ALLOC_CONF=expandable_segments:True to     
+                             avoid fragmentation.  See documentation for Memory 
+                             Management                                         
+                             (https://pytorch.org/docs/stable/notes/cuda.html#en
+                             vironment-variables)                               
+                    INFO     Shutting down inference pipeline...                
+                    INFO     Dynamic rebalancing stopped                        
+                    INFO     GPU polling stopped                                
+                    INFO     Pipeline shutdown complete                         
+                    INFO     GPU polling stopped                                
+                    INFO     GPU polling stopped                                
+  FAILED: CUDA out of memory. Tried to allocate 1.09 GiB. GPU 1 has a total capacity of 15.47 GiB of which 350.00 MiB is free. Process 1004727 has 13.61 GiB memory in use. Including non-PyTorch memory, this process has 1.49 GiB memory in use. Of the allocated memory 1.20 GiB is allocated by PyTorch, and 16.77 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+
+>>> TurboQuant + Sparse V 30%
+                    INFO     Loading model: TinyLlama/TinyLlama-1.1B-Chat-v1.0  
+                             (backend=auto)                                     
+                    INFO     GPUs: 2 available, using 2                         
+                    INFO     Model TinyLlama/TinyLlama-1.1B-Chat-v1.0 fits on   
+                             single GPU 0 (estimated 2.2 GB, GPU has 21.0 GB    
+                             free → skipping multi-GPU overhead)                
+                    INFO     VM environment detected — VFIO-passthrough adds    
+                             ~10-15%% PCIe overhead. CPU-staged transfers       
+                             expected ~11 GB/s (vs ~13 GB/s bare metal).        
+                    INFO     GPU 0: NVIDIA GeForce RTX 3090 (SM 8.6, consumer)  
+                    INFO     GPU 1: NVIDIA GeForce RTX 5070 Ti (SM 12.0,        
+                             consumer)                                          
+                    INFO     GPU 0 <-> GPU 1: CPU staging required              
+                    WARNING  Consumer GPU(s) detected with P2P restrictions.    
+                             NVIDIA blocks P2P on some GeForce/RTX              
+                             configurations (IOMMU, >2 GPUs, mixed              
+                             architectures). VRAMancer will use CPU-staged      
+                             transfers automatically. NCCL (if used in          
+                             distributed mode) falls back to SHM transport.     
+                             Performance impact: ~10-30%% slower than           
+                             P2P/NVLink. Workaround: use PCIe ACS override or   
+                             professional GPUs (A100/H100).                     
+                    INFO     Chargement modèle HuggingFace:                     
+                             TinyLlama/TinyLlama-1.1B-Chat-v1.0                 
+                    INFO     Detected GPU 0: NVIDIA GeForce RTX 3090 (23.6 GB,  
+                             CC 8.6, profile=Ampere)                            
+                    INFO     Detected GPU 1: NVIDIA GeForce RTX 5070 Ti (15.5   
+                             GB, CC 12.0, profile=Blackwell)                    
+                    INFO     VM environment detected — P2P typically blocked by 
+                             vfio-pci/IOMMU. Using CPU-staged transfers (pinned 
+                             memory). To force P2P probing, set                 
+                             VRM_TRANSFER_P2P=true.                             
+                    INFO     Auto-config: 2 GPUs, 33.6 GB pool,                 
+                             strategy=balanced, transfer=cpu_staged             
+                    INFO     Compute-aware placement: primary GPU 1 (NVIDIA     
+                             GeForce RTX 5070 Ti, Blackwell, 94.6 TFLOPS)       
+                    INFO       GPU 0: NVIDIA GeForce RTX 3090 — 19.6GiB budget, 
+                             tier 1, ratio 56.4%                                
+                    INFO       GPU 1: NVIDIA GeForce RTX 5070 Ti — 13.1GiB      
+                             budget, tier 0, ratio 43.6% [NVFP4, FP8,           
+                             MicroTensor]                                       
+                    INFO     Blackwell GPU detected (CC 12.0) — using bfloat16  
+                             (NVFP4 quantization available via BitsAndBytes)    
+Loading weights:   0%|          | 0/201 [00:00<?, ?it/s]Loading weights:  28%|██▊       | 56/201 [00:00<00:00, 528.52it/s]Loading weights:  69%|██████▉   | 139/201 [00:00<00:00, 664.50it/s]Loading weights: 100%|██████████| 201/201 [00:00<00:00, 694.03it/s]
+[03/31/26 20:09:18] INFO     Single GPU/CPU mode, no split needed               
+                    INFO     Pipeline ready:                                    
+                             model=TinyLlama/TinyLlama-1.1B-Chat-v1.0, gpus=1,  
+                             blocks=0                                           
+                    INFO     GPU hot-plug monitoring started (interval=5.0s,    
+                             known=2 GPUs)                                      
+                    INFO     KV cache distributed: 4096 pages across ['cuda:0', 
+                             'cuda:1'] (1476.4 MB total, 20.3 GiB free across   
+                             GPUs)                                              
+                    INFO     KV cache compression enabled: 4.0 bits/dim (4.0x   
+                             reduction, bits_per_angle=3, qjl_dim=32,           
+                             sparse_v=30%)                                      
+                    INFO     Pool allocated: 4046 pages (1458.4 MB) on cuda:0   
+                    INFO     Pool allocated: 49 pages (17.7 MB) on cuda:1       
+                    INFO     PagedKVCache: 4095 pages @ 16 tok/page = 1476.4 MB 
+                             (devices=['cuda:0', 'cuda:1'])                     
+                    INFO     PagedKVCache initialized:                          
+                             PagedKVCache(pages=0/4096, requests=0,             
+                             mem=1476.4MB)                                      
+                    INFO     KV compression wired to StreamManager (4.0x        
+                             reduction on eviction)                             
+                    INFO     ContinuousBatcher ready (call pipeline.submit() to 
+                             use)                                               
+                    INFO     VRAMLendingPool connected (L1↔L2 cooperative       
+                             lending active)                                    
+                    WARNING  Extension C++ 'vtp_core' non disponible. Fallback  
+                             sur Python pur 🐢                                  
+                    INFO     Hierarchical Memory Manager active (L1-L6)         
+                    INFO     GPU fault tolerance active: 1 GPUs monitored,      
+                             max_consecutive_failures=3,                        
+                             recovery_probe_interval=10s                        
+                    WARNING  TurboEngine init failed ('MultiGPUTurboEngine'     
+                             object has no attribute 'warmup'), using standard  
+                             decode                                             
+Both `max_new_tokens` (=8) and `max_length`(=2048) seem to have been set. `max_new_tokens` will take precedence. Please refer to the documentation for more information. (https://huggingface.co/docs/transformers/main/en/main_classes/text_generation)
+                    INFO     Generated 13 chars in 0.22s                        
+Both `max_new_tokens` (=128) and `max_length`(=2048) seem to have been set. `max_new_tokens` will take precedence. Please refer to the documentation for more information. (https://huggingface.co/docs/transformers/main/en/main_classes/text_generation)
+[03/31/26 20:09:20] INFO     Generated 339 chars in 2.27s                       
+Both `max_new_tokens` (=128) and `max_length`(=2048) seem to have been set. `max_new_tokens` will take precedence. Please refer to the documentation for more information. (https://huggingface.co/docs/transformers/main/en/main_classes/text_generation)
+[03/31/26 20:09:24] INFO     Generated 520 chars in 3.60s                       
+Both `max_new_tokens` (=128) and `max_length`(=2048) seem to have been set. `max_new_tokens` will take precedence. Please refer to the documentation for more information. (https://huggingface.co/docs/transformers/main/en/main_classes/text_generation)
+[03/31/26 20:09:27] INFO     Generated 608 chars in 3.52s                       
+  156.3 tok/s, 7.37 GB VRAM, 1467 tokens in 9.4s
+
+>>> TurboQuant + Sparse V 10%
+[03/31/26 20:09:28] INFO     Loading model: TinyLlama/TinyLlama-1.1B-Chat-v1.0  
+                             (backend=auto)                                     
+                    INFO     GPUs: 2 available, using 2                         
+                    INFO     Model TinyLlama/TinyLlama-1.1B-Chat-v1.0 fits on   
+                             single GPU 0 (estimated 2.2 GB, GPU has 18.7 GB    
+                             free → skipping multi-GPU overhead)                
+                    INFO     VM environment detected — VFIO-passthrough adds    
+                             ~10-15%% PCIe overhead. CPU-staged transfers       
+                             expected ~11 GB/s (vs ~13 GB/s bare metal).        
+                    INFO     GPU 0: NVIDIA GeForce RTX 3090 (SM 8.6, consumer)  
+                    INFO     GPU 1: NVIDIA GeForce RTX 5070 Ti (SM 12.0,        
+                             consumer)                                          
+                    INFO     GPU 0 <-> GPU 1: CPU staging required              
+                    WARNING  Consumer GPU(s) detected with P2P restrictions.    
+                             NVIDIA blocks P2P on some GeForce/RTX              
+                             configurations (IOMMU, >2 GPUs, mixed              
+                             architectures). VRAMancer will use CPU-staged      
+                             transfers automatically. NCCL (if used in          
+                             distributed mode) falls back to SHM transport.     
+                             Performance impact: ~10-30%% slower than           
+                             P2P/NVLink. Workaround: use PCIe ACS override or   
+                             professional GPUs (A100/H100).                     
+                    INFO     Chargement modèle HuggingFace:                     
+                             TinyLlama/TinyLlama-1.1B-Chat-v1.0                 
+                    INFO     Detected GPU 0: NVIDIA GeForce RTX 3090 (23.6 GB,  
+                             CC 8.6, profile=Ampere)                            
+                    INFO     Detected GPU 1: NVIDIA GeForce RTX 5070 Ti (15.5   
+                             GB, CC 12.0, profile=Blackwell)                    
+                    INFO     VM environment detected — P2P typically blocked by 
+                             vfio-pci/IOMMU. Using CPU-staged transfers (pinned 
+                             memory). To force P2P probing, set                 
+                             VRM_TRANSFER_P2P=true.                             
+                    INFO     Auto-config: 2 GPUs, 30.2 GB pool,                 
+                             strategy=balanced, transfer=cpu_staged             
+                    INFO     Compute-aware placement: primary GPU 1 (NVIDIA     
+                             GeForce RTX 5070 Ti, Blackwell, 94.6 TFLOPS)       
+                    INFO       GPU 0: NVIDIA GeForce RTX 3090 — 17.5GiB budget, 
+                             tier 1, ratio 55.6%                                
+                    INFO       GPU 1: NVIDIA GeForce RTX 5070 Ti — 12.1GiB      
+                             budget, tier 0, ratio 44.4% [NVFP4, FP8,           
+                             MicroTensor]                                       
+                    INFO     Blackwell GPU detected (CC 12.0) — using bfloat16  
+                             (NVFP4 quantization available via BitsAndBytes)    
+                    ERROR    from_pretrained failed:                            
+                             Traceback (most recent call last):                 
+                               File                                             
+                             "/home/jeremie/VRAMancer/VRAMancer/core/backends.py
+                             ", line 1147, in load_model                        
+                                 self.model =                                   
+                             AutoModelForCausalLM.from_pretrained(model_name,   
+                             **kwargs)                                          
+                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                             ^^^^^^^^^^^^^^^^^^^^^^^^                           
+                               File                                             
+                             "/home/jeremie/VRAMancer/VRAMancer/.venv/lib/python
+                             3.12/site-packages/transformers/models/auto/auto_fa
+                             ctory.py", line 374, in from_pretrained            
+                                 return model_class.from_pretrained(            
+                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^            
+                               File                                             
+                             "/home/jeremie/VRAMancer/VRAMancer/.venv/lib/python
+                             3.12/site-packages/transformers/modeling_utils.py",
+                              line 4137, in from_pretrained                     
+                                 loading_info, disk_offload_index =             
+                             cls._load_pretrained_model(model, state_dict,      
+                             checkpoint_files, load_config)                     
+                                                                    ^^^^^^^^^^^^
+                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                             ^^^^^^^^^^^^^                                      
+                               File                                             
+                             "/home/jeremie/VRAMancer/VRAMancer/.venv/lib/python
+                             3.12/site-packages/transformers/modeling_utils.py",
+                              line 4216, in _load_pretrained_model              
+                                 caching_allocator_warmup(model,                
+                             expanded_device_map, load_config.hf_quantizer)     
+                               File                                             
+                             "/home/jeremie/VRAMancer/VRAMancer/.venv/lib/python
+                             3.12/site-packages/transformers/modeling_utils.py",
+                              line 4810, in caching_allocator_warmup            
+                                 _ = torch.empty(int(byte_count // 2),          
+                             dtype=torch.float16, device=device,                
+                             requires_grad=False)                               
+                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^    
+                             torch.OutOfMemoryError: CUDA out of memory. Tried  
+                             to allocate 1.02 GiB. GPU 1 has a total capacity of
+                             15.47 GiB of which 256.00 MiB is free. Process     
+                             1004727 has 12.59 GiB memory in use. Including     
+                             non-PyTorch memory, this process has 2.60 GiB      
+                             memory in use. Of the allocated memory 2.33 GiB is 
+                             allocated by PyTorch, and 8.67 MiB is reserved by  
+                             PyTorch but unallocated. If reserved but           
+                             unallocated memory is large try setting            
+                             PYTORCH_ALLOC_CONF=expandable_segments:True to     
+                             avoid fragmentation.  See documentation for Memory 
+                             Management                                         
+                             (https://pytorch.org/docs/stable/notes/cuda.html#en
+                             vironment-variables)                               
+                                                                                
+                    ERROR    Model load failed: CUDA out of memory. Tried to    
+                             allocate 1.02 GiB. GPU 1 has a total capacity of   
+                             15.47 GiB of which 256.00 MiB is free. Process     
+                             1004727 has 12.59 GiB memory in use. Including     
+                             non-PyTorch memory, this process has 2.60 GiB      
+                             memory in use. Of the allocated memory 2.33 GiB is 
+                             allocated by PyTorch, and 8.67 MiB is reserved by  
+                             PyTorch but unallocated. If reserved but           
+                             unallocated memory is large try setting            
+                             PYTORCH_ALLOC_CONF=expandable_segments:True to     
+                             avoid fragmentation.  See documentation for Memory 
+                             Management                                         
+                             (https://pytorch.org/docs/stable/notes/cuda.html#en
+                             vironment-variables)                               
+                    INFO     Shutting down inference pipeline...                
+                    INFO     Dynamic rebalancing stopped                        
+                    INFO     GPU polling stopped                                
+                    INFO     Pipeline shutdown complete                         
+                    INFO     GPU polling stopped                                
+                    INFO     GPU polling stopped                                
+  FAILED: CUDA out of memory. Tried to allocate 1.02 GiB. GPU 1 has a total capacity of 15.47 GiB of which 256.00 MiB is free. Process 1004727 has 12.59 GiB memory in use. Including non-PyTorch memory, this process has 2.60 GiB memory in use. Of the allocated memory 2.33 GiB is allocated by PyTorch, and 8.67 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+
+================================================================================
+  BENCHMARK RESULTS
+================================================================================
+  Configuration                                tok/s   VRAM GB      Status
+  ----------------------------------------  --------  --------  ----------
+  BF16 baseline                               153.0     3.70          OK
+  TurboQuant (3-bit)                               —         —      FAILED
+  TurboQuant + Sparse V 30%                   156.3     7.37  OK (+2.2%)
+  TurboQuant + Sparse V 10%                        —         —      FAILED

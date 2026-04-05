@@ -1,0 +1,346 @@
+VRAMancer TurboQuant + Sparse V Benchmark
+============================================================
+PyTorch 2.10.0+cu128, CUDA 12.8
+GPU 0: NVIDIA GeForce RTX 3090 CC=8.6, 25.0/25.3 GB
+
+
+============================================================
+  KV Compressor Microbenchmark
+============================================================
+
+  head_dim=64, 4.0 bits/dim (4.0x compression)
+   seq_len    compress  decompress       score
+  --------  ----------  ----------  ----------
+       128     32.00ms     13.46ms     12.48ms
+       512     66.73ms     59.95ms     43.01ms
+      2048    553.98ms    348.94ms    162.23ms
+
+  head_dim=128, 3.7 bits/dim (4.3x compression)
+   seq_len    compress  decompress       score
+  --------  ----------  ----------  ----------
+       128     61.05ms     24.53ms     29.54ms
+       512    163.37ms     76.64ms     53.28ms
+      2048    714.79ms    560.79ms    272.51ms
+
+>>> BF16 baseline
+[03/31/26 20:07:15] INFO     Loading model: gpt2 (backend=auto)                 
+                    INFO     GPUs: 2 available, using 1                         
+[03/31/26 20:07:16] INFO     VM environment detected — VFIO-passthrough adds    
+                             ~10-15%% PCIe overhead. CPU-staged transfers       
+                             expected ~11 GB/s (vs ~13 GB/s bare metal).        
+                    INFO     GPU 0: NVIDIA GeForce RTX 3090 (SM 8.6, consumer)  
+                    INFO     GPU 1: NVIDIA GeForce RTX 5070 Ti (SM 12.0,        
+                             consumer)                                          
+                    INFO     GPU 0 <-> GPU 1: CPU staging required              
+                    WARNING  Consumer GPU(s) detected with P2P restrictions.    
+                             NVIDIA blocks P2P on some GeForce/RTX              
+                             configurations (IOMMU, >2 GPUs, mixed              
+                             architectures). VRAMancer will use CPU-staged      
+                             transfers automatically. NCCL (if used in          
+                             distributed mode) falls back to SHM transport.     
+                             Performance impact: ~10-30%% slower than           
+                             P2P/NVLink. Workaround: use PCIe ACS override or   
+                             professional GPUs (A100/H100).                     
+                    INFO     Chargement modèle HuggingFace: gpt2                
+                    INFO     Detected GPU 0: NVIDIA GeForce RTX 3090 (23.6 GB,  
+                             CC 8.6, profile=Ampere)                            
+                    INFO     Detected GPU 1: NVIDIA GeForce RTX 5070 Ti (15.5   
+                             GB, CC 12.0, profile=Blackwell)                    
+                    INFO     VM environment detected — P2P typically blocked by 
+                             vfio-pci/IOMMU. Using CPU-staged transfers (pinned 
+                             memory). To force P2P probing, set                 
+                             VRM_TRANSFER_P2P=true.                             
+                    INFO     Auto-config: 2 GPUs, 37.0 GB pool,                 
+                             strategy=balanced, transfer=cpu_staged             
+                    INFO     Compute-aware placement: primary GPU 1 (NVIDIA     
+                             GeForce RTX 5070 Ti, Blackwell, 94.6 TFLOPS)       
+                    INFO       GPU 0: NVIDIA GeForce RTX 3090 — 21.7GiB budget, 
+                             tier 1, ratio 56.9%                                
+                    INFO       GPU 1: NVIDIA GeForce RTX 5070 Ti — 14.2GiB      
+                             budget, tier 0, ratio 43.1% [NVFP4, FP8,           
+                             MicroTensor]                                       
+                    INFO     Blackwell GPU detected (CC 12.0) — using bfloat16  
+                             (NVFP4 quantization available via BitsAndBytes)    
+Loading weights:   0%|          | 0/148 [00:00<?, ?it/s]Loading weights:  47%|████▋     | 70/148 [00:00<00:00, 582.64it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 552.35it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 556.04it/s]
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+WARNING:huggingface_hub.utils._http:Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+[03/31/26 20:07:18] INFO     Single GPU/CPU mode, no split needed               
+                    INFO     Pipeline ready: model=gpt2, gpus=1, blocks=0       
+                    INFO     GPU hot-plug monitoring started (interval=5.0s,    
+                             known=2 GPUs)                                      
+                    INFO     VRAMLendingPool initialized (policy:               
+                             lend_ratio=70%, reclaim_threshold=80%)             
+                    INFO     VRAMLendingPool connected (L1↔L2 cooperative       
+                             lending active)                                    
+                    WARNING  Extension C++ 'vtp_core' non disponible. Fallback  
+                             sur Python pur 🐢                                  
+                    INFO     Parity: using Rust native XOR (SIMD)               
+                    INFO     KV cache distributed: 4096 pages across ['cuda:0', 
+                             'cuda:1'] (2415.9 MB total, 38.2 GiB free across   
+                             GPUs)                                              
+                    INFO     Pool allocated: 2477 pages (1461.0 MB) on cuda:0   
+                    INFO     Pool allocated: 1618 pages (954.3 MB) on cuda:1    
+                    INFO     PagedKVCache: 4095 pages @ 16 tok/page = 2415.9 MB 
+                             (devices=['cuda:0', 'cuda:1'])                     
+                    INFO     PagedKVCache initialized:                          
+                             PagedKVCache(pages=0/4096, requests=0,             
+                             mem=2415.9MB)                                      
+                    INFO     ContinuousBatcher ready (call pipeline.submit() to 
+                             use)                                               
+                    INFO     VRAMLendingPool connected (L1↔L2 cooperative       
+                             lending active)                                    
+                    WARNING  Extension C++ 'vtp_core' non disponible. Fallback  
+                             sur Python pur 🐢                                  
+                    INFO     Hierarchical Memory Manager active (L1-L6)         
+                    INFO     GPUFaultManager: tracking 1 GPUs                   
+                    INFO     GPU fault tolerance active: 1 GPUs monitored,      
+                             max_consecutive_failures=3,                        
+                             recovery_probe_interval=10s                        
+                    WARNING  TurboEngine init failed ('GPT2LMHeadModel' object  
+                             has no attribute 'layers'), using standard decode  
+                    INFO     Generated 25 chars in 0.74s                        
+[03/31/26 20:07:19] INFO     Generated 254 chars in 0.74s                       
+[03/31/26 20:07:20] INFO     Generated 165 chars in 0.73s                       
+[03/31/26 20:07:21] INFO     Generated 249 chars in 0.73s                       
+  302.5 tok/s, 1.59 GB VRAM, 668 tokens in 2.2s
+
+>>> TurboQuant (3-bit)
+                    INFO     Loading model: gpt2 (backend=auto)                 
+                    INFO     GPUs: 2 available, using 1                         
+                    INFO     VM environment detected — VFIO-passthrough adds    
+                             ~10-15%% PCIe overhead. CPU-staged transfers       
+                             expected ~11 GB/s (vs ~13 GB/s bare metal).        
+                    INFO     GPU 0: NVIDIA GeForce RTX 3090 (SM 8.6, consumer)  
+                    INFO     GPU 1: NVIDIA GeForce RTX 5070 Ti (SM 12.0,        
+                             consumer)                                          
+                    INFO     GPU 0 <-> GPU 1: CPU staging required              
+                    WARNING  Consumer GPU(s) detected with P2P restrictions.    
+                             NVIDIA blocks P2P on some GeForce/RTX              
+                             configurations (IOMMU, >2 GPUs, mixed              
+                             architectures). VRAMancer will use CPU-staged      
+                             transfers automatically. NCCL (if used in          
+                             distributed mode) falls back to SHM transport.     
+                             Performance impact: ~10-30%% slower than           
+                             P2P/NVLink. Workaround: use PCIe ACS override or   
+                             professional GPUs (A100/H100).                     
+                    INFO     Chargement modèle HuggingFace: gpt2                
+                    INFO     Detected GPU 0: NVIDIA GeForce RTX 3090 (23.6 GB,  
+                             CC 8.6, profile=Ampere)                            
+                    INFO     Detected GPU 1: NVIDIA GeForce RTX 5070 Ti (15.5   
+                             GB, CC 12.0, profile=Blackwell)                    
+                    INFO     VM environment detected — P2P typically blocked by 
+                             vfio-pci/IOMMU. Using CPU-staged transfers (pinned 
+                             memory). To force P2P probing, set                 
+                             VRM_TRANSFER_P2P=true.                             
+                    INFO     Auto-config: 2 GPUs, 34.5 GB pool,                 
+                             strategy=balanced, transfer=cpu_staged             
+                    INFO     Compute-aware placement: primary GPU 1 (NVIDIA     
+                             GeForce RTX 5070 Ti, Blackwell, 94.6 TFLOPS)       
+                    INFO       GPU 0: NVIDIA GeForce RTX 3090 — 20.3GiB budget, 
+                             tier 1, ratio 57.0%                                
+                    INFO       GPU 1: NVIDIA GeForce RTX 5070 Ti — 13.3GiB      
+                             budget, tier 0, ratio 43.0% [NVFP4, FP8,           
+                             MicroTensor]                                       
+                    INFO     Blackwell GPU detected (CC 12.0) — using bfloat16  
+                             (NVFP4 quantization available via BitsAndBytes)    
+Loading weights:   0%|          | 0/148 [00:00<?, ?it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 1353.57it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 1349.69it/s]
+[03/31/26 20:07:22] INFO     Single GPU/CPU mode, no split needed               
+                    INFO     Pipeline ready: model=gpt2, gpus=1, blocks=0       
+                    INFO     GPU hot-plug monitoring started (interval=5.0s,    
+                             known=2 GPUs)                                      
+                    INFO     KV cache distributed: 4096 pages across ['cuda:0', 
+                             'cuda:1'] (2415.9 MB total, 35.6 GiB free across   
+                             GPUs)                                              
+                    INFO     KV cache compression enabled: 4.0 bits/dim (4.0x   
+                             reduction, bits_per_angle=3, qjl_dim=32,           
+                             sparse_v=100%)                                     
+                    INFO     Pool allocated: 2474 pages (1459.2 MB) on cuda:0   
+                    INFO     Pool allocated: 1621 pages (956.1 MB) on cuda:1    
+                    INFO     PagedKVCache: 4095 pages @ 16 tok/page = 2415.9 MB 
+                             (devices=['cuda:0', 'cuda:1'])                     
+                    INFO     PagedKVCache initialized:                          
+                             PagedKVCache(pages=0/4096, requests=0,             
+                             mem=2415.9MB)                                      
+                    INFO     KV compression wired to StreamManager (4.0x        
+                             reduction on eviction)                             
+                    INFO     ContinuousBatcher ready (call pipeline.submit() to 
+                             use)                                               
+                    INFO     VRAMLendingPool connected (L1↔L2 cooperative       
+                             lending active)                                    
+                    WARNING  Extension C++ 'vtp_core' non disponible. Fallback  
+                             sur Python pur 🐢                                  
+                    INFO     Hierarchical Memory Manager active (L1-L6)         
+                    INFO     GPU fault tolerance active: 1 GPUs monitored,      
+                             max_consecutive_failures=3,                        
+                             recovery_probe_interval=10s                        
+                    WARNING  TurboEngine init failed ('GPT2LMHeadModel' object  
+                             has no attribute 'layers'), using standard decode  
+                    INFO     Generated 18 chars in 0.09s                        
+[03/31/26 20:07:23] INFO     Generated 294 chars in 0.71s                       
+[03/31/26 20:07:24] INFO     Generated 207 chars in 0.73s                       
+[03/31/26 20:07:25] INFO     Generated 244 chars in 0.70s                       
+  347.7 tok/s, 3.25 GB VRAM, 745 tokens in 2.1s
+
+>>> TurboQuant + Sparse V 30%
+                    INFO     Loading model: gpt2 (backend=auto)                 
+                    INFO     GPUs: 2 available, using 1                         
+                    INFO     VM environment detected — VFIO-passthrough adds    
+                             ~10-15%% PCIe overhead. CPU-staged transfers       
+                             expected ~11 GB/s (vs ~13 GB/s bare metal).        
+                    INFO     GPU 0: NVIDIA GeForce RTX 3090 (SM 8.6, consumer)  
+                    INFO     GPU 1: NVIDIA GeForce RTX 5070 Ti (SM 12.0,        
+                             consumer)                                          
+                    INFO     GPU 0 <-> GPU 1: CPU staging required              
+                    WARNING  Consumer GPU(s) detected with P2P restrictions.    
+                             NVIDIA blocks P2P on some GeForce/RTX              
+                             configurations (IOMMU, >2 GPUs, mixed              
+                             architectures). VRAMancer will use CPU-staged      
+                             transfers automatically. NCCL (if used in          
+                             distributed mode) falls back to SHM transport.     
+                             Performance impact: ~10-30%% slower than           
+                             P2P/NVLink. Workaround: use PCIe ACS override or   
+                             professional GPUs (A100/H100).                     
+                    INFO     Chargement modèle HuggingFace: gpt2                
+                    INFO     Detected GPU 0: NVIDIA GeForce RTX 3090 (23.6 GB,  
+                             CC 8.6, profile=Ampere)                            
+                    INFO     Detected GPU 1: NVIDIA GeForce RTX 5070 Ti (15.5   
+                             GB, CC 12.0, profile=Blackwell)                    
+                    INFO     VM environment detected — P2P typically blocked by 
+                             vfio-pci/IOMMU. Using CPU-staged transfers (pinned 
+                             memory). To force P2P probing, set                 
+                             VRM_TRANSFER_P2P=true.                             
+                    INFO     Auto-config: 2 GPUs, 32.0 GB pool,                 
+                             strategy=balanced, transfer=cpu_staged             
+                    INFO     Compute-aware placement: primary GPU 1 (NVIDIA     
+                             GeForce RTX 5070 Ti, Blackwell, 94.6 TFLOPS)       
+                    INFO       GPU 0: NVIDIA GeForce RTX 3090 — 18.9GiB budget, 
+                             tier 1, ratio 56.8%                                
+                    INFO       GPU 1: NVIDIA GeForce RTX 5070 Ti — 12.4GiB      
+                             budget, tier 0, ratio 43.2% [NVFP4, FP8,           
+                             MicroTensor]                                       
+                    INFO     Blackwell GPU detected (CC 12.0) — using bfloat16  
+                             (NVFP4 quantization available via BitsAndBytes)    
+Loading weights:   0%|          | 0/148 [00:00<?, ?it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 1293.90it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 1291.47it/s]
+[03/31/26 20:07:26] INFO     Single GPU/CPU mode, no split needed               
+                    INFO     Pipeline ready: model=gpt2, gpus=1, blocks=0       
+                    INFO     GPU hot-plug monitoring started (interval=5.0s,    
+                             known=2 GPUs)                                      
+                    INFO     KV cache distributed: 4096 pages across ['cuda:0', 
+                             'cuda:1'] (2415.9 MB total, 33.2 GiB free across   
+                             GPUs)                                              
+                    INFO     KV cache compression enabled: 4.0 bits/dim (4.0x   
+                             reduction, bits_per_angle=3, qjl_dim=32,           
+                             sparse_v=30%)                                      
+                    INFO     Pool allocated: 2473 pages (1458.6 MB) on cuda:0   
+                    INFO     Pool allocated: 1622 pages (956.7 MB) on cuda:1    
+                    INFO     PagedKVCache: 4095 pages @ 16 tok/page = 2415.9 MB 
+                             (devices=['cuda:0', 'cuda:1'])                     
+                    INFO     PagedKVCache initialized:                          
+                             PagedKVCache(pages=0/4096, requests=0,             
+                             mem=2415.9MB)                                      
+                    INFO     KV compression wired to StreamManager (4.0x        
+                             reduction on eviction)                             
+                    INFO     ContinuousBatcher ready (call pipeline.submit() to 
+                             use)                                               
+                    INFO     VRAMLendingPool connected (L1↔L2 cooperative       
+                             lending active)                                    
+                    WARNING  Extension C++ 'vtp_core' non disponible. Fallback  
+                             sur Python pur 🐢                                  
+                    INFO     Hierarchical Memory Manager active (L1-L6)         
+                    INFO     GPU fault tolerance active: 1 GPUs monitored,      
+                             max_consecutive_failures=3,                        
+                             recovery_probe_interval=10s                        
+                    WARNING  TurboEngine init failed ('GPT2LMHeadModel' object  
+                             has no attribute 'layers'), using standard decode  
+                    INFO     Generated 18 chars in 0.09s                        
+[03/31/26 20:07:27] INFO     Generated 294 chars in 0.73s                       
+[03/31/26 20:07:28] INFO     Generated 207 chars in 0.71s                       
+[03/31/26 20:07:29] INFO     Generated 244 chars in 0.71s                       
+  346.2 tok/s, 4.90 GB VRAM, 745 tokens in 2.2s
+
+>>> TurboQuant + Sparse V 10%
+                    INFO     Loading model: gpt2 (backend=auto)                 
+                    INFO     GPUs: 2 available, using 1                         
+                    INFO     VM environment detected — VFIO-passthrough adds    
+                             ~10-15%% PCIe overhead. CPU-staged transfers       
+                             expected ~11 GB/s (vs ~13 GB/s bare metal).        
+                    INFO     GPU 0: NVIDIA GeForce RTX 3090 (SM 8.6, consumer)  
+                    INFO     GPU 1: NVIDIA GeForce RTX 5070 Ti (SM 12.0,        
+                             consumer)                                          
+                    INFO     GPU 0 <-> GPU 1: CPU staging required              
+                    WARNING  Consumer GPU(s) detected with P2P restrictions.    
+                             NVIDIA blocks P2P on some GeForce/RTX              
+                             configurations (IOMMU, >2 GPUs, mixed              
+                             architectures). VRAMancer will use CPU-staged      
+                             transfers automatically. NCCL (if used in          
+                             distributed mode) falls back to SHM transport.     
+                             Performance impact: ~10-30%% slower than           
+                             P2P/NVLink. Workaround: use PCIe ACS override or   
+                             professional GPUs (A100/H100).                     
+                    INFO     Chargement modèle HuggingFace: gpt2                
+                    INFO     Detected GPU 0: NVIDIA GeForce RTX 3090 (23.6 GB,  
+                             CC 8.6, profile=Ampere)                            
+                    INFO     Detected GPU 1: NVIDIA GeForce RTX 5070 Ti (15.5   
+                             GB, CC 12.0, profile=Blackwell)                    
+                    INFO     VM environment detected — P2P typically blocked by 
+                             vfio-pci/IOMMU. Using CPU-staged transfers (pinned 
+                             memory). To force P2P probing, set                 
+                             VRM_TRANSFER_P2P=true.                             
+                    INFO     Auto-config: 2 GPUs, 29.6 GB pool,                 
+                             strategy=balanced, transfer=cpu_staged             
+                    INFO     Compute-aware placement: primary GPU 1 (NVIDIA     
+                             GeForce RTX 5070 Ti, Blackwell, 94.6 TFLOPS)       
+                    INFO       GPU 0: NVIDIA GeForce RTX 3090 — 17.5GiB budget, 
+                             tier 1, ratio 56.7%                                
+                    INFO       GPU 1: NVIDIA GeForce RTX 5070 Ti — 11.6GiB      
+                             budget, tier 0, ratio 43.3% [NVFP4, FP8,           
+                             MicroTensor]                                       
+                    INFO     Blackwell GPU detected (CC 12.0) — using bfloat16  
+                             (NVFP4 quantization available via BitsAndBytes)    
+Loading weights:   0%|          | 0/148 [00:00<?, ?it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 1365.32it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 1359.80it/s]
+[03/31/26 20:07:30] INFO     Single GPU/CPU mode, no split needed               
+                    INFO     Pipeline ready: model=gpt2, gpus=1, blocks=0       
+                    INFO     GPU hot-plug monitoring started (interval=5.0s,    
+                             known=2 GPUs)                                      
+                    INFO     KV cache distributed: 4096 pages across ['cuda:0', 
+                             'cuda:1'] (2415.9 MB total, 30.7 GiB free across   
+                             GPUs)                                              
+                    INFO     KV cache compression enabled: 4.0 bits/dim (4.0x   
+                             reduction, bits_per_angle=3, qjl_dim=32,           
+                             sparse_v=10%)                                      
+                    INFO     Pool allocated: 2476 pages (1460.4 MB) on cuda:0   
+                    INFO     Pool allocated: 1619 pages (954.9 MB) on cuda:1    
+                    INFO     PagedKVCache: 4095 pages @ 16 tok/page = 2415.9 MB 
+                             (devices=['cuda:0', 'cuda:1'])                     
+                    INFO     PagedKVCache initialized:                          
+                             PagedKVCache(pages=0/4096, requests=0,             
+                             mem=2415.9MB)                                      
+                    INFO     KV compression wired to StreamManager (4.0x        
+                             reduction on eviction)                             
+                    INFO     ContinuousBatcher ready (call pipeline.submit() to 
+                             use)                                               
+                    INFO     VRAMLendingPool connected (L1↔L2 cooperative       
+                             lending active)                                    
+                    WARNING  Extension C++ 'vtp_core' non disponible. Fallback  
+                             sur Python pur 🐢                                  
+                    INFO     Hierarchical Memory Manager active (L1-L6)         
+                    INFO     GPU fault tolerance active: 1 GPUs monitored,      
+                             max_consecutive_failures=3,                        
+                             recovery_probe_interval=10s                        
+                    WARNING  TurboEngine init failed ('GPT2LMHeadModel' object  
+                             has no attribute 'layers'), using standard decode  
+[03/31/26 20:07:31] INFO     Generated 25 chars in 0.10s                        
+                    INFO     Generated 254 chars in 0.75s                       
+[03/31/26 20:07:32] INFO     Generated 165 chars in 0.75s                       
+[03/31/26 20:07:33] INFO     Generated 249 chars in 0.76s                       
+  296.7 tok/s, 6.48 GB VRAM, 668 tokens in 2.3s
+
+================================================================================
+  BENCHMARK RESULTS
+================================================================================
+  Configuration                                tok/s   VRAM GB      Status
+  ----------------------------------------  --------  --------  ----------
+  BF16 baseline                               302.5     1.59          OK
+  TurboQuant (3-bit)                          347.7     3.25  OK (+14.9%)
+  TurboQuant + Sparse V 30%                   346.2     4.90  OK (+14.4%)
+  TurboQuant + Sparse V 10%                   296.7     6.48  OK (-1.9%)

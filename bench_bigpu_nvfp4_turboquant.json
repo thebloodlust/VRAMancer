@@ -1,0 +1,16 @@
+[
+  {
+    "config": "NVFP4 baseline",
+    "model": "Qwen/Qwen2.5-7B-Instruct",
+    "num_gpus": 2,
+    "max_tokens": 128,
+    "status": "FAILED: NVFP4 DYNAMIC mode is only supported on sm100+ machines"
+  },
+  {
+    "config": "NVFP4 + TurboQuant + Sparse V 10%",
+    "model": "Qwen/Qwen2.5-7B-Instruct",
+    "num_gpus": 2,
+    "max_tokens": 128,
+    "status": "FAILED: NVFP4 DYNAMIC mode is only supported on sm100+ machines"
+  }
+]

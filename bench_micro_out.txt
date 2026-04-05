@@ -1,0 +1,23 @@
+VRAMancer TurboQuant + Sparse V Benchmark
+============================================================
+PyTorch 2.10.0+cu128, CUDA 12.8
+GPU 0: NVIDIA GeForce RTX 3090 CC=8.6, 25.0/25.3 GB
+
+
+============================================================
+  KV Compressor Microbenchmark
+============================================================
+
+  head_dim=64, 4.0 bits/dim (4.0x compression)
+   seq_len    compress  decompress       score
+  --------  ----------  ----------  ----------
+       128     41.90ms     12.23ms     14.69ms
+       512     69.50ms     39.73ms     43.43ms
+      2048    470.20ms    309.78ms    146.19ms
+
+  head_dim=128, 3.7 bits/dim (4.3x compression)
+   seq_len    compress  decompress       score
+  --------  ----------  ----------  ----------
+       128     19.46ms      1.21ms      3.84ms
+       512     25.13ms     28.99ms     30.00ms
+      2048    528.63ms    498.99ms    308.09ms

@@ -1,0 +1,39 @@
+[
+  {
+    "config": "NVFP4 baseline",
+    "model": "Qwen/Qwen2.5-7B-Instruct",
+    "num_gpus": 1,
+    "max_tokens": 128,
+    "load_time_s": 215.14,
+    "kv_compression_active": false,
+    "total_tokens": 384,
+    "total_time_s": 36.696,
+    "avg_tok_s": 10.5,
+    "peak_vram_gb": 11.28,
+    "per_prompt": [
+      {
+        "tokens": 128,
+        "time_s": 16.077,
+        "tok_s": 8.0
+      },
+      {
+        "tokens": 128,
+        "time_s": 17.009,
+        "tok_s": 7.5
+      },
+      {
+        "tokens": 128,
+        "time_s": 3.61,
+        "tok_s": 35.5
+      }
+    ],
+    "status": "OK"
+  },
+  {
+    "config": "NVFP4 + TurboQuant + Sparse V 10%",
+    "model": "Qwen/Qwen2.5-7B-Instruct",
+    "num_gpus": 1,
+    "max_tokens": 128,
+    "status": "FAILED: CUDA out of memory. Tried to allocate 34.00 MiB. GPU 0 has a total capacity of 15.47 GiB of which 9.31 MiB is free. Including non-PyTorch memory, this process has 15.44 GiB memory in use. Of the allocated memory 14.58 GiB is allocated by PyTorch, and 605.99 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+  }
+]

@@ -1,0 +1,255 @@
+VRAMancer TurboQuant + Sparse V Benchmark
+============================================================
+PyTorch 2.10.0+cu128, CUDA 12.8
+GPU 0: NVIDIA GeForce RTX 3090 CC=8.6, 25.0/25.3 GB
+
+
+============================================================
+  KV Compressor Microbenchmark
+============================================================
+
+  head_dim=64, 4.0 bits/dim (4.0x compression)
+   seq_len    compress  decompress       score
+  --------  ----------  ----------  ----------
+       128    120.41ms     40.35ms     45.00ms
+       512    144.00ms     72.93ms     74.67ms
+      2048    918.31ms    700.96ms    369.21ms
+
+  head_dim=128, 3.7 bits/dim (4.3x compression)
+   seq_len    compress  decompress       score
+  --------  ----------  ----------  ----------
+       128    140.24ms     65.66ms     50.54ms
+       512    256.79ms    191.04ms    115.24ms
+      2048   1458.62ms   1068.98ms    418.15ms
+
+>>> BF16 baseline
+[03/31/26 20:15:38] INFO     Loading model: TinyLlama/TinyLlama-1.1B-Chat-v1.0  
+                             (backend=auto)                                     
+Exception in thread Thread-1 (start_wsgi_server):
+                    INFO     GPUs: 1 available, using 1                         
+Traceback (most recent call last):
+  File "/usr/lib/python3.12/threading.py", line 1073, in _bootstrap_inner
+    self.run()
+  File "/usr/lib/python3.12/threading.py", line 1010, in run
+    self._target(*self._args, **self._kwargs)
+  File "/home/jeremie/VRAMancer/VRAMancer/.venv/lib/python3.12/site-packages/prometheus_client/exposition.py", line 233, in start_wsgi_server
+    httpd = make_server(addr, port, app, TmpServer, handler_class=_SilentHandler)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/wsgiref/simple_server.py", line 154, in make_server
+    server = server_class((host, port), handler_class)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/socketserver.py", line 457, in __init__
+    self.server_bind()
+  File "/usr/lib/python3.12/wsgiref/simple_server.py", line 50, in server_bind
+    HTTPServer.server_bind(self)
+  File "/usr/lib/python3.12/http/server.py", line 136, in server_bind
+    socketserver.TCPServer.server_bind(self)
+  File "/usr/lib/python3.12/socketserver.py", line 473, in server_bind
+    self.socket.bind(self.server_address)
+OSError: [Errno 98] Address already in use
+[03/31/26 20:15:40] INFO     VM environment detected — VFIO-passthrough adds    
+                             ~10-15%% PCIe overhead. CPU-staged transfers       
+                             expected ~11 GB/s (vs ~13 GB/s bare metal).        
+                    INFO     GPU 0: NVIDIA GeForce RTX 3090 (SM 8.6, consumer)  
+                    INFO     Consumer GPU(s) detected but P2P is available.     
+                             Ensure IOMMU/ACS settings remain stable for        
+                             reliability.                                       
+                    INFO     Chargement modèle HuggingFace:                     
+                             TinyLlama/TinyLlama-1.1B-Chat-v1.0                 
+                    INFO     Ampere+ GPU detected (CC 8.6) — using bfloat16     
+Loading weights:   0%|          | 0/201 [00:00<?, ?it/s]Loading weights:  22%|██▏       | 45/201 [00:00<00:00, 376.10it/s]Loading weights:  47%|████▋     | 94/201 [00:00<00:00, 430.87it/s]Loading weights:  83%|████████▎ | 167/201 [00:00<00:00, 560.06it/s]Loading weights: 100%|██████████| 201/201 [00:00<00:00, 554.95it/s]
+[03/31/26 20:15:44] INFO     Single GPU/CPU mode, no split needed               
+                    INFO     Pipeline ready:                                    
+                             model=TinyLlama/TinyLlama-1.1B-Chat-v1.0, gpus=1,  
+                             blocks=0                                           
+                    INFO     GPU hot-plug monitoring started (interval=5.0s,    
+                             known=1 GPUs)                                      
+                    INFO     VRAMLendingPool initialized (policy:               
+                             lend_ratio=70%, reclaim_threshold=80%)             
+                    INFO     VRAMLendingPool connected (L1↔L2 cooperative       
+                             lending active)                                    
+                    WARNING  Extension C++ 'vtp_core' non disponible. Fallback  
+                             sur Python pur 🐢                                  
+                    INFO     Parity: using Rust native XOR (SIMD)               
+                    INFO     Pool allocated: 4096 pages (1476.4 MB) on cuda:0   
+                    INFO     PagedKVCache: 4096 pages @ 16 tok/page = 1476.4 MB 
+                             (devices=['cuda:0'])                               
+                    INFO     PagedKVCache initialized:                          
+                             PagedKVCache(pages=0/4096, requests=0,             
+                             mem=1476.4MB)                                      
+                    INFO     ContinuousBatcher ready (call pipeline.submit() to 
+                             use)                                               
+                    INFO     VRAMLendingPool connected (L1↔L2 cooperative       
+                             lending active)                                    
+                    WARNING  Extension C++ 'vtp_core' non disponible. Fallback  
+                             sur Python pur 🐢                                  
+                    INFO     Hierarchical Memory Manager active (L1-L6)         
+                    INFO     GPUFaultManager: tracking 1 GPUs                   
+                    INFO     GPU fault tolerance active: 1 GPUs monitored,      
+                             max_consecutive_failures=3,                        
+                             recovery_probe_interval=10s                        
+[03/31/26 20:17:25] INFO     TurboEngine active: compiled=True                  
+[03/31/26 20:19:16] INFO     Generated 13 chars in 111.41s                      
+[03/31/26 20:19:21] INFO     Generated 339 chars in 2.19s                       
+[03/31/26 20:19:25] INFO     Generated 505 chars in 3.84s                       
+[03/31/26 20:19:28] INFO     Generated 612 chars in 3.23s                       
+  157.0 tok/s, 3.69 GB VRAM, 1456 tokens in 9.3s
+
+>>> TurboQuant (3-bit)
+[03/31/26 20:19:31] INFO     Loading model: TinyLlama/TinyLlama-1.1B-Chat-v1.0  
+                             (backend=auto)                                     
+                    INFO     GPUs: 1 available, using 1                         
+                    INFO     VM environment detected — VFIO-passthrough adds    
+                             ~10-15%% PCIe overhead. CPU-staged transfers       
+                             expected ~11 GB/s (vs ~13 GB/s bare metal).        
+                    INFO     GPU 0: NVIDIA GeForce RTX 3090 (SM 8.6, consumer)  
+                    INFO     Consumer GPU(s) detected but P2P is available.     
+                             Ensure IOMMU/ACS settings remain stable for        
+                             reliability.                                       
+                    INFO     Chargement modèle HuggingFace:                     
+                             TinyLlama/TinyLlama-1.1B-Chat-v1.0                 
+                    INFO     Ampere+ GPU detected (CC 8.6) — using bfloat16     
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+WARNING:huggingface_hub.utils._http:Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+Loading weights:   0%|          | 0/201 [00:00<?, ?it/s]Loading weights:   2%|▏         | 5/201 [00:00<00:04, 42.61it/s]Loading weights:  21%|██        | 42/201 [00:00<00:00, 219.77it/s]Loading weights:  39%|███▉      | 78/201 [00:00<00:00, 263.04it/s]Loading weights:  67%|██████▋   | 134/201 [00:00<00:00, 337.95it/s]Loading weights: 100%|██████████| 201/201 [00:00<00:00, 360.01it/s]
+[03/31/26 20:19:33] INFO     Single GPU/CPU mode, no split needed               
+                    INFO     Pipeline ready:                                    
+                             model=TinyLlama/TinyLlama-1.1B-Chat-v1.0, gpus=1,  
+                             blocks=0                                           
+                    INFO     GPU hot-plug monitoring started (interval=5.0s,    
+                             known=1 GPUs)                                      
+                    INFO     KV cache compression enabled: 4.0 bits/dim (4.0x   
+                             reduction, bits_per_angle=3, qjl_dim=32,           
+                             sparse_v=100%)                                     
+                    INFO     Pool allocated: 4096 pages (1476.4 MB) on cuda:0   
+                    INFO     PagedKVCache: 4096 pages @ 16 tok/page = 1476.4 MB 
+                             (devices=['cuda:0'])                               
+                    INFO     PagedKVCache initialized:                          
+                             PagedKVCache(pages=0/4096, requests=0,             
+                             mem=1476.4MB)                                      
+                    INFO     KV compression wired to StreamManager (4.0x        
+                             reduction on eviction)                             
+                    INFO     ContinuousBatcher ready (call pipeline.submit() to 
+                             use)                                               
+                    INFO     VRAMLendingPool connected (L1↔L2 cooperative       
+                             lending active)                                    
+                    WARNING  Extension C++ 'vtp_core' non disponible. Fallback  
+                             sur Python pur 🐢                                  
+                    INFO     Hierarchical Memory Manager active (L1-L6)         
+                    INFO     GPU fault tolerance active: 1 GPUs monitored,      
+                             max_consecutive_failures=3,                        
+                             recovery_probe_interval=10s                        
+                    INFO     TurboEngine active: compiled=True                  
+[03/31/26 20:19:34] INFO     Generated 13 chars in 0.18s                        
+[03/31/26 20:19:37] INFO     Generated 339 chars in 2.43s                       
+[03/31/26 20:19:40] INFO     Generated 505 chars in 2.67s                       
+[03/31/26 20:19:42] INFO     Generated 612 chars in 2.34s                       
+  195.6 tok/s, 7.37 GB VRAM, 1456 tokens in 7.4s
+
+>>> TurboQuant + Sparse V 30%
+[03/31/26 20:19:45] INFO     Loading model: TinyLlama/TinyLlama-1.1B-Chat-v1.0  
+                             (backend=auto)                                     
+                    INFO     GPUs: 1 available, using 1                         
+                    INFO     VM environment detected — VFIO-passthrough adds    
+                             ~10-15%% PCIe overhead. CPU-staged transfers       
+                             expected ~11 GB/s (vs ~13 GB/s bare metal).        
+                    INFO     GPU 0: NVIDIA GeForce RTX 3090 (SM 8.6, consumer)  
+                    INFO     Consumer GPU(s) detected but P2P is available.     
+                             Ensure IOMMU/ACS settings remain stable for        
+                             reliability.                                       
+                    INFO     Chargement modèle HuggingFace:                     
+                             TinyLlama/TinyLlama-1.1B-Chat-v1.0                 
+                    INFO     Ampere+ GPU detected (CC 8.6) — using bfloat16     
+Loading weights:   0%|          | 0/201 [00:00<?, ?it/s]Loading weights:  13%|█▎        | 27/201 [00:00<00:00, 266.64it/s]Loading weights:  27%|██▋       | 54/201 [00:00<00:00, 244.99it/s]Loading weights:  53%|█████▎    | 107/201 [00:00<00:00, 342.36it/s]Loading weights:  83%|████████▎ | 166/201 [00:00<00:00, 422.98it/s]Loading weights: 100%|██████████| 201/201 [00:00<00:00, 412.28it/s]
+[03/31/26 20:19:48] INFO     Single GPU/CPU mode, no split needed               
+                    INFO     Pipeline ready:                                    
+                             model=TinyLlama/TinyLlama-1.1B-Chat-v1.0, gpus=1,  
+                             blocks=0                                           
+                    INFO     GPU hot-plug monitoring started (interval=5.0s,    
+                             known=1 GPUs)                                      
+                    INFO     KV cache compression enabled: 4.0 bits/dim (4.0x   
+                             reduction, bits_per_angle=3, qjl_dim=32,           
+                             sparse_v=30%)                                      
+                    INFO     Pool allocated: 4096 pages (1476.4 MB) on cuda:0   
+                    INFO     PagedKVCache: 4096 pages @ 16 tok/page = 1476.4 MB 
+                             (devices=['cuda:0'])                               
+                    INFO     PagedKVCache initialized:                          
+                             PagedKVCache(pages=0/4096, requests=0,             
+                             mem=1476.4MB)                                      
+                    INFO     KV compression wired to StreamManager (4.0x        
+                             reduction on eviction)                             
+                    INFO     ContinuousBatcher ready (call pipeline.submit() to 
+                             use)                                               
+                    INFO     VRAMLendingPool connected (L1↔L2 cooperative       
+                             lending active)                                    
+                    WARNING  Extension C++ 'vtp_core' non disponible. Fallback  
+                             sur Python pur 🐢                                  
+                    INFO     Hierarchical Memory Manager active (L1-L6)         
+                    INFO     GPU fault tolerance active: 1 GPUs monitored,      
+                             max_consecutive_failures=3,                        
+                             recovery_probe_interval=10s                        
+                    INFO     TurboEngine active: compiled=True                  
+[03/31/26 20:19:49] INFO     Generated 13 chars in 0.26s                        
+[03/31/26 20:19:52] INFO     Generated 339 chars in 1.40s                       
+[03/31/26 20:19:54] INFO     Generated 505 chars in 2.31s                       
+[03/31/26 20:19:56] INFO     Generated 612 chars in 2.38s                       
+  238.7 tok/s, 11.05 GB VRAM, 1456 tokens in 6.1s
+
+>>> TurboQuant + Sparse V 10%
+[03/31/26 20:19:58] INFO     Loading model: TinyLlama/TinyLlama-1.1B-Chat-v1.0  
+                             (backend=auto)                                     
+                    INFO     GPUs: 1 available, using 1                         
+                    INFO     VM environment detected — VFIO-passthrough adds    
+                             ~10-15%% PCIe overhead. CPU-staged transfers       
+                             expected ~11 GB/s (vs ~13 GB/s bare metal).        
+                    INFO     GPU 0: NVIDIA GeForce RTX 3090 (SM 8.6, consumer)  
+                    INFO     Consumer GPU(s) detected but P2P is available.     
+                             Ensure IOMMU/ACS settings remain stable for        
+                             reliability.                                       
+                    INFO     Chargement modèle HuggingFace:                     
+                             TinyLlama/TinyLlama-1.1B-Chat-v1.0                 
+                    INFO     Ampere+ GPU detected (CC 8.6) — using bfloat16     
+Loading weights:   0%|          | 0/201 [00:00<?, ?it/s]Loading weights:   7%|▋         | 15/201 [00:00<00:01, 136.67it/s]Loading weights:  29%|██▉       | 58/201 [00:00<00:00, 284.57it/s]Loading weights:  63%|██████▎   | 127/201 [00:00<00:00, 457.17it/s]Loading weights:  91%|█████████ | 182/201 [00:00<00:00, 487.95it/s]Loading weights: 100%|██████████| 201/201 [00:00<00:00, 440.89it/s]
+[03/31/26 20:20:10] INFO     Single GPU/CPU mode, no split needed               
+                    INFO     Pipeline ready:                                    
+                             model=TinyLlama/TinyLlama-1.1B-Chat-v1.0, gpus=1,  
+                             blocks=0                                           
+                    INFO     GPU hot-plug monitoring started (interval=5.0s,    
+                             known=1 GPUs)                                      
+                    INFO     KV cache compression enabled: 4.0 bits/dim (4.0x   
+                             reduction, bits_per_angle=3, qjl_dim=32,           
+                             sparse_v=10%)                                      
+                    INFO     Pool allocated: 4096 pages (1476.4 MB) on cuda:0   
+                    INFO     PagedKVCache: 4096 pages @ 16 tok/page = 1476.4 MB 
+                             (devices=['cuda:0'])                               
+                    INFO     PagedKVCache initialized:                          
+                             PagedKVCache(pages=0/4096, requests=0,             
+                             mem=1476.4MB)                                      
+                    INFO     KV compression wired to StreamManager (4.0x        
+                             reduction on eviction)                             
+                    INFO     ContinuousBatcher ready (call pipeline.submit() to 
+                             use)                                               
+                    INFO     VRAMLendingPool connected (L1↔L2 cooperative       
+                             lending active)                                    
+                    WARNING  Extension C++ 'vtp_core' non disponible. Fallback  
+                             sur Python pur 🐢                                  
+                    INFO     Hierarchical Memory Manager active (L1-L6)         
+                    INFO     GPU fault tolerance active: 1 GPUs monitored,      
+                             max_consecutive_failures=3,                        
+                             recovery_probe_interval=10s                        
+                    INFO     TurboEngine active: compiled=True                  
+                    INFO     Generated 13 chars in 0.08s                        
+[03/31/26 20:20:13] INFO     Generated 339 chars in 1.29s                       
+[03/31/26 20:20:14] INFO     Generated 505 chars in 1.36s                       
+[03/31/26 20:20:16] INFO     Generated 612 chars in 1.83s                       
+  324.9 tok/s, 14.73 GB VRAM, 1456 tokens in 4.5s
+
+================================================================================
+  BENCHMARK RESULTS
+================================================================================
+  Configuration                                tok/s   VRAM GB      Status
+  ----------------------------------------  --------  --------  ----------
+  BF16 baseline                               157.0     3.69          OK
+  TurboQuant (3-bit)                          195.6     7.37  OK (+24.6%)
+  TurboQuant + Sparse V 30%                   238.7    11.05  OK (+52.0%)
+  TurboQuant + Sparse V 10%                   324.9    14.73  OK (+106.9%)

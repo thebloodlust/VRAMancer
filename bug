@@ -1,112 +1,23 @@
+=== CROSS-NODE 14B TEST ===
 
-REM ============================================
-REM  CROSS-NODE INFERENCE - 5 avril 2026
-REM ============================================
-REM
-REM ETAPE 1 : Pull le nouveau code (cross-node inference)
-cd C:\Users\the_b\Downloads\VRAMancer-main\VRAMancer-main
-git pull
-REM
-REM ETAPE 2 : Relancer l'API
-.venv\Scripts\activate
-set VRM_DISABLE_RATE_LIMIT=1
-set VRM_API_TOKEN=testtoken
-set VRM_CLUSTER_SECRET=testtoken
-set VRM_BACKEND_ALLOW_STUB=1
-python -m core.production_api
-REM
-REM ETAPE 3 : Charger GPT-2 (si pas deja fait)
-REM curl -X POST http://localhost:5030/api/models/load -H "Content-Type: application/json" -H "Authorization: Bearer testtoken" -d "{\"model\": \"gpt2\", \"num_gpus\": 1}"
-REM
-REM Le nouveau endpoint /api/worker/forward_layers permet au master
-REM d'envoyer des hidden states pour execution sur les layers du worker
-REM ============================================
+GPT-2 cross-node: DONE (22 tok/s)
+Now: Qwen2.5-14B across 3 GPUs!
 
-============================= test session starts =============================
-platform win32 -- Python 3.12.10, pytest-8.2.0, pluggy-1.6.0 -- C:\Users\the_b\Downloads\VRAMancer-main\VRAMancer-main\.venv\Scripts\python.exe
-cachedir: .pytest_cache
-rootdir: C:\Users\the_b\Downloads\VRAMancer-main\VRAMancer-main
-configfile: pytest.ini
-plugins: anyio-4.13.0, cov-5.0.0
-collecting ... collected 996 items / 992 deselected / 1 skipped / 4 selected
+ETAPE 1: git pull
+ETAPE 2: relancer l'API (nouveau terminal CMD):
+   cd C:\Users\jerem\VRAMancer
+   .venv\Scripts\activate
+   set VRM_DISABLE_RATE_LIMIT=1
+   set VRM_API_TOKEN=testtoken
+   set VRM_CLUSTER_SECRET=testtoken
+   set VRM_BACKEND_ALLOW_STUB=1
+   python -m core.production_api
 
-tests/test_aitp.py::TestAITPSensing::test_payload_hmac_valid PASSED      [ 25%]
-tests/test_aitp.py::TestAITPSensing::test_peer_tracking PASSED           [ 50%]
-tests/test_aitp.py::TestAITPSensing::test_stale_peer_eviction PASSED     [ 75%]
-tests/test_aitp.py::TestAITPSensing::test_self_discovery_ignored PASSED  [100%]
+ETAPE 3: charger les layers 40-47 du 14B sur la 4060 (dans un AUTRE terminal CMD):
+   curl -X POST http://localhost:5030/api/worker/load_partial -H "Content-Type: application/json" -H "Authorization: Bearer testtoken" -d "{\"model\": \"Qwen/Qwen2.5-14B\", \"start_layer\": 40, \"end_layer\": 48, \"dtype\": \"bfloat16\"}"
 
-================ 4 passed, 1 skipped, 992 deselected in 11.43s ================
+NOTE: ca va telecharger ~28GB de weights HuggingFace la premiere fois.
+Seules les 8 layers (40-47) iront sur le GPU (~4.5 GB), le reste
+sur CPU. Ca devrait passer meme avec 16GB RAM.
 
-
-set VRM_MINIMAL_TEST=1 && set VRM_DISABLE_RATE_LIMIT=1 && set VRM_TEST_MODE=1 && python -m pytest tests/ -o "addopts=" -k sensing -v 2>&1 > sensing_out.txt
-type sensing_out.txt
-
-[notice] A new release of pip is available: 25.0.1 -> 26.0.1
-[notice] To update, run: python.exe -m pip install --upgrade pip
-
-(.venv) C:\Users\the_b\Downloads\VRAMancer-main\VRAMancer-main>pip install -r requirements-windows.txt
-Requirement already satisfied: torch>=2.2.0 in c:\users\the_b\downloads\vramancer-main\vramancer-main\.venv\lib\site-packages (from -r requirements-windows.txt (line 6)) (2.11.0+cu128)
-Requirement already satisfied: numpy>=1.26.0 in c:\users\the_b\downloads\vramancer-main\vramancer-main\.venv\lib\site-packages (from -r requirements-windows.txt (line 7)) (2.4.3)
-Collecting pyyaml==6.0.1 (from -r requirements-windows.txt (line 8))
-  Using cached PyYAML-6.0.1-cp312-cp312-win_amd64.whl.metadata (2.1 kB)
-Collecting psutil==5.9.8 (from -r requirements-windows.txt (line 9))
-  Using cached psutil-5.9.8-cp37-abi3-win_amd64.whl.metadata (22 kB)
-Collecting tokenizers==0.20.1 (from -r requirements-windows.txt (line 11))
-  Downloading tokenizers-0.20.1-cp312-none-win_amd64.whl.metadata (6.9 kB)
-Collecting transformers==4.46.2 (from -r requirements-windows.txt (line 12))
-  Downloading transformers-4.46.2-py3-none-any.whl.metadata (44 kB)
-Collecting accelerate==0.27.2 (from -r requirements-windows.txt (line 13))
-  Using cached accelerate-0.27.2-py3-none-any.whl.metadata (18 kB)
-Collecting flask==3.0.2 (from -r requirements-windows.txt (line 14))
-  Using cached flask-3.0.2-py3-none-any.whl.metadata (3.6 kB)
-Collecting pydantic==2.8.2 (from -r requirements-windows.txt (line 15))
-  Using cached pydantic-2.8.2-py3-none-any.whl.metadata (125 kB)
-Collecting pycryptodome==3.20.0 (from -r requirements-windows.txt (line 16))
-  Using cached pycryptodome-3.20.0-cp35-abi3-win_amd64.whl.metadata (3.4 kB)
-Collecting prometheus-client==0.21.0 (from -r requirements-windows.txt (line 17))
-  Using cached prometheus_client-0.21.0-py3-none-any.whl.metadata (1.8 kB)
-Collecting rich==13.9.4 (from -r requirements-windows.txt (line 18))
-  Using cached rich-13.9.4-py3-none-any.whl.metadata (18 kB)
-Collecting requests==2.32.3 (from -r requirements-windows.txt (line 19))
-  Using cached requests-2.32.3-py3-none-any.whl.metadata (4.6 kB)
-Collecting python-socketio==5.11.1 (from -r requirements-windows.txt (line 20))
-  Using cached python_socketio-5.11.1-py3-none-any.whl.metadata (3.2 kB)
-Collecting PyJWT==2.9.0 (from -r requirements-windows.txt (line 21))
-  Using cached PyJWT-2.9.0-py3-none-any.whl.metadata (3.0 kB)
-Collecting PyQt5==5.15.10 (from -r requirements-windows.txt (line 24))
-  Downloading PyQt5-5.15.10-cp37-abi3-win_amd64.whl.metadata (2.2 kB)
-ERROR: Could not find a version that satisfies the requirement flask-socketio==5.10.0 (from versions: 0.1.0, 0.2.0, 0.2.1, 0.2.2, 0.3.0, 0.3.1, 0.3.2, 0.3.3, 0.3.4, 0.3.5, 0.3.6, 0.3.7, 0.3.8, 0.4.0, 0.4.1, 0.4.2, 0.4.3, 0.5.0, 0.6.0, 1.0a1, 1.0b1, 1.0b2, 1.0b3, 1.0b4, 1.0, 1.1, 1.2, 2.0, 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.6.1, 2.6.2, 2.7.0, 2.7.1, 2.7.2, 2.8.0, 2.8.1, 2.8.2, 2.8.3, 2.8.4, 2.8.5, 2.8.6, 2.9.0, 2.9.1, 2.9.2, 2.9.3, 2.9.4, 2.9.5, 2.9.6, 3.0.0, 3.0.1, 3.0.2, 3.1.0, 3.1.1, 3.1.2, 3.2.0, 3.2.1, 3.2.2, 3.3.0, 3.3.1, 3.3.2, 4.0.0, 4.1.0, 4.1.1, 4.2.0, 4.2.1, 4.3.0, 4.3.1, 4.3.2, 5.0.0, 5.0.1, 5.0.2, 5.0.3, 5.1.0, 5.1.1, 5.1.2, 5.2.0, 5.3.0, 5.3.1, 5.3.2, 5.3.3, 5.3.4, 5.3.5, 5.3.6, 5.3.7, 5.4.0, 5.4.1, 5.5.0, 5.5.1, 5.6.0, 5.6.1)
-
-[notice] A new release of pip is available: 25.0.1 -> 26.0.1
-[notice] To update, run: python.exe -m pip install --upgrade pip
-ERROR: No matching distribution found for flask-socketio==5.10.0
-
-(.venv) C:\Users\the_b\Downloads\VRAMancer-main\VRAMancer-main>python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}')"
-CUDA: True
-
-(.venv) C:\Users\the_b\Downloads\VRAMancer-main\VRAMancer-main>vramancer status
-==================================================
-VRAMancer - Etat du systeme
-==================================================
-Backend: cuda
-Devices: 1
-  [0] NVIDIA GeForce RTX 4060 Laptop GPU (cuda) ? MB
-
-RAM: 9.5 / 15.7 GB (60.3%)
-==================================================
-
-(.venv) C:\Users\the_b\Downloads\VRAMancer-main\VRAMancer-main>python scripts/bench_rtx4060.py
-VRAMancer RTX 4060 Benchmark
-PyTorch: 2.11.0+cu128
-GPU: NVIDIA GeForce RTX 4060 Laptop GPU
-VRAM: 8.6 GB
-
-Traceback (most recent call last):
-  File "C:\Users\the_b\Downloads\VRAMancer-main\VRAMancer-main\scripts\bench_rtx4060.py", line 147, in <module>
-    results["gpt2_fp16"] = bench_model("gpt2", "float16")
-                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\the_b\Downloads\VRAMancer-main\VRAMancer-main\scripts\bench_rtx4060.py", line 27, in bench_model
-    from transformers import AutoModelForCausalLM, AutoTokenizer
-ModuleNotFoundError: No module named 'transformers'
-
-(.venv) C:\Users\the_b\Downloads\VRAMancer-main\VRAMancer-main>
+Dis quand c'est pret!

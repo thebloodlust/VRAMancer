@@ -1116,11 +1116,11 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
         the processed tensor.
         """
         try:
-            from core.cross_node import worker_forward
+            from core.cross_node import worker_forward, _partial_model
         except ImportError as e:
             return jsonify({'error': f'cross_node import failed: {e}'}), 500
 
-        if not _registry.is_loaded:
+        if _partial_model is None and not _registry.is_loaded:
             return jsonify({'error': 'No model loaded on this worker'}), 400
 
         start_layer = int(request.args.get('start_layer', 0))
@@ -1135,7 +1135,8 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
             return jsonify({'error': 'Empty payload'}), 400
 
         try:
-            model = _registry._pipeline.backend.model
+            model = (_partial_model if _partial_model is not None
+                     else _registry._pipeline.backend.model)
             result_bytes = worker_forward(model, hidden_bytes,
                                           start_layer, end_layer,
                                           seq_len=seq_len)
@@ -1145,16 +1146,64 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
             logger.error("worker_forward_layers failed: %s", e, exc_info=True)
             return jsonify({'error': str(e)}), 500
 
+    @application.route('/api/worker/load_partial', methods=['POST'])
+    def worker_load_partial():
+        """Load only specific layers of a model on GPU (worker role).
+
+        Body JSON::
+
+            {
+                "model": "Qwen/Qwen2.5-14B",
+                "start_layer": 40,
+                "end_layer": 48,
+                "dtype": "bfloat16"
+            }
+        """
+        try:
+            from core.cross_node import load_partial_model
+        except ImportError as e:
+            return jsonify({'error': f'cross_node import failed: {e}'}), 500
+
+        data = request.get_json(silent=True) or {}
+        model_name = data.get('model', '')
+        if not model_name:
+            return jsonify({'error': 'Missing "model"'}), 400
+        start_layer = int(data.get('start_layer', 0))
+        end_layer = int(data.get('end_layer', 0))
+        dtype_str = data.get('dtype', 'bfloat16')
+        if end_layer <= start_layer:
+            return jsonify({'error': 'end_layer must be > start_layer'}), 400
+
+        try:
+            info = load_partial_model(model_name, start_layer, end_layer,
+                                      dtype_str=dtype_str)
+            return jsonify({'status': 'loaded', **info})
+        except Exception as e:
+            logger.error("worker_load_partial failed: %s", e, exc_info=True)
+            return jsonify({'error': str(e)}), 500
+
     @application.route('/api/worker/model_info', methods=['GET'])
     def worker_model_info():
         """Return model architecture info for layer-split planning."""
-        if not _registry.is_loaded:
+        try:
+            from core.cross_node import get_model_info, _partial_model
+        except ImportError as e:
+            return jsonify({'error': f'cross_node import failed: {e}'}), 500
+
+        model = None
+        model_name = ''
+        if _partial_model is not None:
+            model = _partial_model
+            model_name = getattr(_partial_model.config, '_name_or_path', '')
+        elif _registry.is_loaded:
+            model = _registry._pipeline.backend.model
+            model_name = getattr(_registry._pipeline, 'model_name', '')
+
+        if model is None:
             return jsonify({'error': 'No model loaded'}), 400
         try:
-            from core.cross_node import get_model_info
-            model = _registry._pipeline.backend.model
             info = get_model_info(model)
-            info['model_name'] = getattr(_registry._pipeline, 'model_name', '')
+            info['model_name'] = model_name
             return jsonify(info)
         except Exception as e:
             return jsonify({'error': str(e)}), 500
