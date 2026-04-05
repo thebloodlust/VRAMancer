@@ -1,3 +1,20 @@
+
+============================= test session starts =============================
+platform win32 -- Python 3.12.10, pytest-8.2.0, pluggy-1.6.0 -- C:\Users\the_b\Downloads\VRAMancer-main\VRAMancer-main\.venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\the_b\Downloads\VRAMancer-main\VRAMancer-main
+configfile: pytest.ini
+plugins: anyio-4.13.0, cov-5.0.0
+collecting ... collected 996 items / 992 deselected / 1 skipped / 4 selected
+
+tests/test_aitp.py::TestAITPSensing::test_payload_hmac_valid PASSED      [ 25%]
+tests/test_aitp.py::TestAITPSensing::test_peer_tracking PASSED           [ 50%]
+tests/test_aitp.py::TestAITPSensing::test_stale_peer_eviction PASSED     [ 75%]
+tests/test_aitp.py::TestAITPSensing::test_self_discovery_ignored PASSED  [100%]
+
+================ 4 passed, 1 skipped, 992 deselected in 11.43s ================
+
+
 set VRM_MINIMAL_TEST=1 && set VRM_DISABLE_RATE_LIMIT=1 && set VRM_TEST_MODE=1 && python -m pytest tests/ -o "addopts=" -k sensing -v 2>&1 > sensing_out.txt
 type sensing_out.txt
 
