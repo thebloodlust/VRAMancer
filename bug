@@ -1,4 +1,6 @@
 
+netstat -an | findstr "55555 5030"
+
 ============================= test session starts =============================
 platform win32 -- Python 3.12.10, pytest-8.2.0, pluggy-1.6.0 -- C:\Users\the_b\Downloads\VRAMancer-main\VRAMancer-main\.venv\Scripts\python.exe
 cachedir: .pytest_cache
