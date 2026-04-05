@@ -1,3 +1,6 @@
+set VRM_MINIMAL_TEST=1 && set VRM_DISABLE_RATE_LIMIT=1 && set VRM_TEST_MODE=1 && python -m pytest tests/ -o "addopts=" -k sensing -v 2>&1 > sensing_out.txt
+type sensing_out.txt
+
 [notice] A new release of pip is available: 25.0.1 -> 26.0.1
 [notice] To update, run: python.exe -m pip install --upgrade pip
 
