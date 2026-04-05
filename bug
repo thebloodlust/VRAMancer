@@ -1,4 +1,8 @@
 
+REM --- Ouvrir les ports VRAMancer (PowerShell ADMIN) ---
+netsh advfirewall firewall add rule name="VRAMancer Cluster 55555" dir=in action=allow protocol=TCP localport=55555
+netsh advfirewall firewall add rule name="VRAMancer API 5030" dir=in action=allow protocol=TCP localport=5030
+
 netstat -an | findstr "55555 5030"
 
 ============================= test session starts =============================
