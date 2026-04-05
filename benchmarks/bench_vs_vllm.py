@@ -34,14 +34,15 @@ PROMPTS = [
 ]
 
 
-def _run_in_subprocess(script_code, timeout=600):
+def _run_in_subprocess(script_code, timeout=600, python_exe=None):
     """Run Python code in a clean subprocess, return parsed BENCH_RESULT."""
+    exe = python_exe or sys.executable
     with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
         f.write(script_code)
         f.flush()
         try:
             proc = subprocess.run(
-                [sys.executable, f.name],
+                [exe, f.name],
                 capture_output=True, text=True, timeout=timeout,
                 env={**os.environ},
             )
@@ -179,7 +180,10 @@ def bench_vllm(model_name, prompts, max_tokens):
             "tok_s": round(total_gen / elapsed, 1),
         }}))
     """)
-    return _run_in_subprocess(script, timeout=900)
+    # Use .venv_vllm if available (vLLM needs different transformers version)
+    vllm_python = os.path.join(root, ".venv_vllm", "bin", "python")
+    python_exe = vllm_python if os.path.exists(vllm_python) else None
+    return _run_in_subprocess(script, timeout=900, python_exe=python_exe)
 
 
 def main():

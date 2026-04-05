@@ -402,6 +402,10 @@ def select_backend(model_name: str, cache_dir: str = None, backend: str = "auto"
         from core.backends_ollama import OllamaBackend
         return OllamaBackend(model_name)
 
+    if backend == "webgpu":
+        from core.webgpu_backend import WebGPUBackend
+        return WebGPUBackend()
+
     if backend == "huggingface":
         return HuggingFaceBackend(model_name, cache_dir=cache_dir)
 
@@ -507,6 +511,49 @@ class HuggingFaceBackend(BaseLLMBackend):
         self.transfer_manager = None  # injecté par le pipeline
         # Model components for multi-GPU KV-cache forward
         self._components: Optional[dict] = None  # embed, pos_embed, final_norm, lm_head
+        self._turbo_engine = None  # TurboEngine for compiled decode
+
+    def _init_turbo_engine(self) -> None:
+        """Initialize TurboEngine for compiled decode on single-GPU models.
+
+        Bypasses HuggingFace model.generate() Python overhead by using a
+        tight custom decode loop with torch.compile + Inductor fusion.
+        """
+        if os.environ.get("VRM_MINIMAL_TEST") or os.environ.get("VRM_DISABLE_TURBO"):
+            return
+        if self.model is None or self.tokenizer is None:
+            return
+        if isinstance(self.model, str):  # stub
+            return
+        try:
+            from core.turbo_engine import create_turbo_engine
+            quant_mode = self._get_quantization_mode()
+            if quant_mode == "nvfp4":
+                # NVFP4: skip torch.compile (DirectFP4Linear is already
+                # optimized CUDA kernels), use CUDA Graph decode instead
+                # to eliminate ~800+ kernel launch overhead per token.
+                self._turbo_engine = create_turbo_engine(
+                    self.model,
+                    self.tokenizer,
+                    max_seq_len=int(os.environ.get("VRM_TURBO_MAX_SEQ", "2048")),
+                    compile=False,
+                    cuda_graph=True,
+                )
+            else:
+                self._turbo_engine = create_turbo_engine(
+                    self.model,
+                    self.tokenizer,
+                    max_seq_len=int(os.environ.get("VRM_TURBO_MAX_SEQ", "2048")),
+                    compile=True,
+                )
+            self._turbo_engine.warmup()
+            self.log.info(
+                "TurboEngine active: compiled=%s",
+                getattr(self._turbo_engine, '_compiled', False),
+            )
+        except Exception as e:
+            self.log.warning("TurboEngine init failed (%s), using standard generate", e)
+            self._turbo_engine = None
 
     def _build_compute_aware_memory_map(self) -> Optional[dict]:
         """Build a max_memory dict for accelerate that favors faster GPUs.
@@ -538,13 +585,15 @@ class HuggingFaceBackend(BaseLLMBackend):
                 base_vram = gpu.free_vram_gb if gpu.free_vram_gb > 0 else gpu.total_vram_gb
                 # NF4: 60% (fp16 loading transient = 4x planned NF4 size)
                 # INT8: 85% (fp16→int8 but less headroom needed)
-                # Non-quantized: aggressive 92% to minimize CPU offload.
+                # Non-quantized: 97% — match accelerate's default behavior.
+                #   Old 92% was too conservative and pushed layers to CPU
+                #   on tight-fit models (e.g. 14B on 3090+5070Ti).
                 if quant_mode == "nf4":
                     reserve = 0.60
                 elif quant_mode == "int8":
                     reserve = 0.85
                 else:
-                    reserve = 0.92
+                    reserve = 0.97
                 budget_gb = max(2.0, base_vram * reserve)
                 max_memory[gpu.index] = f"{budget_gb:.1f}GiB"
 
@@ -575,6 +624,105 @@ class HuggingFaceBackend(BaseLLMBackend):
             return max_memory
         except Exception as e:
             self.log.debug(f"Compute-aware memory map failed, using default: {e}")
+            return None
+
+    def _try_single_gpu_placement(
+        self, model_name: str, kwargs: dict, num_gpus: int
+    ) -> Optional[int]:
+        """Check if model fits on the best single GPU to avoid multi-GPU split.
+
+        device_map="auto" splits models across GPUs even when a single GPU
+        has enough VRAM. This causes ~26% throughput loss from cross-device
+        transfers via PCIe. By estimating model size from the HF config and
+        comparing to available VRAM, we can place the model on one GPU.
+
+        Returns the GPU index if model fits, None otherwise.
+        """
+        if not _HAS_TORCH or not _torch.cuda.is_available() or num_gpus < 2:
+            return None
+        try:
+            from transformers import AutoConfig
+            config = AutoConfig.from_pretrained(
+                model_name,
+                trust_remote_code=(
+                    os.environ.get("VRM_TRUST_REMOTE_CODE") == "1"
+                ),
+            )
+            # Estimate param count from config (hidden_size, num_layers, vocab)
+            hidden = getattr(config, "hidden_size", 0)
+            layers = getattr(config, "num_hidden_layers", 0)
+            vocab = getattr(config, "vocab_size", 0)
+            intermediate = getattr(
+                config, "intermediate_size", hidden * 4
+            )
+            n_heads = getattr(config, "num_attention_heads", 0)
+            head_dim = hidden // n_heads if n_heads > 0 else hidden
+            n_kv_heads = getattr(
+                config, "num_key_value_heads", n_heads
+            )
+
+            if not (hidden and layers and vocab):
+                return None
+
+            # Per-layer params: QKV + O projections + MLP (gate+up+down) + norms
+            attn_params = hidden * (
+                n_heads * head_dim  # Q
+                + n_kv_heads * head_dim  # K
+                + n_kv_heads * head_dim  # V
+                + hidden  # O
+            )
+            mlp_params = hidden * intermediate * 3  # gate + up + down
+            norm_params = hidden * 2  # input_layernorm + post_attention_layernorm
+            per_layer = attn_params + mlp_params + norm_params
+
+            # Total: layers + embed + lm_head + final_norm
+            total_params = (
+                per_layer * layers
+                + vocab * hidden  # embed_tokens
+                + vocab * hidden  # lm_head (often tied but allocated)
+                + hidden  # final_norm
+            )
+
+            # Determine dtype size
+            dtype = kwargs.get("torch_dtype") or kwargs.get("dtype")
+            if dtype is not None and hasattr(dtype, "itemsize"):
+                bytes_per_param = dtype.itemsize
+            else:
+                # Default: bf16 or fp16 = 2 bytes
+                bytes_per_param = 2
+
+            # Model size + ~15% overhead (activations, KV cache, framework)
+            model_bytes = total_params * bytes_per_param
+            required_bytes = int(model_bytes * 1.15)
+
+            # Find best GPU by free VRAM
+            best_gpu = 0
+            best_free = 0
+            for i in range(num_gpus):
+                free_bytes = _torch.cuda.mem_get_info(i)[0]
+                if free_bytes > best_free:
+                    best_free = free_bytes
+                    best_gpu = i
+
+            if best_free >= required_bytes:
+                self.log.info(
+                    "Smart placement: model ~%.1fGiB fits on GPU %d "
+                    "(%.1fGiB free) — bypassing multi-GPU split",
+                    model_bytes / (1024 ** 3), best_gpu,
+                    best_free / (1024 ** 3),
+                )
+                return best_gpu
+            else:
+                self.log.info(
+                    "Model ~%.1fGiB needs %.1fGiB, best GPU %d has %.1fGiB "
+                    "— using multi-GPU split",
+                    model_bytes / (1024 ** 3),
+                    required_bytes / (1024 ** 3),
+                    best_gpu, best_free / (1024 ** 3),
+                )
+                return None
+        except Exception as e:
+            self.log.debug(f"Single-GPU placement check failed: {e}")
             return None
 
     def _detect_optimal_dtype(self):
@@ -1104,9 +1252,19 @@ class HuggingFaceBackend(BaseLLMBackend):
                         best_free / (1024 ** 3),
                     )
                 else:
-                    max_memory = self._build_compute_aware_memory_map()
-                    if max_memory:
-                        kwargs["max_memory"] = max_memory
+                    # Smart single-GPU bypass: if the model fits on the best
+                    # GPU, avoid device_map="auto" which splits across GPUs
+                    # and adds ~26% overhead from cross-device transfers.
+                    single_gpu = self._try_single_gpu_placement(
+                        model_name, kwargs, num_gpus
+                    )
+                    if single_gpu is not None:
+                        kwargs["device_map"] = {"": single_gpu}
+                        kwargs["low_cpu_mem_usage"] = True
+                    else:
+                        max_memory = self._build_compute_aware_memory_map()
+                        if max_memory:
+                            kwargs["max_memory"] = max_memory
 
             # Quantization config (BnB only — NVFP4 is post-load)
             if quant_mode == "nf4" and "quantization_config" not in kwargs:
@@ -1161,6 +1319,11 @@ class HuggingFaceBackend(BaseLLMBackend):
                 self.tokenizer.pad_token = self.tokenizer.eos_token
         except Exception as e:
             self.log.warning(f"Tokenizer load failed: {e}")
+
+        # Initialize TurboEngine (compiled decode bypass)
+        if not os.environ.get("VRM_DISABLE_TURBO"):
+            self._init_turbo_engine()
+
         return self.model
 
     def split_model(self, num_gpus: int, vram_per_gpu: Optional[List[int]] = None):
@@ -1626,8 +1789,19 @@ class HuggingFaceBackend(BaseLLMBackend):
         if self.tokenizer.pad_token_id is None:
             self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
 
-        # Path 1: No split — use native generate() (already uses KV cache)
+        # Path 1: No split — single GPU/CPU
         if self.blocks is None or len(self.blocks) <= 1:
+            # TurboEngine path: compiled decode (bypasses HF generate overhead)
+            if self._turbo_engine is not None:
+                try:
+                    return self._turbo_engine.generate(
+                        prompt,
+                        max_new_tokens=max_new_tokens,
+                        **kwargs,
+                    )
+                except Exception as e:
+                    self.log.warning("TurboEngine generate failed (%s), falling back", e)
+
             if self.model is not None:
                 # Move correctly to model's execution device
                 device = self._get_device()
@@ -1635,12 +1809,21 @@ class HuggingFaceBackend(BaseLLMBackend):
                 if attention_mask is not None:
                     attention_mask = attention_mask.to(device)
 
+            # Infer do_sample=True when sampling params are set but do_sample omitted
+            gen_kwargs = dict(kwargs)
+            if 'do_sample' not in gen_kwargs:
+                _temp = gen_kwargs.get('temperature', 1.0)
+                _tk = gen_kwargs.get('top_k', 0)
+                _tp = gen_kwargs.get('top_p', 1.0)
+                if _temp != 1.0 or _tk > 0 or _tp < 1.0:
+                    gen_kwargs['do_sample'] = True
+
             out_ids = self.model.generate(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
                 max_new_tokens=max_new_tokens,
                 pad_token_id=self.tokenizer.pad_token_id,
-                **kwargs,
+                **gen_kwargs,
             )
             new_tokens = out_ids[0][input_ids.shape[1]:]
             return self.tokenizer.decode(new_tokens, skip_special_tokens=True)
@@ -1691,23 +1874,25 @@ class HuggingFaceBackend(BaseLLMBackend):
                     top_k=top_k, top_p=top_p,
                 )
             else:
-                if temperature > 0 and temperature != 1.0:
-                    next_logits = next_logits / temperature
-
+                # Fallback: narrow-vocab fast path (same as triton_sampling.py)
                 if top_k > 0 and top_k < next_logits.size(-1):
-                    topk_vals, _ = _torch.topk(next_logits, top_k)
-                    threshold = topk_vals[:, -1].unsqueeze(-1)
-                    next_logits[next_logits < threshold] = float('-inf')
-
-                if top_p < 1.0:
-                    sorted_logits, sorted_indices = _torch.sort(next_logits, descending=True)
-                    cumulative_probs = _torch.softmax(sorted_logits, dim=-1).cumsum(dim=-1)
-                    remove_mask = cumulative_probs - _torch.softmax(sorted_logits, dim=-1) >= top_p
-                    sorted_logits[remove_mask] = float('-inf')
-                    next_logits = sorted_logits.scatter(1, sorted_indices, sorted_logits)
-
-                probs = _torch.softmax(next_logits, dim=-1)
-                next_token = _torch.multinomial(probs, num_samples=1)
+                    top_vals, top_idx = _torch.topk(next_logits, top_k, dim=-1, sorted=True)
+                    top_probs = _torch.softmax(top_vals / temperature, dim=-1)
+                    if top_p < 1.0:
+                        cumsum = top_probs.cumsum(dim=-1)
+                        top_probs[(cumsum - top_probs) >= top_p] = 0.0
+                    next_token = top_idx.gather(-1, _torch.multinomial(top_probs, num_samples=1))
+                else:
+                    if temperature > 0 and temperature != 1.0:
+                        next_logits = next_logits / temperature
+                    probs = _torch.softmax(next_logits, dim=-1)
+                    if top_p < 1.0:
+                        n_cand = min(1000, next_logits.size(-1))
+                        tp, ti = _torch.topk(probs, n_cand, dim=-1, sorted=True)
+                        tp[(tp.cumsum(dim=-1) - tp) >= top_p] = 0.0
+                        next_token = ti.gather(-1, _torch.multinomial(tp, num_samples=1))
+                    else:
+                        next_token = _torch.multinomial(probs, num_samples=1)
 
             # Move back to first device for concatenation
             next_token = next_token.to(generated.device)
@@ -1731,6 +1916,18 @@ class HuggingFaceBackend(BaseLLMBackend):
             raise RuntimeError("Modèle non chargé — appeler load_model() d'abord")
         if self.tokenizer is None:
             raise RuntimeError("Tokenizer non disponible")
+
+        # TurboEngine streaming path (compiled decode)
+        if self._turbo_engine is not None and hasattr(self._turbo_engine, 'generate_stream'):
+            try:
+                yield from self._turbo_engine.generate_stream(
+                    prompt,
+                    max_new_tokens=max_new_tokens,
+                    **kwargs,
+                )
+                return
+            except Exception as e:
+                self.log.warning("TurboEngine stream failed (%s), falling back", e)
 
         inputs = self.tokenizer(prompt, return_tensors="pt")
         input_ids = inputs["input_ids"]

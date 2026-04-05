@@ -120,6 +120,7 @@ class InferencePipeline:
         self.turbo_engine: Optional[Any] = None  # TurboEngine for compiled decode
         self.cuda_graph_runner: Optional[Any] = None  # CUDA Graph for decode steps
         self.tp_model: Optional[Any] = None  # Tensor Parallel model wrapper
+        self._turboquant_cache_factory: Optional[Any] = None  # HF-native TurboQuant cache
 
         # Dynamic rebalancing
         self._rebalance_thread: Optional[threading.Thread] = None
@@ -294,6 +295,9 @@ class InferencePipeline:
             if _backend_type != 'vllm':
                 self._init_continuous_batching()
 
+            # 12b. Init TurboQuant HF-native KV cache (if compression requested)
+            self._init_turboquant_cache()
+
             # 13. Init VRAM Lending Pool (cooperative GPU memory)
             # Skip when vLLM/llama.cpp manage their own VRAM
             # Controlled by VRM_VRAM_LENDING env var (default: enabled for multi-GPU)
@@ -398,6 +402,13 @@ class InferencePipeline:
                     gen_kwargs["do_sample"] = True
                 if temperature != 1.0:
                     gen_kwargs["do_sample"] = True
+
+                # --- TurboQuant KV Cache injection ---
+                # If TurboQuant compression is active, create a HF-native
+                # TurboQuantCache and inject it as past_key_values so HF's
+                # generate() uses compressed KV storage (~4.6x reduction).
+                if self._turboquant_cache_factory is not None:
+                    gen_kwargs["past_key_values"] = self._turboquant_cache_factory()
 
                 # --- Speculative Decoding ---
                 if enable_speculative:
@@ -1147,6 +1158,60 @@ class InferencePipeline:
         except Exception as exc:
             _logger.debug("GPU hot-plug init failed: %s", exc)
 
+    def _init_turboquant_cache(self) -> None:
+        """Initialize HF-native TurboQuant KV cache factory.
+
+        When VRM_KV_COMPRESSION=turboquant, creates a factory that produces
+        fresh TurboQuantCache instances.  Each call to generate() gets a new
+        cache so HF's generate() compresses KV states in-flight via
+        PolarQuant+QJL (~4.6x VRAM reduction on the KV cache).
+        """
+        kv_comp = os.environ.get("VRM_KV_COMPRESSION", "").lower()
+        if kv_comp != "turboquant":
+            return
+
+        model = self.backend.model if self.backend else None
+        if model is None:
+            return
+
+        try:
+            from core.turboquant_cache import TurboQuantCache
+
+            config = getattr(model, "config", None)
+            if config is None:
+                _logger.debug("TurboQuantCache skipped: no model config")
+                return
+
+            device = self._detect_device()
+            bits = int(os.environ.get("VRM_KV_COMPRESSION_BITS", "3"))
+            residual = int(os.environ.get("VRM_KV_CACHE_RESIDUAL", "128"))
+
+            # Factory: each generate() call gets a fresh cache
+            def _make_cache():
+                return TurboQuantCache.from_model_config(
+                    config,
+                    bits_per_angle=bits,
+                    residual_length=residual,
+                    device=device,
+                )
+
+            # Validate with a smoke test
+            test_cache = _make_cache()
+            _logger.info(
+                "TurboQuantCache ready: %d layers, %.1f bits/dim, "
+                "residual=%d tokens, device=%s",
+                len(test_cache.layers),
+                test_cache._compressor.bits_per_dim(),
+                residual,
+                device,
+            )
+            del test_cache
+
+            self._turboquant_cache_factory = _make_cache
+
+        except Exception as e:
+            _logger.warning("TurboQuantCache init failed: %s", e)
+
     def _init_continuous_batching(self) -> None:
         """Initialize continuous batcher + paged KV cache."""
         try:
@@ -1234,11 +1299,23 @@ class InferencePipeline:
         if total_free <= 0:
             return
 
-        # Cap total KV cache to 50 % of aggregate free VRAM
+        # Cap total KV cache to a fraction of aggregate free VRAM.
+        # With KV compression active, raw pools are only staging buffers —
+        # compressed data is ~4.6x smaller, so allocate much less raw pool.
         page_bytes = kv_config.page_size_bytes
         if page_bytes <= 0:
             return
-        max_kv_bytes = total_free * 0.50 * (1024 ** 3)
+        vram_fraction = 0.50
+        if kv_config.kv_compression:
+            # Staging buffer: ~12% of free VRAM (enough for active pages,
+            # rest will be compressed in _compressed_pages sidecar)
+            vram_fraction = 0.12
+            _logger.info(
+                "KV compression active — reducing raw pool to %.0f%% of free "
+                "VRAM (compressed sidecar handles the rest)",
+                vram_fraction * 100,
+            )
+        max_kv_bytes = total_free * vram_fraction * (1024 ** 3)
         affordable_pages = int(max_kv_bytes / page_bytes)
         kv_config.max_pages = min(kv_config.max_pages, max(64, affordable_pages))
 
@@ -1479,6 +1556,18 @@ class InferencePipeline:
             _logger.debug(f"Exception silencieuse dans l'exécution: {e}", exc_info=True)
 
         self._loaded = False
+        # Release GPU-heavy references so memory can actually be freed
+        if hasattr(self, 'paged_kv') and self.paged_kv:
+            if hasattr(self.paged_kv, '_gpu_pools'):
+                self.paged_kv._gpu_pools.clear()
+            if hasattr(self.paged_kv, '_gpu_pool'):
+                self.paged_kv._gpu_pool = None
+            self.paged_kv = None
+        if hasattr(self, 'backend') and self.backend:
+            if hasattr(self.backend, 'model'):
+                del self.backend.model
+            self.backend = None
+        self.blocks.clear()
         _logger.info("Pipeline shutdown complete")
 
     def __del__(self):

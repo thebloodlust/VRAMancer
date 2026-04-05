@@ -65,10 +65,20 @@ def gpu_info(device_id: int = 0) -> str:
 
 
 def clear_gpu():
+    """Aggressively free all GPU memory between benchmark configs."""
+    # Force-unload VRAMancer pipeline singleton
+    try:
+        from core.inference_pipeline import reset_pipeline
+        reset_pipeline()
+    except Exception:
+        pass
+    # Break reference cycles so model tensors can be freed
+    gc.collect()
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
-        torch.cuda.reset_peak_memory_stats()
+        for i in range(torch.cuda.device_count()):
+            torch.cuda.reset_peak_memory_stats(i)
 
 
 def vram_used_gb(device_id: int = 0) -> float:
@@ -139,6 +149,77 @@ def generate_long_prompt(target_tokens: int) -> str:
 
 # ── Single-config benchmark ──────────────────────────────────────
 
+# Worker script template executed in subprocess for memory isolation.
+# Each config runs in its own process so GPU memory from previous
+# configs is guaranteed to be freed (accelerate hooks keep models alive
+# even after del + gc.collect).
+_WORKER_SCRIPT = r'''
+import os, sys, json, time, gc
+sys.path.insert(0, os.environ["_BENCH_CWD"])
+for k, v in json.loads(os.environ["_BENCH_ENV"]).items():
+    if v:
+        os.environ[k] = v
+    else:
+        os.environ.pop(k, None)
+os.environ.pop("VRM_MINIMAL_TEST", None)
+os.environ.pop("VRM_TEST_MODE", None)
+import torch
+from core.inference_pipeline import InferencePipeline, reset_pipeline
+
+model_name = os.environ["_BENCH_MODEL"]
+num_gpus = int(os.environ["_BENCH_NGPUS"])
+max_tokens = int(os.environ["_BENCH_MAXTOK"])
+prompts = json.loads(os.environ["_BENCH_PROMPTS"])
+
+result = {"config": os.environ["_BENCH_CONFIG"], "model": model_name,
+          "num_gpus": num_gpus, "max_tokens": max_tokens}
+try:
+    t_load = time.perf_counter()
+    pipeline = InferencePipeline()
+    pipeline.load(model_name, num_gpus=num_gpus)
+    result["load_time_s"] = round(time.perf_counter() - t_load, 2)
+
+    kv_active = False
+    if hasattr(pipeline, "paged_kv") and pipeline.paged_kv:
+        kv_active = pipeline.paged_kv.kv_compression_active
+    result["kv_compression_active"] = kv_active
+
+    # Warmup
+    pipeline.generate("Hello world", max_new_tokens=8)
+    torch.cuda.synchronize()
+    gc.collect(); torch.cuda.empty_cache()
+    for i in range(torch.cuda.device_count()):
+        torch.cuda.reset_peak_memory_stats(i)
+
+    total_tokens = 0; total_time = 0.0; per_prompt = []
+    _tok = getattr(pipeline.backend, "tokenizer", None)
+    for prompt in prompts:
+        t0 = time.perf_counter()
+        txt = pipeline.generate(prompt, max_new_tokens=max_tokens)
+        torch.cuda.synchronize()
+        elapsed = time.perf_counter() - t0
+        tokens = max(len(_tok.encode(txt)), 1) if _tok else max(len(txt) // 4, 1)
+        per_prompt.append({"tokens": tokens, "time_s": round(elapsed, 3),
+                           "tok_s": round(tokens / elapsed, 1) if elapsed > 0 else 0})
+        total_tokens += tokens; total_time += elapsed
+
+    peak_vram = 0.0
+    for i in range(torch.cuda.device_count()):
+        v = torch.cuda.max_memory_allocated(i) / 1e9
+        if v > 0.01:
+            peak_vram += v
+
+    result.update({"total_tokens": total_tokens,
+                   "total_time_s": round(total_time, 3),
+                   "avg_tok_s": round(total_tokens / total_time, 1) if total_time > 0 else 0,
+                   "peak_vram_gb": round(peak_vram, 2),
+                   "per_prompt": per_prompt, "status": "OK"})
+except Exception as e:
+    result["status"] = f"FAILED: {e}"
+print("__BENCH_RESULT__" + json.dumps(result))
+'''
+
+
 def bench_config(
     model_name: str,
     config_name: str,
@@ -147,104 +228,44 @@ def bench_config(
     max_tokens: int,
     num_gpus: int,
 ) -> Dict[str, Any]:
-    """Run a single benchmark configuration via VRAMancer pipeline."""
+    """Run a single benchmark configuration in an isolated subprocess.
 
-    # Set env vars
-    for k, v in env_vars.items():
-        if v:
-            os.environ[k] = v
-        else:
-            os.environ.pop(k, None)
+    Subprocess isolation guarantees clean GPU memory between configs
+    (accelerate hooks prevent in-process model deallocation).
+    """
+    import subprocess as _sp
 
-    clear_gpu()
+    env = os.environ.copy()
+    env["_BENCH_CWD"] = os.getcwd()
+    env["_BENCH_ENV"] = json.dumps(env_vars)
+    env["_BENCH_MODEL"] = model_name
+    env["_BENCH_NGPUS"] = str(num_gpus)
+    env["_BENCH_MAXTOK"] = str(max_tokens)
+    env["_BENCH_PROMPTS"] = json.dumps(prompts)
+    env["_BENCH_CONFIG"] = config_name
 
-    from core.inference_pipeline import InferencePipeline, reset_pipeline
-    reset_pipeline()
+    proc = _sp.run(
+        [sys.executable, "-c", _WORKER_SCRIPT],
+        capture_output=True, text=True, env=env, timeout=600,
+    )
 
-    result = {
+    # Forward worker output (rich logging etc.)
+    if proc.stderr:
+        for line in proc.stderr.splitlines()[-20:]:
+            print(f"  {line}", file=sys.stderr)
+
+    # Extract result JSON from stdout
+    for line in proc.stdout.splitlines():
+        if line.startswith("__BENCH_RESULT__"):
+            return json.loads(line[len("__BENCH_RESULT__"):])
+
+    return {
         "config": config_name,
         "model": model_name,
         "num_gpus": num_gpus,
         "max_tokens": max_tokens,
+        "status": f"FAILED: subprocess exit {proc.returncode}",
     }
-
-    try:
-        t_load = time.perf_counter()
-        pipeline = InferencePipeline()
-        pipeline.load(model_name, num_gpus=num_gpus)
-        load_time = time.perf_counter() - t_load
-        result["load_time_s"] = round(load_time, 2)
-
-        # Check if TurboQuant is active
-        kv_active = False
-        if hasattr(pipeline, '_paged_kv') and pipeline._paged_kv:
-            kv_active = pipeline._paged_kv.kv_compression_active
-        result["kv_compression_active"] = kv_active
-
-        # Warmup
-        warmup_prompt = "Hello world"
-        pipeline.generate(warmup_prompt, max_new_tokens=8)
-        torch.cuda.synchronize()
-        clear_gpu()
-        torch.cuda.reset_peak_memory_stats()
-
-        # Benchmark
-        total_tokens = 0
-        total_time = 0.0
-        per_prompt = []
-
-        # Get tokenizer for accurate token counting
-        _tokenizer = getattr(pipeline.backend, "tokenizer", None)
-
-        for prompt in prompts:
-            t0 = time.perf_counter()
-            result_text = pipeline.generate(prompt, max_new_tokens=max_tokens)
-            torch.cuda.synchronize()
-            elapsed = time.perf_counter() - t0
-            # Count actual generated tokens (generate() returns only new text, no prompt)
-            if _tokenizer is not None:
-                tokens = len(_tokenizer.encode(result_text))
-                tokens = max(tokens, 1)
-            else:
-                tokens = len(result_text) // 4  # rough estimate
-            tps = tokens / elapsed if elapsed > 0 else 0
-            per_prompt.append({"tokens": tokens, "time_s": round(elapsed, 3), "tok_s": round(tps, 1)})
-            total_tokens += tokens
-            total_time += elapsed
-
-        avg_tps = total_tokens / total_time if total_time > 0 else 0
-        peak_vram = vram_used_gb(0)
-
-        # Multi-GPU VRAM
-        if num_gpus > 1 and torch.cuda.device_count() > 1:
-            for i in range(1, min(num_gpus, torch.cuda.device_count())):
-                peak_vram += torch.cuda.max_memory_allocated(i) / 1e9
-
-        result.update({
-            "total_tokens": total_tokens,
-            "total_time_s": round(total_time, 3),
-            "avg_tok_s": round(avg_tps, 1),
-            "peak_vram_gb": round(peak_vram, 2),
-            "per_prompt": per_prompt,
-            "status": "OK",
-        })
-
-        # Cleanup
-        reset_pipeline()
-        del pipeline
-        clear_gpu()
-
-    except Exception as e:
-        result["status"] = f"FAILED: {e}"
-        # Cleanup on failure
-        try:
-            from core.inference_pipeline import reset_pipeline
-            reset_pipeline()
-        except Exception:
-            pass
-        clear_gpu()
-
-    return result
 
 
 # ── Context length scaling benchmark ─────────────────────────────
@@ -385,12 +406,15 @@ def main():
         configs = dict(CONFIGS)
 
     if args.include_nvfp4 and not args.nvfp4_only:
-        cc = torch.cuda.get_device_capability(0)
-        if cc[0] >= 10:
+        max_cc = max(
+            (torch.cuda.get_device_capability(i) for i in range(n_gpus)),
+            key=lambda c: (c[0], c[1]),
+        )
+        if max_cc[0] >= 10:
             configs.update(NVFP4_CONFIGS)
-            print(f"\nNVFP4 enabled (CC={cc[0]}.{cc[1]})")
+            print(f"\nNVFP4 enabled (best CC={max_cc[0]}.{max_cc[1]})")
         else:
-            print(f"\nNVFP4 skipped (CC={cc[0]}.{cc[1]} < 10.0, need Blackwell)")
+            print(f"\nNVFP4 skipped (best CC={max_cc[0]}.{max_cc[1]} < 10.0, need Blackwell)")
 
     results = []
     for config_name, env_vars in configs.items():

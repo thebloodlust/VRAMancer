@@ -108,6 +108,19 @@ class CUDAGraphRunner:
         if not self.enabled:
             return self._eager_forward(input_ids, **model_kwargs)
 
+        # Guard: CUDA graphs require static KV cache buffers.
+        # DynamicCache grows in-place which breaks the captured graph's
+        # fixed memory addresses — silently producing garbage output.
+        pkv = model_kwargs.get("past_key_values")
+        if pkv is not None:
+            pkv_type = type(pkv).__name__
+            if pkv_type == "DynamicCache":
+                _logger.warning(
+                    "DynamicCache detected — incompatible with CUDA graphs. "
+                    "Falling back to eager. Use StaticCache instead."
+                )
+                return self._eager_forward(input_ids, **model_kwargs)
+
         bs = input_ids.size(0)
 
         # Count calls to decide when to capture

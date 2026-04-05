@@ -154,8 +154,8 @@ class TestTurboQuantEndToEnd:
         result = comp.compress(kv)
 
         assert "radius" in result
-        assert "angles" in result
-        assert "qjl_signs" in result
+        assert "angles_packed" in result
+        assert "qjl_signs_packed" in result
         assert "qjl_norms" in result
         assert "shape" in result
         assert result["shape"] == (32, 64)

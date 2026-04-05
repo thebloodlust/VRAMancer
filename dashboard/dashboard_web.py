@@ -96,24 +96,46 @@ def set_memory_manager(hm):
 @app.route("/")
 def dashboard():
     gpus = []
+    # Try pynvml first for accurate VRAM (includes all allocators, not just torch)
     try:
-        import torch
-        if torch.cuda.is_available():
-            for i in range(torch.cuda.device_count()):
-                try:
-                    props = torch.cuda.get_device_properties(i)
-                    alloc = torch.cuda.memory_allocated(i)
-                    total = props.total_memory
-                    gpus.append({
-                        "name": props.name,
-                        "total_vram_mb": total // (1024 * 1024),
-                        "used_vram_mb": alloc // (1024 * 1024),
-                        "is_available": True,
-                    })
-                except Exception:
-                    gpus.append({"name": f"GPU {i}", "total_vram_mb": 0, "used_vram_mb": 0, "is_available": False})
-    except ImportError:
+        import pynvml
+        pynvml.nvmlInit()
+        count = pynvml.nvmlDeviceGetCount()
+        for i in range(count):
+            h = pynvml.nvmlDeviceGetHandleByIndex(i)
+            info = pynvml.nvmlDeviceGetMemoryInfo(h)
+            name = pynvml.nvmlDeviceGetName(h)
+            if isinstance(name, bytes):
+                name = name.decode()
+            gpus.append({
+                "name": name,
+                "total_vram_mb": info.total // (1024 * 1024),
+                "used_vram_mb": info.used // (1024 * 1024),
+                "is_available": True,
+            })
+        pynvml.nvmlShutdown()
+    except Exception:
         pass
+    # Fallback to torch
+    if not gpus:
+        try:
+            import torch
+            if torch.cuda.is_available():
+                for i in range(torch.cuda.device_count()):
+                    try:
+                        props = torch.cuda.get_device_properties(i)
+                        alloc = torch.cuda.memory_allocated(i)
+                        total = props.total_memory
+                        gpus.append({
+                            "name": props.name,
+                            "total_vram_mb": total // (1024 * 1024),
+                            "used_vram_mb": alloc // (1024 * 1024),
+                            "is_available": True,
+                        })
+                    except Exception:
+                        gpus.append({"name": f"GPU {i}", "total_vram_mb": 0, "used_vram_mb": 0, "is_available": False})
+        except ImportError:
+            pass
     if not gpus:
         gpus = [{"name": "No GPU detected", "total_vram_mb": 0, "used_vram_mb": 0, "is_available": False}]
     memory = None
@@ -122,7 +144,32 @@ def dashboard():
 
 @app.route("/api/gpu")
 def api_gpu():
-    """Real-time GPU info using torch (same data as routes_ops)."""
+    """Real-time GPU info (pynvml preferred, torch fallback)."""
+    # Try pynvml first for accurate VRAM
+    try:
+        import pynvml
+        pynvml.nvmlInit()
+        count = pynvml.nvmlDeviceGetCount()
+        devices = []
+        for i in range(count):
+            h = pynvml.nvmlDeviceGetHandleByIndex(i)
+            info = pynvml.nvmlDeviceGetMemoryInfo(h)
+            name = pynvml.nvmlDeviceGetName(h)
+            if isinstance(name, bytes):
+                name = name.decode()
+            util = pynvml.nvmlDeviceGetUtilizationRates(h)
+            devices.append({
+                "id": i, "name": name,
+                "memory_used": info.used, "memory_total": info.total,
+                "memory_free": info.free,
+                "memory_usage_percent": round((info.used / info.total) * 100, 2) if info.total else 0,
+                "gpu_utilization": util.gpu,
+            })
+        pynvml.nvmlShutdown()
+        return jsonify({"cuda_available": True, "device_count": len(devices), "devices": devices})
+    except Exception:
+        pass
+    # Fallback to torch
     try:
         import torch
         if not torch.cuda.is_available():

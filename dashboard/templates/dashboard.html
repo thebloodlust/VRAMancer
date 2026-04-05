@@ -95,9 +95,10 @@
                             <h2 class="text-xl font-bold text-white flex items-center gap-2 drop-shadow-md"><i class="ph ph-share-network"></i> Tokio Network Data Plane</h2>
                             <p class="text-xs text-cyber-success mt-1 font-mono drop-shadow-md">Rust / Zero-Copy Safetensors Active <i class="ph-fill ph-check-circle"></i></p>
                         </div>
-                        <div class="bg-cyber-dark/80 backdrop-blur px-3 py-1 pb-1.5 rounded-full border border-cyber-accent/50 text-xs font-bold text-cyber-neon flex items-center gap-2">
-                            <span class="w-2 h-2 rounded-full bg-cyber-success animate-ping"></span>
-                            <span>Swarm Linked</span>
+                        <div class="bg-cyber-dark/80 backdrop-blur px-3 py-1 pb-1.5 rounded-full border border-cyber-accent/50 text-xs font-bold flex items-center gap-2"
+                             :class="metrics.activeNodes > 0 ? 'text-cyber-neon' : 'text-gray-500'">
+                            <span class="w-2 h-2 rounded-full" :class="metrics.activeNodes > 0 ? 'bg-cyber-success animate-ping' : 'bg-gray-600'"></span>
+                            <span x-text="metrics.activeNodes > 0 ? 'Swarm Linked (' + metrics.activeNodes + ')' : 'No Swarm Peers'"></span>
                         </div>
                     </div>
 

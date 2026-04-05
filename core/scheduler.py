@@ -101,6 +101,11 @@ class SimpleScheduler:
         self._next_block_id = 0
         self._lock = threading.Lock()
 
+        # KV cache VRAM reservation per GPU — tracks memory used by KV cache
+        # that isn't captured by model block allocation.
+        # Key: gpu_id, Value: reserved MB for KV cache
+        self._kv_cache_reserved_mb: Dict[int, float] = {}
+
     # ------------------------------------------------------------------
     # Forward / predict
     # ------------------------------------------------------------------
@@ -444,19 +449,28 @@ class SimpleScheduler:
     # ------------------------------------------------------------------
 
     def _find_best_gpu(self, size_mb: float) -> int:
-        """Select GPU with most free VRAM that can fit size_mb."""
+        """Select GPU with most free VRAM that can fit size_mb.
+
+        Accounts for both model block allocations and KV cache reservations.
+        """
         best_id = 0
         best_free = -1.0
         for gpu in self._available_gpus:
             free = gpu.get("free_vram_mb", 0)
-            if free >= size_mb and free > best_free:
-                best_free = free
+            # Subtract KV cache reservation from available VRAM
+            kv_reserved = self._kv_cache_reserved_mb.get(gpu["id"], 0)
+            effective_free = free - kv_reserved
+            if effective_free >= size_mb and effective_free > best_free:
+                best_free = effective_free
                 best_id = gpu["id"]
         # If no GPU has enough free VRAM, return the one with most free anyway
         if best_free < 0:
             for gpu in self._available_gpus:
-                if gpu.get("free_vram_mb", 0) > best_free:
-                    best_free = gpu.get("free_vram_mb", 0)
+                free = gpu.get("free_vram_mb", 0)
+                kv_reserved = self._kv_cache_reserved_mb.get(gpu["id"], 0)
+                effective_free = free - kv_reserved
+                if effective_free > best_free:
+                    best_free = effective_free
                     best_id = gpu["id"]
         return best_id
 
@@ -472,3 +486,55 @@ class SimpleScheduler:
             if gpu_id is not None:
                 blocks = [b for b in blocks if b.gpu_id == gpu_id]
             return sum(b.size_mb for b in blocks)
+
+    # ------------------------------------------------------------------
+    # KV cache memory accounting
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def estimate_kv_cache_mb(
+        num_layers: int,
+        num_kv_heads: int,
+        head_dim: int,
+        seq_len: int,
+        batch_size: int = 1,
+        dtype_bytes: int = 2,
+    ) -> float:
+        """Estimate KV cache VRAM usage in MB.
+
+        Formula: 2 * num_layers * num_kv_heads * head_dim * seq_len * batch_size * dtype_bytes
+        The factor of 2 accounts for both K and V tensors.
+
+        Example: Qwen2.5-14B (48 layers, 8 KV heads, 128 dim, 2048 seq, FP16)
+          = 2 * 48 * 8 * 128 * 2048 * 1 * 2 = ~402 MB
+        """
+        bytes_total = (
+            2 * num_layers * num_kv_heads * head_dim
+            * seq_len * batch_size * dtype_bytes
+        )
+        return bytes_total / (1024 * 1024)
+
+    def reserve_kv_cache(self, gpu_id: int, size_mb: float) -> None:
+        """Reserve VRAM for KV cache on a specific GPU.
+
+        This reduces the effective free VRAM seen by _find_best_gpu(),
+        preventing model blocks from being allocated into KV cache space.
+        """
+        with self._lock:
+            current = self._kv_cache_reserved_mb.get(gpu_id, 0)
+            self._kv_cache_reserved_mb[gpu_id] = current + size_mb
+            _logger.debug("KV cache reserved %.1fMB on GPU %d (total: %.1fMB)",
+                          size_mb, gpu_id, current + size_mb)
+
+    def release_kv_cache(self, gpu_id: int, size_mb: float) -> None:
+        """Release KV cache reservation (e.g., after request completes)."""
+        with self._lock:
+            current = self._kv_cache_reserved_mb.get(gpu_id, 0)
+            self._kv_cache_reserved_mb[gpu_id] = max(0, current - size_mb)
+
+    def kv_cache_reserved_mb(self, gpu_id: Optional[int] = None) -> float:
+        """Total KV cache reservation in MB, optionally filtered by GPU."""
+        with self._lock:
+            if gpu_id is not None:
+                return self._kv_cache_reserved_mb.get(gpu_id, 0)
+            return sum(self._kv_cache_reserved_mb.values())

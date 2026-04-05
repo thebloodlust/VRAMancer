@@ -246,6 +246,23 @@ def system_info():
         return jsonify({'error': str(e)}), 500
 
 
+@ops_bp.route('/api/pipeline/status')
+def pipeline_status():
+    """Pipeline status — model, GPUs, parallel mode."""
+    if _registry_ref is None:
+        return jsonify({'loaded': False, 'model': None, 'num_gpus': 0, 'parallel_mode': None})
+    pipe = _registry_ref.get()
+    if pipe is None:
+        return jsonify({'loaded': False, 'model': None, 'num_gpus': 0, 'parallel_mode': None})
+    return jsonify({
+        'loaded': _registry_ref.is_loaded(),
+        'model': getattr(pipe, 'model_name', None),
+        'num_gpus': getattr(pipe, 'num_gpus', 0),
+        'parallel_mode': os.environ.get('VRM_PARALLEL_MODE', 'pp'),
+        'backend': getattr(pipe, 'backend_name', 'unknown'),
+    })
+
+
 @ops_bp.route('/api/nodes', methods=['GET', 'POST'])
 def nodes_info():
     """Cluster node information and manual registration."""

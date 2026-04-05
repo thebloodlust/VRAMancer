@@ -7,9 +7,11 @@ use sha2::Sha256;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::Semaphore;
+use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::{Read, Write};
 use std::sync::Arc;
+use std::sync::Mutex;
 
 // Définition de notre type HMAC
 type HmacSha256 = Hmac<Sha256>;
@@ -535,6 +537,9 @@ impl GpuPipeline {
         // Allocate pinned host buffers (only needed if no P2P)
         let mut host_bufs = Vec::with_capacity(n_bufs);
         if !p2p_enabled {
+            // Set context before allocating — cuMemAllocHost requires a valid current context
+            cuda_ffi::ctx_set_current(src_ctx)
+                .map_err(|e| PyValueError::new_err(format!("ctx before pinned alloc: {e}")))?;
             for i in 0..n_bufs {
                 let buf = cuda_ffi::mem_alloc_host(chunk_bytes)
                     .map_err(|e| PyValueError::new_err(format!("pinned buf {i}: {e}")))?;
@@ -1299,6 +1304,70 @@ fn bench_gpu_transfer(
     Err(PyValueError::new_err("Compilé sans feature CUDA."))
 }
 
+// ---------------------------------------------------------------------------
+// GIL-free batch tokenizer for non-HuggingFace fallback
+// ---------------------------------------------------------------------------
+
+/// Thread-safe vocabulary for the Rust basic tokenizer.
+/// Uses lazy_static-style pattern via Mutex.
+static RUST_VOCAB: once_cell::sync::Lazy<Mutex<(HashMap<String, u32>, u32)>> =
+    once_cell::sync::Lazy::new(|| Mutex::new((HashMap::new(), 5))); // 0..4 reserved for specials
+
+/// Tokenize a single string: lowercase, split on whitespace/punctuation,
+/// assign stable IDs via shared vocab. Pure Rust, no GIL.
+fn tokenize_one(text: &str) -> Vec<u32> {
+    let lower = text.to_lowercase();
+    let trimmed = lower.trim();
+    if trimmed.is_empty() {
+        return vec![];
+    }
+    // Split on whitespace and common punctuation boundaries
+    let tokens: Vec<&str> = trimmed.split(|c: char| c.is_whitespace())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    let mut vocab = RUST_VOCAB.lock().unwrap();
+    let mut ids = Vec::with_capacity(tokens.len());
+    for tok in tokens {
+        let id = if let Some(&id) = vocab.0.get(tok) {
+            id
+        } else {
+            let new_id = vocab.1;
+            vocab.0.insert(tok.to_string(), new_id);
+            vocab.1 += 1;
+            new_id
+        };
+        ids.push(id);
+    }
+    ids
+}
+
+/// Batch tokenize N prompts with GIL released.
+/// Returns a list of token ID lists. Thread-safe vocab.
+///
+/// This is the fallback tokenizer for when HuggingFace tokenizers
+/// library is not available (e.g., llama.cpp backend, bare metal).
+/// The entire tokenization runs in Rust with py.allow_threads().
+#[pyfunction]
+fn batch_tokenize_fast(py: Python, prompts: Vec<String>) -> PyResult<Vec<Vec<u32>>> {
+    py.allow_threads(|| {
+        Ok(prompts.iter().map(|p| tokenize_one(p)).collect())
+    })
+}
+
+/// Single prompt tokenize with GIL released.
+#[pyfunction]
+fn tokenize_fast(py: Python, text: String) -> PyResult<Vec<u32>> {
+    py.allow_threads(|| Ok(tokenize_one(&text)))
+}
+
+/// Get current vocab size.
+#[pyfunction]
+fn tokenizer_vocab_size(_py: Python) -> PyResult<u32> {
+    let vocab = RUST_VOCAB.lock().unwrap();
+    Ok(vocab.1)
+}
+
 #[pymodule]
 fn vramancer_rust(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<TransportTier>()?;
@@ -1322,6 +1391,9 @@ fn vramancer_rust(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(generate_holographic_parity, m)?)?;
     m.add_function(wrap_pyfunction!(heal_holograph, m)?)?;
     m.add_function(wrap_pyfunction!(inject_to_vram_ptr, m)?)?;
+    m.add_function(wrap_pyfunction!(batch_tokenize_fast, m)?)?;
+    m.add_function(wrap_pyfunction!(tokenize_fast, m)?)?;
+    m.add_function(wrap_pyfunction!(tokenizer_vocab_size, m)?)?;
     Ok(())
 }
 

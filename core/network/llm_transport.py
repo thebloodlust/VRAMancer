@@ -798,6 +798,12 @@ class LLMTransport:
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_BUSY_POLL, 50)
             except Exception:
                 pass
+            # Large socket buffers for tensor transfers
+            try:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4 * 1024 * 1024)
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * 1024 * 1024)
+            except Exception:
+                pass
             sock.settimeout(10.0)
             sock.connect(sa)
 
@@ -1084,25 +1090,20 @@ class LLMTransport:
 
         hdr_bytes = header.encode()
 
-        # Serialize tensor without numpy intermediate when possible
+        # Serialize tensor — pinned memory for GPU→CPU DMA, no bytes() copy
         if _TORCH and hasattr(tensor, 'is_cuda') and tensor.is_cuda:
-            cpu_tensor = tensor.cpu()
-            raw = bytes(cpu_tensor.contiguous().view(torch.uint8).numpy())
+            pinned = torch.empty(tensor.shape, dtype=tensor.dtype, pin_memory=True)
+            pinned.copy_(tensor, non_blocking=False)
+            raw = pinned.contiguous().view(torch.uint8).numpy()
         elif _TORCH:
-            raw = bytes(tensor.contiguous().view(torch.uint8).numpy())
+            raw = tensor.contiguous().view(torch.uint8).numpy()
         else:
             raw = bytes(tensor)
 
         try:
             sock.sendall(hdr_bytes)
-            # Send payload in chunks using memoryview
-            mv = memoryview(raw)
-            offset = 0
-            while offset < len(raw):
-                n = sock.send(mv[offset:offset + VTP_CHUNK_BYTES])
-                if n == 0:
-                    raise ConnectionError("TCP connection closed during send")
-                offset += n
+            # Send payload — numpy array supports buffer protocol (zero-copy)
+            sock.sendall(raw)
             self._stats["tcp_fallback_ops"] += 1
             return {
                 "method": "zerocopy_tcp",
@@ -1179,17 +1180,10 @@ class LLMTransport:
 
                     # Two-sided: payload follows header in CPU MR
                     payload = bytes(conn._cpu_buf[_HEADER_PAD:_HEADER_PAD + header.payload_bytes])
-                    import numpy as np
-                    np_dtype = {0: np.float32, 1: np.float16, 2: np.float32,
-                                3: np.float64, 4: np.int64, 5: np.int32,
-                                6: np.int16, 7: np.int8, 8: np.uint8,
-                                9: np.bool_}.get(header.dtype_code, np.float32)
-                    arr = np.frombuffer(payload[:header.payload_bytes],
-                                       dtype=np_dtype).reshape(header.shape)
-                    tensor = torch.from_numpy(arr.copy())
                     torch_dtype = _CODE_TO_DTYPE.get(header.dtype_code, torch.float32)
-                    if torch_dtype == torch.bfloat16:
-                        tensor = tensor.to(torch.bfloat16)
+                    shape = header.shape if header.shape else (header.payload_bytes // _CODE_TO_ITEMSIZE.get(header.dtype_code, 4),)
+                    tensor = torch.frombuffer(bytearray(payload[:header.payload_bytes]), dtype=torch.uint8)
+                    tensor = tensor.view(torch_dtype).reshape(shape).clone()
                     if _CUDA and gpu_id >= 0:
                         tensor = tensor.to(f"cuda:{gpu_id}")
                     return tensor, header
@@ -1215,16 +1209,11 @@ class LLMTransport:
             if not payload:
                 return None
 
-            import numpy as np
-            np_dtype = {0: np.float32, 1: np.float16, 2: np.float32,
-                        3: np.float64, 4: np.int64, 5: np.int32,
-                        6: np.int16, 7: np.int8, 8: np.uint8,
-                        9: np.bool_}.get(header.dtype_code, np.float32)
-            arr = np.frombuffer(payload, dtype=np_dtype).reshape(header.shape)
-            tensor = torch.from_numpy(arr.copy())
             torch_dtype = _CODE_TO_DTYPE.get(header.dtype_code, torch.float32)
-            if torch_dtype == torch.bfloat16:
-                tensor = tensor.to(torch.bfloat16)
+            shape = header.shape if header.shape else (header.payload_bytes // _CODE_TO_ITEMSIZE.get(header.dtype_code, 4),)
+            # Use torch.frombuffer for all dtypes (handles bfloat16 natively)
+            tensor = torch.frombuffer(bytearray(payload[:header.payload_bytes]), dtype=torch.uint8)
+            tensor = tensor.view(torch_dtype).reshape(shape).clone()
             if _CUDA and gpu_id >= 0:
                 tensor = tensor.to(f"cuda:{gpu_id}")
 
@@ -1462,6 +1451,12 @@ class VTPServer:
             try:
                 conn, addr = self._server_sock.accept()
                 conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                # Large socket buffers for tensor transfers
+                try:
+                    conn.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4 * 1024 * 1024)
+                    conn.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * 1024 * 1024)
+                except Exception:
+                    pass
                 threading.Thread(
                     target=self._handle_client, args=(conn, addr),
                     daemon=True,
@@ -1663,20 +1658,12 @@ class VTPServer:
         if not _TORCH:
             return None
         try:
-            import numpy as np
-            np_dtype = {
-                0: np.float32, 1: np.float16, 2: np.float32,
-                3: np.float64, 4: np.int64, 5: np.int32,
-                6: np.int16, 7: np.int8, 8: np.uint8,
-                9: np.bool_,
-            }.get(header.dtype_code, np.float32)
-            shape = header.shape if header.shape else (len(payload) // np.dtype(np_dtype).itemsize,)
-            arr = np.frombuffer(payload[:header.payload_bytes], dtype=np_dtype)
-            arr = arr.reshape(shape)
-            tensor = torch.from_numpy(arr.copy())
             torch_dtype = _CODE_TO_DTYPE.get(header.dtype_code, torch.float32)
-            if torch_dtype == torch.bfloat16:
-                tensor = tensor.to(torch.bfloat16)
+            itemsize = _CODE_TO_ITEMSIZE.get(header.dtype_code, 4)
+            shape = header.shape if header.shape else (header.payload_bytes // itemsize,)
+            # Use torch.frombuffer for all dtypes (handles bfloat16 natively)
+            tensor = torch.frombuffer(bytearray(payload[:header.payload_bytes]), dtype=torch.uint8)
+            tensor = tensor.view(torch_dtype).reshape(shape).clone()
             if _CUDA and header.dst_gpu >= 0:
                 tensor = tensor.to(f"cuda:{header.dst_gpu}")
             return tensor

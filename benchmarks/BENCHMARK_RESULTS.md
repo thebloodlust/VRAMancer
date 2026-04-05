@@ -264,9 +264,9 @@ At memory-bandwidth saturation (which is the bottleneck for all LLM decode), rea
 - [x] ~~NVFP4 Blackwell native FP4~~ — **real cublas FP4 kernel working** (see below)
 - [x] ~~TurboQuant KV compression + Sparse V~~ — **+107% throughput on TinyLlama** (see below)
 - [x] ~~GPU-accelerated TurboQuant~~ — GPU ops + head-batching: +20% on Qwen-7B TQ (0.75 → 0.9 tok/s). Fundamental call-volume bottleneck remains (56 compress calls/token).
+- [x] ~~Zero-overhead TurboQuant~~ — pack=False raw storage eliminates Python bit-packing: **49.0 tok/s on Qwen-7B** (-0.2% vs BF16, -13.8% VRAM). See below.
 - [ ] GGUF/llama.cpp comparison (Ollama's backend — likely the 60-100 tok/s reference)
 - [ ] NVFP4 + TurboQuant + Sparse V combined (blocked by GPU contention during benchmark session)
-- [ ] Fused CUDA/Triton kernel for TurboQuant compress (fuse ~80 kernel launches per call into 1-2)
 
 ## TurboQuant + Sparse V — KV Cache Compression (31 March 2026)
 
@@ -388,7 +388,41 @@ forward() → triton_quantize_nvfp4(activation) → _scaled_mm
 - **torch.compile works** on DirectFP4Linear (hangs on NVFP4Tensor)
 - Applied automatically after quantization in `_apply_nvfp4_quantization()`
 
+## TurboQuant on Qwen2.5-7B-Instruct — Zero-Overhead (2 April 2026, RTX 3090)
+
+After eliminating Python bit-packing overhead (`pack=False` raw storage in TurboQuantCache),
+TurboQuant is now effectively **zero-overhead** on throughput while saving 2.6 GB VRAM.
+
+The key optimization: `compress(pack=False)` stores angles/signs as raw GPU tensors instead of
+bit-packed bytes. `decompress()` detects raw format and skips `_unpack_compressed()` entirely.
+Per-call decompress dropped from 0.40ms → 0.04ms (10x). Per-token overhead: 22.6ms → 2.3ms.
+
+### Results (Qwen2.5-7B-Instruct, 5 prompts × 128 tokens, RTX 3090 24 GB)
+
+| Configuration | tok/s | VRAM (GB) | vs BF16 |
+|---|---|---|---|
+| **BF16 baseline** | **49.1** | 19.02 | — |
+| TurboQuant (3-bit) | 49.0 | 16.40 | **-0.2% speed, -13.8% VRAM** |
+| TurboQuant + Sparse V 30% | 49.1 | 16.40 | **+0.0% speed, -13.8% VRAM** |
+| TurboQuant + Sparse V 10% | 49.1 | 16.40 | **+0.0% speed, -13.8% VRAM** |
+
+### What Changed
+
+| Metric | Before (packed) | After (raw) | Improvement |
+|---|---|---|---|
+| Single decompress (512 rows) | 0.40ms | 0.04ms | **10x** |
+| Per-token overhead (56 layers) | 22.6ms | 2.3ms | **10x** |
+| E2E tok/s (Qwen-7B) | 0.75 | 49.0 | **65x** |
+| VRAM saving | +5 GB (overhead!) | -2.6 GB | fixed |
+
+The VRAM regression in the old results was caused by bit-packing creating temporary Python objects.
+Raw storage keeps everything as GPU tensors with zero Python overhead.
+
+---
+
 ## TurboQuant on Qwen2.5-7B-Instruct — CPU Bottleneck (RTX 3090)
+
+> **HISTORICAL** — superseded by zero-overhead results above (2 April 2026).
 
 TurboQuant KV compression shows dramatically different behavior on Qwen-7B (128-dim heads) vs TinyLlama (64-dim heads). The pure Python PolarQuant + QJL implementation hits a CPU bottleneck that scales with head_dim × seq_len.
 
@@ -520,3 +554,33 @@ python benchmarks/bench_turboquant.py --model Qwen/Qwen2.5-7B-Instruct --max-tok
 python benchmarks/bench_turboquant.py --model Qwen/Qwen2.5-7B-Instruct --max-tokens 128 --num-gpus 2
 python benchmarks/bench_turboquant.py --model Qwen/Qwen2.5-7B-Instruct --max-tokens 128 --nvfp4-only
 ```
+
+
+## VRAMancer vs vLLM — Head-to-Head (2 April 2026, RTX 3090)
+
+**Fair comparison**: same model (Qwen2.5-7B-Instruct BF16), same GPU (RTX 3090 24 GB),
+same prompts (5 × 128 tokens), same CUDA_VISIBLE_DEVICES=0.
+
+vLLM 0.18.1 (enforce_eager=True, bfloat16). VRAMancer 1.5.0 (HuggingFace backend, BF16).
+
+### Sequential (1 prompt at a time — apples-to-apples)
+
+| Engine | tok/s | Tokens | Time (s) | vs vLLM |
+|---|---|---|---|---|
+| **vLLM** | **50.8** | 640 | 12.6 | — |
+| **VRAMancer** | **49.1** | 640 | 13.0 | **-3.3%** |
+| Native HuggingFace | 34.4 | 640 | 18.6 | -32.3% |
+
+### Batched (all 5 prompts at once)
+
+| Engine | tok/s | Tokens | Time (s) | Notes |
+|---|---|---|---|---|
+| **vLLM** | **252.7** | 640 | 2.5 | continuous batching + PagedAttention |
+| VRAMancer | — | — | — | Sequential only (continuous batcher not wired in bench) |
+
+### Analysis
+
+1. **Sequential throughput**: VRAMancer matches vLLM within 3.3% — memory-bandwidth ceiling is the same for both.
+2. **Batched throughput**: vLLM's continuous batching + PagedAttention delivers 5x on concurrent load. VRAMancer's continuous batcher exists but is not yet wired for offline benchmarking.
+3. **VRAMancer's actual advantage**: heterogeneous multi-GPU. Qwen2.5-14B OOMs on any single GPU but runs at 16.1 tok/s on VRAMancer's 2-GPU split (RTX 3090 + RTX 5070 Ti). vLLM requires homogeneous GPUs for tensor parallel.
+4. **VRAMancer + TurboQuant**: 49.0 tok/s with -13.8% VRAM (zero throughput cost). vLLM has no equivalent KV compression.

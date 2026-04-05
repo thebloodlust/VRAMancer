@@ -133,17 +133,25 @@ def fused_sample(
     batch_size = logits.shape[0]
     vocab_size = logits.shape[-1]
 
-    # Try Triton fused path (temperature + softmax kernel)
-    # top-k is handled in Python first, then Triton fuses temp+softmax.
-    # Only top-p requires a separate softmax pass, so we skip Triton when top-p < 1.0.
-    if _HAS_TRITON and logits.is_cuda and top_p >= 1.0:
-        # Pre-filter: apply top-k on logits in Python (single torch.topk call)
-        if top_k > 0 and top_k < vocab_size:
-            topk_vals, _ = torch.topk(logits, top_k, dim=-1)
-            threshold = topk_vals[:, -1:].expand_as(logits)
-            logits = logits.where(logits >= threshold,
-                                  torch.full_like(logits, float("-inf")))
+    # ── Fast path: when top_k is set, operate on just k values ──
+    # This avoids processing the full vocab (32k-152k) entirely.
+    # topk + softmax(k) + multinomial(k) is much faster than full-vocab ops.
+    if top_k > 0 and top_k < vocab_size:
+        top_vals, top_indices = torch.topk(logits, top_k, dim=-1, sorted=True)
+        # Temperature scaling + softmax on just k values (tiny tensor)
+        top_probs = torch.softmax(top_vals / temperature, dim=-1)
+        # Nucleus (top-p) filtering on pre-sorted k values
+        if top_p < 1.0:
+            cumsum = top_probs.cumsum(dim=-1)
+            remove = (cumsum - top_probs) >= top_p
+            top_probs[remove] = 0.0
+        # Sample from k candidates and map back to vocab indices
+        sampled = torch.multinomial(top_probs, num_samples=1)
+        return top_indices.gather(-1, sampled)
 
+    # ── Full-vocab path (no top_k) ──
+    # Use Triton fused kernel for temperature + softmax when available.
+    if _HAS_TRITON and logits.is_cuda:
         # Fused temperature + softmax via Triton kernel
         probs = torch.empty_like(logits)
         BLOCK = min(triton.next_power_of_2(vocab_size), 4096)
@@ -152,30 +160,37 @@ def fused_sample(
         _fused_topk_softmax_kernel[grid](
             logits, probs,
             temperature,
-            0,  # top_k (handled below if needed)
+            0,  # top_k already handled above
             vocab_size,
             BLOCK,
         )
+
+        # Nucleus (top-p) filtering — use topk instead of full sort
+        if top_p < 1.0:
+            n_cand = min(1000, vocab_size)
+            top_probs, top_indices = torch.topk(probs, n_cand, dim=-1, sorted=True)
+            cumsum = top_probs.cumsum(dim=-1)
+            # Mask tokens beyond the nucleus threshold (keep at least 1)
+            remove = (cumsum - top_probs) >= top_p
+            top_probs[remove] = 0.0
+            return top_indices.gather(-1, torch.multinomial(top_probs, num_samples=1))
+
         return torch.multinomial(probs, num_samples=1)
 
-    # Fallback: optimized PyTorch path (still faster than naive)
+    # Fallback: PyTorch path (no Triton, no top_k — both handled above)
     if temperature != 1.0:
         logits = logits / temperature
 
-    if top_k > 0 and top_k < vocab_size:
-        # Keep only top_k values
-        topk_vals, _ = torch.topk(logits, top_k, dim=-1)
-        threshold = topk_vals[:, -1:].expand_as(logits)
-        logits = logits.where(logits >= threshold, torch.full_like(logits, float("-inf")))
+    probs = torch.softmax(logits, dim=-1)
 
     if top_p < 1.0:
-        sorted_logits, sorted_indices = torch.sort(logits, descending=True, dim=-1)
-        cumulative_probs = torch.softmax(sorted_logits, dim=-1).cumsum(dim=-1)
-        remove_mask = (cumulative_probs - torch.softmax(sorted_logits, dim=-1)) >= top_p
-        sorted_logits[remove_mask] = float("-inf")
-        logits = sorted_logits.scatter(-1, sorted_indices, sorted_logits)
+        n_cand = min(1000, vocab_size)
+        top_probs, top_indices = torch.topk(probs, n_cand, dim=-1, sorted=True)
+        cumsum = top_probs.cumsum(dim=-1)
+        remove = (cumsum - top_probs) >= top_p
+        top_probs[remove] = 0.0
+        return top_indices.gather(-1, torch.multinomial(top_probs, num_samples=1))
 
-    probs = torch.softmax(logits, dim=-1)
     return torch.multinomial(probs, num_samples=1)
 
 

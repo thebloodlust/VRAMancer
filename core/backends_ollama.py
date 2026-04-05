@@ -107,7 +107,7 @@ class OllamaBackend(BaseLLMBackend):
             return
         try:
             import requests
-            resp = requests.post(
+            with requests.post(
                 f"{self._base_url}/api/generate",
                 json={
                     "model": self.model,
@@ -123,20 +123,20 @@ class OllamaBackend(BaseLLMBackend):
                 },
                 timeout=120,
                 stream=True,
-            )
-            import json as _json
-            for line in resp.iter_lines():
-                if not line:
-                    continue
-                try:
-                    chunk = _json.loads(line)
-                    token = chunk.get("response", "")
-                    if token:
-                        yield token
-                    if chunk.get("done", False):
-                        break
-                except _json.JSONDecodeError:
-                    continue
+            ) as resp:
+                import json as _json
+                for line in resp.iter_lines():
+                    if not line:
+                        continue
+                    try:
+                        chunk = _json.loads(line)
+                        token = chunk.get("response", "")
+                        if token:
+                            yield token
+                        if chunk.get("done", False):
+                            break
+                    except _json.JSONDecodeError:
+                        continue
         except Exception as e:
             self.log.error(f"Ollama stream failed: {e}")
             raise

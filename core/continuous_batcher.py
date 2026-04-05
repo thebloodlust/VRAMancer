@@ -298,22 +298,24 @@ class ContinuousBatcher:
                     to_prepare = self._waiting[:slots]
                     self._waiting = self._waiting[slots:]
 
-            # Phase 1b: Tokenize OUTSIDE lock — parallel via thread pool
-            if len(to_prepare) > 1 and self._tokenizer_pool is not None:
-                futures_map = {
-                    self._tokenizer_pool.submit(self._prepare_request, req): req
-                    for req in to_prepare
-                }
-                for fut in futures_map:
-                    req = futures_map[fut]
-                    try:
-                        fut.result()
-                        req.status = RequestStatus.ACTIVE
-                    except Exception as e:
-                        req.status = RequestStatus.ERROR
-                        if req.future and not req.future.done():
-                            req.future.set_exception(e)
-            else:
+            # Phase 1b: Tokenize OUTSIDE lock — batch tokenization reduces GIL overhead
+            # Instead of N individual tokenizer calls (each acquiring GIL), batch them
+            # into a single call when the tokenizer supports it.
+            if to_prepare and self.tokenizer is not None:
+                try:
+                    self._batch_prepare_requests(to_prepare)
+                except Exception:
+                    # Fallback to sequential if batch fails
+                    for req in to_prepare:
+                        if req.status == RequestStatus.WAITING:
+                            try:
+                                self._prepare_request(req)
+                                req.status = RequestStatus.ACTIVE
+                            except Exception as e:
+                                req.status = RequestStatus.ERROR
+                                if req.future and not req.future.done():
+                                    req.future.set_exception(e)
+            elif to_prepare:
                 for req in to_prepare:
                     try:
                         self._prepare_request(req)
@@ -355,6 +357,99 @@ class ContinuousBatcher:
 
             # Yield CPU — adaptive sleep based on load
             time.sleep(0.0001)  # busy
+
+    def _batch_prepare_requests(self, requests: List[InferenceRequest]) -> None:
+        """Batch-tokenize all prompts in a single call to minimize GIL overhead.
+
+        Strategy cascade:
+        1. HF tokenizer batch call (tokenizers Rust backend, GIL released internally)
+        2. Rust vramancer_rust.batch_tokenize_fast() — full GIL bypass, basic tokenizer
+        3. Sequential Python fallback (BasicTokenizer, holds GIL)
+        """
+        prompts = [req.prompt for req in requests]
+
+        batch_ids = None
+        batch_mask = None
+        rust_ids = None
+
+        # Strategy 1: HF tokenizer batch call
+        try:
+            batch_tokens = self.tokenizer(prompts, return_tensors="pt", padding=True)
+            batch_ids = batch_tokens["input_ids"]
+            batch_mask = batch_tokens.get("attention_mask")
+        except Exception:
+            pass
+
+        # Strategy 2: Rust GIL-free tokenizer (when HF batch fails or tokenizer is non-HF)
+        if batch_ids is None:
+            try:
+                import vramancer_rust
+                if hasattr(vramancer_rust, 'batch_tokenize_fast'):
+                    rust_ids = vramancer_rust.batch_tokenize_fast(prompts)
+                    _logger.debug("Using Rust GIL-free tokenizer for %d prompts", len(prompts))
+            except Exception:
+                pass
+
+        # Strategy 3: sequential fallback
+        if batch_ids is None and rust_ids is None:
+            for req in requests:
+                self._prepare_request(req)
+                req.status = RequestStatus.ACTIVE
+            return
+
+        for i, req in enumerate(requests):
+            try:
+                if batch_ids is not None:
+                    # HF path: extract from padded tensor
+                    if batch_mask is not None:
+                        mask = batch_mask[i]
+                        valid_len = mask.sum().item()
+                        req.input_ids = batch_ids[i:i+1, :valid_len]
+                    else:
+                        req.input_ids = batch_ids[i:i+1]
+                elif rust_ids is not None:
+                    # Rust path: convert list to tensor
+                    if _TORCH:
+                        import torch
+                        req.input_ids = torch.tensor([rust_ids[i]], dtype=torch.long)
+                    else:
+                        req.input_ids = None
+                        req.generated_ids = None
+                        req.status = RequestStatus.ACTIVE
+                        continue
+
+                if req.input_ids is not None:
+                    req.generated_ids = req.input_ids.clone()
+                else:
+                    req.generated_ids = None
+
+                if _TORCH and self._device != "cpu":
+                    try:
+                        req.input_ids = req.input_ids.to(self._device)
+                        req.generated_ids = req.generated_ids.to(self._device)
+                    except Exception:
+                        pass
+
+                # Paged attention: allocate pages + try prefix cache
+                if self.paged_kv:
+                    try:
+                        token_list = req.input_ids[0].tolist()
+                        hits = self.paged_kv.try_prefix_cache(req.request_id, token_list)
+                        if hits > 0:
+                            kv = self.paged_kv.to_hf_cache(req.request_id)
+                            if kv is not None:
+                                req.kv_cache = kv
+                        else:
+                            self.paged_kv.allocate(req.request_id)
+                    except Exception as e:
+                        _logger.debug("Paged KV setup failed for %s: %s",
+                                      req.request_id, e)
+
+                req.status = RequestStatus.ACTIVE
+            except Exception as e:
+                req.status = RequestStatus.ERROR
+                if req.future and not req.future.done():
+                    req.future.set_exception(e)
 
     def _prepare_request(self, req: InferenceRequest) -> None:
         """Tokenize prompt and prepare initial state."""

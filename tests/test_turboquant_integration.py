@@ -130,6 +130,7 @@ class TestPagedKVCacheTurboQuant:
         value = torch.randn(2, 64)
         manager.write_kv("req1", layer_idx=0, page_id=page_id, slot=slot,
                          key=key, value=value)
+        manager.flush_compression()
 
         # Check compressed sidecar
         assert page_id in manager._compressed_pages
@@ -167,6 +168,7 @@ class TestPagedKVCacheTurboQuant:
             key = torch.randn(2, 64)
             value = torch.randn(2, 64)
             manager.write_kv("req_attn", 0, page_id, slot, key, value)
+        manager.flush_compression()
 
         # Query
         query = torch.randn(2, 64)  # [num_heads, head_dim]
@@ -246,6 +248,7 @@ class TestTurboQuantEdgeCases:
         key = torch.randn(1, 96)
         value = torch.randn(1, 96)
         mgr.write_kv("edge1", 0, page_id, slot, key, value)
+        mgr.flush_compression()
         assert f"s{slot}" in mgr._compressed_pages[page_id][0]
 
     def test_multiple_layers_compressed(self):
@@ -265,6 +268,7 @@ class TestTurboQuantEdgeCases:
             key = torch.randn(2, 64)
             value = torch.randn(2, 64)
             mgr.write_kv("multi", layer, page_id, slot, key, value)
+        mgr.flush_compression()
 
         # All 4 layers should have compressed data
         for layer in range(4):
@@ -284,6 +288,7 @@ class TestTurboQuantEdgeCases:
         page_id, slot = result
         mgr.write_kv("tofree", 0, page_id, slot,
                       torch.randn(1, 64), torch.randn(1, 64))
+        mgr.flush_compression()
 
         freed = mgr.free("tofree")
         assert freed >= 1
@@ -346,6 +351,7 @@ class TestSparseVIntegration:
             page_id, slot = result
             mgr.write_kv("sparse_req", 0, page_id, slot,
                           torch.randn(2, 64), torch.randn(2, 64))
+        mgr.flush_compression()
 
         query = torch.randn(2, 64)
         result = mgr.compute_attention_turbo(query, "sparse_req", 0)
@@ -369,6 +375,7 @@ class TestSparseVIntegration:
                 page_id, slot = mgr.append_token("test_shape")
                 mgr.write_kv("test_shape", 0, page_id, slot,
                               torch.randn(1, 64), torch.randn(1, 64))
+            mgr.flush_compression()
             result = mgr.compute_attention_turbo(torch.randn(1, 64), "test_shape", 0)
             assert result is not None
             assert result.shape == (1, 64)

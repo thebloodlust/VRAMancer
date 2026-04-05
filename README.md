@@ -43,12 +43,140 @@ Full benchmark details: [benchmarks/BENCHMARK_RESULTS.md](benchmarks/BENCHMARK_R
 ## Install
 
 ```bash
-git clone https://github.com/vramancer/VRAMancer.git
+git clone https://github.com/thebloodlust/VRAMancer.git
 cd VRAMancer
-pip install -r requirements.txt
+pip install -e .
 ```
 
-Requires Python 3.10+, PyTorch 2.1+, CUDA (or ROCm/MPS).
+Requires Python 3.10+, PyTorch 2.1+.
+
+### Platform-specific setup
+
+<details>
+<summary><strong>Linux + NVIDIA GPU (CUDA)</strong></summary>
+
+```bash
+git clone https://github.com/thebloodlust/VRAMancer.git
+cd VRAMancer
+python -m venv .venv && source .venv/bin/activate
+
+# PyTorch with CUDA 12.8
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+
+# VRAMancer + dependencies
+pip install -e .
+pip install -r requirements.txt
+
+# Verify
+python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}, GPUs: {torch.cuda.device_count()}')"
+vramancer status
+```
+
+**Optional backends:**
+```bash
+pip install llama-cpp-python    # GGUF models (fastest, 106 tok/s)
+pip install bitsandbytes        # NF4/INT8 quantization
+pip install vllm                # Batched serving
+```
+
+**Multi-GPU test (e.g. RTX 3090 + RTX 5070 Ti):**
+```bash
+# Model that doesn't fit on a single GPU
+vramancer run Qwen/Qwen2.5-14B-Instruct
+
+# With quantization (fits single GPU)
+vramancer run Qwen/Qwen2.5-14B-Instruct -q nf4
+```
+
+</details>
+
+<details>
+<summary><strong>macOS Apple Silicon (M1/M2/M3/M4)</strong></summary>
+
+```bash
+git clone https://github.com/thebloodlust/VRAMancer.git
+cd VRAMancer
+python3 -m venv .venv && source .venv/bin/activate
+
+# PyTorch with MPS support (included by default on macOS)
+pip install torch torchvision
+
+# VRAMancer + dependencies
+pip install -e .
+pip install -r requirements-lite.txt
+
+# Verify MPS backend
+python -c "import torch; print(f'MPS: {torch.backends.mps.is_available()}')"
+vramancer status
+```
+
+**Run the MPS test suite:**
+```bash
+python scripts/test_mps_mac.py
+```
+
+This tests:
+- MPS backend detection (`detect_backend()` returns `mps`)
+- GPT-2 124M inference on MPS
+- TinyLlama 1.1B inference on MPS (~4 GB unified memory)
+- Full stub test suite (957 tests)
+
+**Run models:**
+```bash
+# Small models (16 GB unified memory)
+vramancer run gpt2
+vramancer run TinyLlama/TinyLlama-1.1B-Chat-v1.0
+
+# GGUF recommended for larger models on Mac
+pip install llama-cpp-python
+vramancer run bartowski/Qwen2.5-7B-Instruct-GGUF
+```
+
+</details>
+
+<details>
+<summary><strong>Windows + NVIDIA GPU</strong></summary>
+
+```bash
+git clone https://github.com/thebloodlust/VRAMancer.git
+cd VRAMancer
+python -m venv .venv && .venv\Scripts\activate
+
+# PyTorch with CUDA 12.8
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+
+# VRAMancer + dependencies
+pip install -e .
+pip install -r requirements-windows.txt
+
+# Verify
+python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}')"
+vramancer status
+```
+
+</details>
+
+### RTX 4060 (8 GB) benchmark
+
+For smaller GPUs like the RTX 4060 8 GB:
+
+```bash
+# Run the benchmark script
+python scripts/bench_rtx4060.py
+```
+
+Tests GPT-2 FP16, TinyLlama 1.1B FP16, Qwen2.5-7B NF4 (~5 GB), and GGUF via llama.cpp.
+
+### Network / multi-node testing
+
+To test cluster discovery and AITP protocol across machines on the same LAN:
+
+```bash
+# Run on EACH machine simultaneously
+python scripts/test_network_lan.py
+```
+
+Tests mDNS + UDP broadcast discovery, AITP protocol (UDP + HMAC-SHA256 + FEC), peer heartbeat sensing, and TCP connectivity between nodes.
 
 ## Usage
 

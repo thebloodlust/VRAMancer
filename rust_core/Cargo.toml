@@ -28,6 +28,9 @@ cudarc = { version = "0.11", features = ["cuda-12000"], optional = true }
 # FFI directe vers libcuda.so pour les transferts GPU natifs
 libloading = { version = "0.8", optional = true }
 
+# Lazy static pour le vocabulaire du tokenizer
+once_cell = "1.19"
+
 [features]
 default = []
 cuda = ["cudarc", "libloading"]

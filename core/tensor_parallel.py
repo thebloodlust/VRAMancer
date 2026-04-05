@@ -44,6 +44,26 @@ except ImportError:
 # All-reduce primitive
 # ---------------------------------------------------------------------------
 
+def _apply_rotary_pos_emb(x: Any, cos: Any, sin: Any) -> Any:
+    """Apply Rotary Position Embedding (RoPE) to query or key tensor.
+
+    x: (batch, heads, seq_len, head_dim)
+    cos, sin: (1, 1, seq_len, head_dim) or broadcastable
+    """
+    # Ensure cos/sin are broadcastable to x shape
+    if cos.dim() == 2:  # (seq_len, head_dim)
+        cos = cos.unsqueeze(0).unsqueeze(0)
+        sin = sin.unsqueeze(0).unsqueeze(0)
+    elif cos.dim() == 3:  # (1, seq_len, head_dim)
+        cos = cos.unsqueeze(1)
+        sin = sin.unsqueeze(1)
+    # Rotate half: split into two halves and apply rotation
+    x1 = x[..., : x.shape[-1] // 2]
+    x2 = x[..., x.shape[-1] // 2 :]
+    rotated = torch.cat((-x2, x1), dim=-1)
+    return (x * cos) + (rotated * sin)
+
+
 def _nccl_all_reduce(tensors: List[Any]) -> None:
     """In-place NCCL all-reduce sum (single-process, multi-GPU)."""
     try:
@@ -247,6 +267,7 @@ class TPAttention(nn.Module):
 
     def forward(self, hidden_states: Any, **kwargs) -> Any:
         """Parallel attention across all GPUs + all-reduce."""
+        position_embeddings = kwargs.get("position_embeddings")
         partials = []
         for i, dev in enumerate(self.devices):
             h = hidden_states.to(dev, non_blocking=True)
@@ -260,6 +281,14 @@ class TPAttention(nn.Module):
             kv_heads = self.kv_heads_per_shard
             k = k.view(bsz, seq_len, kv_heads, self.head_dim).transpose(1, 2)
             v = v.view(bsz, seq_len, kv_heads, self.head_dim).transpose(1, 2)
+
+            # Apply rotary position embeddings (RoPE) for Llama/Qwen/Mistral
+            if position_embeddings is not None and self.arch != "gpt2":
+                cos, sin = position_embeddings
+                cos = cos.to(dev)
+                sin = sin.to(dev)
+                q = _apply_rotary_pos_emb(q, cos, sin)
+                k = _apply_rotary_pos_emb(k, cos, sin)
 
             # GQA expand — handle non-divisible head counts
             if kv_heads < self.heads_per_shard:
@@ -398,7 +427,13 @@ class TPTransformerBlock(nn.Module):
         # Pre-norm attention
         residual = h
         h = self.ln_1(h)
-        h = self.tp_attn(h, **kwargs)
+        # Forward position info to attention (critical for Llama/Qwen RoPE)
+        attn_kwargs = {}
+        for k in ("position_ids", "position_embeddings", "attention_mask",
+                   "past_key_value", "cache_position"):
+            if k in kwargs:
+                attn_kwargs[k] = kwargs[k]
+        h = self.tp_attn(h, **attn_kwargs)
         h = residual + h.to(self.primary)
 
         # Pre-norm MLP
@@ -479,18 +514,36 @@ class TPModel(nn.Module):
         **kwargs,
     ) -> Any:
         device = self.primary
+        input_ids = input_ids.to(device)
+        seq_len = input_ids.shape[1]
 
         # Embedding
-        h = self.embed(input_ids.to(device))
+        h = self.embed(input_ids)
         if self.pos_embed is not None:
-            seq_len = input_ids.shape[1]
+            # GPT-2: absolute position embeddings
             if position_ids is None:
                 position_ids = torch.arange(seq_len, device=device).unsqueeze(0)
             h = h + self.pos_embed(position_ids.to(device))
 
+        # Compute rotary position embeddings for Llama/Qwen/Mistral
+        position_embeddings = None
+        if self.rotary_emb is not None:
+            if position_ids is None:
+                position_ids = torch.arange(seq_len, device=device).unsqueeze(0)
+            position_embeddings = self.rotary_emb(h, position_ids.to(device))
+
+        # Build kwargs to pass through to each layer
+        layer_kwargs = {}
+        if position_ids is not None:
+            layer_kwargs["position_ids"] = position_ids.to(device)
+        if position_embeddings is not None:
+            layer_kwargs["position_embeddings"] = position_embeddings
+        if attention_mask is not None:
+            layer_kwargs["attention_mask"] = attention_mask.to(device)
+
         # Transformer layers
         for layer in self.tp_layers:
-            h = layer(h)
+            h = layer(h, **layer_kwargs)
 
         # Final norm + LM head
         h = self.final_norm(h)
@@ -502,9 +555,12 @@ class TPModel(nn.Module):
         """Simple greedy generation loop for TP model."""
         device = self.primary
         generated = input_ids.to(device)
+        seq_len = generated.shape[1]
 
-        for _ in range(max_new_tokens):
-            logits = self.forward(generated[:, -1:])
+        for step in range(max_new_tokens):
+            # Pass full sequence with correct position_ids
+            pos_ids = torch.arange(generated.shape[1], device=device).unsqueeze(0)
+            logits = self.forward(generated, position_ids=pos_ids)
             next_token = logits[:, -1, :].argmax(dim=-1, keepdim=True)
             generated = torch.cat([generated, next_token], dim=1)
 

@@ -49,6 +49,69 @@ except ImportError:
     _fused_sample = None
     _HAS_FUSED_SAMPLE = False
 
+try:
+    from core.triton_fused_rmsnorm import patch_rmsnorm
+    _HAS_FUSED_RMSNORM = True
+except ImportError:
+    _HAS_FUSED_RMSNORM = False
+
+try:
+    from core.triton_fused_rope import patch_rope
+    _HAS_FUSED_ROPE = True
+except ImportError:
+    _HAS_FUSED_ROPE = False
+
+# ── GQA-native SDPA optimization ─────────────────────────────────
+# When the model uses GQA (num_kv_heads < num_heads), transformers
+# calls repeat_kv() to expand K/V before SDPA. This is a wasteful
+# copy (2 × ~37μs × num_layers). PyTorch's cuDNN SDPA backend
+# handles GQA natively via enable_gqa=True, eliminating the copy.
+_GQA_PATCHED = False
+
+
+def _enable_cudnn_gqa():
+    """Monkey-patch transformers to use cuDNN GQA-native SDPA.
+
+    Forces enable_gqa=True (skip repeat_kv) and cuDNN-only backend
+    (the only backend supporting GQA + attention mask efficiently).
+    """
+    global _GQA_PATCHED
+    if _GQA_PATCHED or not _HAS_TORCH:
+        return False
+    try:
+        import transformers.integrations.sdpa_attention as _sdpa_mod
+        _sdpa_mod.use_gqa_in_sdpa = lambda *args, **kwargs: True
+        torch.backends.cuda.enable_cudnn_sdp(True)
+        torch.backends.cuda.enable_flash_sdp(False)
+        torch.backends.cuda.enable_mem_efficient_sdp(False)
+        torch.backends.cuda.enable_math_sdp(False)
+        _GQA_PATCHED = True
+        logger.info("GQA-native cuDNN SDPA enabled (repeat_kv bypassed)")
+        return True
+    except Exception as e:
+        logger.debug("GQA cuDNN patch skipped: %s", e)
+        return False
+
+
+def _disable_cudnn_gqa():
+    """Restore default SDPA backend selection."""
+    global _GQA_PATCHED
+    if not _GQA_PATCHED or not _HAS_TORCH:
+        return
+    try:
+        import transformers.integrations.sdpa_attention as _sdpa_mod
+        from transformers.integrations.sdpa_attention import (
+            use_gqa_in_sdpa as _orig_use_gqa,
+        )
+        # Can't easily restore original — just re-enable all backends
+        torch.backends.cuda.enable_cudnn_sdp(True)
+        torch.backends.cuda.enable_flash_sdp(True)
+        torch.backends.cuda.enable_mem_efficient_sdp(True)
+        torch.backends.cuda.enable_math_sdp(True)
+        _GQA_PATCHED = False
+    except Exception:
+        pass
+
 
 class StaticKVCache:
     """CUDA-Graph-safe KV cache with pre-allocated contiguous buffers.
@@ -150,16 +213,20 @@ class TurboForward(nn.Module):
         self,
         input_ids: "torch.Tensor",
         past_key_values=None,
+        cache_position=None,
     ) -> Tuple["torch.Tensor", Any]:
         """Minimal forward: model body → lm_head on last token only.
 
         Returns (logits_last_token, new_past_key_values).
         """
-        out = self.inner(
+        kwargs = dict(
             input_ids=input_ids,
             past_key_values=past_key_values,
             use_cache=True,
         )
+        if cache_position is not None:
+            kwargs["cache_position"] = cache_position
+        out = self.inner(**kwargs)
         h = out.last_hidden_state
         past = out.past_key_values
         # Only compute logits for last token (decode optimization)
@@ -207,6 +274,7 @@ class TurboEngine:
         device: str = "cuda:0",
         max_seq_len: int = 2048,
         compile: bool = True,
+        cuda_graph: bool = False,
     ):
         if not _HAS_TORCH:
             raise RuntimeError("torch required for TurboEngine")
@@ -228,6 +296,58 @@ class TurboEngine:
 
         # Detect dtype from model
         self.dtype = next(model.parameters()).dtype
+
+        # ── FP4 lm_head optimization ─────────────────────────────
+        # If on Blackwell and lm_head is BF16, quantize to FP4 for
+        # decode GEMV: saves ~1.4ms/step (1.9ms → ~0.5ms).
+        # Quantize on CPU first (lm_head is 152K×5120, float32
+        # intermediate would OOM on GPU), then move to GPU.
+        self._lm_head_fp4 = False
+        if self.device.type == "cuda":
+            try:
+                from core.nvfp4_direct import DirectFP4Linear
+                cc = torch.cuda.get_device_capability(self.device)
+                if cc[0] >= 10 and isinstance(model.lm_head, DirectFP4Linear):
+                    # Already converted (e.g. by backend's TurboEngine)
+                    self._lm_head_fp4 = True
+                elif cc[0] >= 10 and isinstance(model.lm_head, torch.nn.Linear):
+                    # Move lm_head to CPU for quantization (avoids OOM)
+                    cpu_head = model.lm_head.cpu()
+                    fp4_head = DirectFP4Linear.from_linear(cpu_head)
+                    fp4_head = fp4_head.to(self.device)
+                    fp4_head._init_views()
+                    model.lm_head = fp4_head
+                    self._lm_head_fp4 = True
+                    logger.info(
+                        "TurboEngine: lm_head quantized to FP4 GEMV "
+                        "(%d×%d, saving ~1.4ms/step)",
+                        fp4_head.out_features, fp4_head.in_features,
+                    )
+            except Exception as e:
+                logger.debug("TurboEngine: lm_head FP4 skipped: %s", e)
+
+        # ── Fused RMSNorm (Triton) ──────────────────────────────
+        self._fused_rmsnorm = 0
+        if _HAS_FUSED_RMSNORM and self.device.type == "cuda":
+            try:
+                self._fused_rmsnorm = patch_rmsnorm(model)
+                if self._fused_rmsnorm > 0:
+                    logger.info(
+                        "TurboEngine: %d RMSNorm layers fused (Triton)",
+                        self._fused_rmsnorm,
+                    )
+            except Exception as e:
+                logger.debug("TurboEngine: fused RMSNorm skipped: %s", e)
+
+        # ── Fused RoPE (Triton) ─────────────────────────────────
+        self._fused_rope = False
+        if _HAS_FUSED_ROPE and self.device.type == "cuda":
+            try:
+                self._fused_rope = patch_rope(model)
+                if self._fused_rope:
+                    logger.info("TurboEngine: RoPE fused (Triton)")
+            except Exception as e:
+                logger.debug("TurboEngine: fused RoPE skipped: %s", e)
 
         # Build turbo forward module
         self.turbo_fwd = TurboForward(model)
@@ -256,12 +376,101 @@ class TurboEngine:
         # KV cache (DynamicCache, reset per generation)
         self._past = None
 
+        # ── CUDA Graph decode ───────────────────────────────────
+        self._use_cuda_graph = cuda_graph
+        self._decode_graph = None      # torch.cuda.CUDAGraph
+        self._graph_static_tok = None  # static input [1,1]
+        self._graph_static_pos = None  # static cache_position [1]
+        self._graph_static_logits = None  # static output logits
+        self._static_cache = None      # transformers.StaticCache
+        self._seq_pos = 0              # current position in sequence
+        self._graph_captured = False
+        self._graph_static_next_tok = None  # fused argmax output
+
+        if self._use_cuda_graph:
+            self._init_static_cache()
+
+        # ── GQA-native cuDNN SDPA ───────────────────────────────
+        # If model uses GQA (num_kv_heads < num_heads), enable cuDNN
+        # native GQA which eliminates the repeat_kv copy entirely.
+        n_heads = cfg.num_attention_heads
+        self._gqa_enabled = False
+        if self.n_kv_heads < n_heads and self.device.type == "cuda":
+            self._gqa_enabled = _enable_cudnn_gqa()
+
         logger.info(
             "TurboEngine initialized: %d layers, %d KV heads, "
-            "head_dim=%d, max_seq=%d, dtype=%s, device=%s, compiled=%s",
+            "head_dim=%d, max_seq=%d, dtype=%s, device=%s, "
+            "compiled=%s, cuda_graph=%s",
             self.n_layers, self.n_kv_heads, self.head_dim,
-            max_seq_len, self.dtype, self.device, self._compiled,
+            max_seq_len, self.dtype, self.device,
+            self._compiled, self._use_cuda_graph,
         )
+
+    def _init_static_cache(self):
+        """Create StaticCache for CUDA-Graph-compatible decode."""
+        try:
+            from transformers import StaticCache
+            self._static_cache = StaticCache(
+                config=self.model.config,
+                max_batch_size=1,
+                max_cache_len=self.max_seq_len,
+                device=self.device,
+                dtype=torch.bfloat16,
+            )
+            logger.info(
+                "StaticCache allocated: max_len=%d, device=%s",
+                self.max_seq_len, self.device,
+            )
+        except Exception as e:
+            logger.warning(
+                "StaticCache init failed (%s), disabling CUDA Graph", e
+            )
+            self._use_cuda_graph = False
+
+    def _capture_decode_graph(self):
+        """Capture the decode step as a replayable CUDA Graph.
+
+        After capture, every decode call replays the graph with zero
+        kernel-launch overhead (~800+ launches eliminated per token).
+        """
+        logger.info("Capturing CUDA decode graph (seq_pos=%d)...", self._seq_pos)
+
+        # Static buffers — same memory addresses across all replays
+        self._graph_static_tok = torch.zeros(
+            1, 1, dtype=torch.long, device=self.device
+        )
+        self._graph_static_pos = torch.tensor(
+            [self._seq_pos], dtype=torch.long, device=self.device
+        )
+
+        # Warmup in side-stream (forces all lazy GPU allocations)
+        s = torch.cuda.Stream(device=self.device)
+        torch.cuda.synchronize(self.device)
+        with torch.cuda.stream(s):
+            for _ in range(3):
+                self.turbo_fwd(
+                    self._graph_static_tok,
+                    past_key_values=self._static_cache,
+                    cache_position=self._graph_static_pos,
+                )
+        torch.cuda.current_stream(self.device).wait_stream(s)
+        torch.cuda.synchronize(self.device)
+
+        # Capture
+        self._decode_graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(self._decode_graph):
+            logits, _ = self.turbo_fwd(
+                self._graph_static_tok,
+                past_key_values=self._static_cache,
+                cache_position=self._graph_static_pos,
+            )
+            self._graph_static_logits = logits
+            # Fuse greedy argmax — zero overhead on replay
+            self._graph_static_next_tok = logits.argmax(dim=-1)
+
+        self._graph_captured = True
+        logger.info("CUDA decode graph captured")
 
     def warmup(self, prompt: str = "Hello", n_tokens: int = 10, rounds: int = 3):
         """Warmup: trigger torch.compile JIT compilation.
@@ -269,26 +478,128 @@ class TurboEngine:
         Call this once after initialization. First call is slow (compilation),
         subsequent calls are fast.
         """
-        if self._compiled:
-            logger.info("TurboEngine: warming up (JIT compilation)...")
+        if self._compiled or self._use_cuda_graph:
+            logger.info("TurboEngine: warming up...")
         for _ in range(rounds):
             self.generate(prompt, max_new_tokens=n_tokens)
             if _HAS_TORCH:
                 torch.cuda.synchronize(self.device)
-        if self._compiled:
+        if self._compiled or self._use_cuda_graph:
             logger.info("TurboEngine: warmup complete")
 
     @torch.no_grad()
     def _prefill(self, input_ids: "torch.Tensor") -> "torch.Tensor":
         """Process the prompt (prefill phase). Returns logits for last token."""
+        if self._use_cuda_graph and self._static_cache is not None:
+            # Reset StaticCache + decode graph for new generation
+            self._static_cache.reset()
+            self._graph_captured = False
+            self._decode_graph = None
+            self._seq_pos = input_ids.shape[1]
+            cache_pos = torch.arange(
+                input_ids.shape[1], device=self.device, dtype=torch.long
+            )
+            logits, _ = self.turbo_fwd(
+                input_ids,
+                past_key_values=self._static_cache,
+                cache_position=cache_pos,
+            )
+            return logits
+
         logits, self._past = self.turbo_fwd(input_ids, past_key_values=None)
         return logits
 
     @torch.no_grad()
     def _decode_step(self, token: "torch.Tensor") -> "torch.Tensor":
         """Decode a single token. Returns logits for next token."""
+        # ── CUDA Graph replay (zero overhead) ──
+        if self._use_cuda_graph and self._graph_captured:
+            self._graph_static_tok.copy_(token)
+            self._graph_static_pos.fill_(self._seq_pos)
+            self._decode_graph.replay()
+            self._seq_pos += 1
+            return self._graph_static_logits.clone()
+
+        # ── StaticCache eager (first decode, before graph capture) ──
+        if self._use_cuda_graph and self._static_cache is not None:
+            cache_pos = torch.tensor(
+                [self._seq_pos], dtype=torch.long, device=self.device
+            )
+            logits, _ = self.turbo_fwd(
+                token,
+                past_key_values=self._static_cache,
+                cache_position=cache_pos,
+            )
+            self._seq_pos += 1
+            # Capture graph after first eager decode step
+            try:
+                self._capture_decode_graph()
+            except Exception as e:
+                logger.warning("CUDA Graph capture failed (%s), using eager", e)
+                self._use_cuda_graph = False
+            return logits
+
+        # ── DynamicCache path (no CUDA Graph) ──
         logits, self._past = self.turbo_fwd(token, past_key_values=self._past)
         return logits
+
+    @torch.no_grad()
+    def _continue_graph_greedy(self, tokens_so_far, prompt_len, max_new_tokens):
+        """Continue greedy decode with zero-sync CUDA Graph replay.
+
+        Eliminates all CPU-GPU synchronization per token:
+        - No .item() (no GPU->CPU sync)
+        - No .clone() (no allocation per token)
+        - Argmax fused into graph (no extra kernel launch)
+        - Token feedback is D2D (GPU->GPU copy)
+        EOS checked in batches every 16 tokens.
+        """
+        remaining = max_new_tokens - len(tokens_so_far)
+        if remaining <= 0:
+            return self.tokenizer.decode(tokens_so_far, skip_special_tokens=True)
+
+        # Pre-allocate output on GPU
+        out = torch.empty(remaining, dtype=torch.long, device=self.device)
+        n = 0
+        eos_id = self.eos_token_id
+        EOS_BATCH = 16
+
+        # Seed: last CPU token -> GPU input buffer (one-time transfer)
+        self._graph_static_tok[0, 0] = tokens_so_far[-1]
+
+        for step in range(remaining):
+            if self._seq_pos >= self.max_seq_len - 1:
+                break
+
+            self._graph_static_pos.fill_(self._seq_pos)
+            self._decode_graph.replay()
+            self._seq_pos += 1
+
+            # D2D: store output + feed back as next input
+            out[step] = self._graph_static_next_tok
+            self._graph_static_tok[0, 0] = self._graph_static_next_tok
+            n = step + 1
+
+            # Batch EOS check (CPU sync only every N tokens)
+            if eos_id is not None and n % EOS_BATCH == 0:
+                chunk = out[n - EOS_BATCH:n]
+                if (chunk == eos_id).any().item():
+                    pos = (chunk == eos_id).nonzero(as_tuple=True)[0][0].item()
+                    n = n - EOS_BATCH + pos + 1
+                    break
+
+        # Final EOS check for tail
+        if eos_id is not None and n > 0 and n % EOS_BATCH != 0:
+            tail_start = (n // EOS_BATCH) * EOS_BATCH
+            chunk = out[tail_start:n]
+            if (chunk == eos_id).any().item():
+                pos = (chunk == eos_id).nonzero(as_tuple=True)[0][0].item()
+                n = tail_start + pos + 1
+
+        # Bulk GPU -> CPU transfer
+        new_tokens = out[:n].tolist()
+        tokens_so_far.extend(new_tokens)
+        return self.tokenizer.decode(tokens_so_far, skip_special_tokens=True)
 
     def _sample_token(
         self,
@@ -378,6 +689,14 @@ class TurboEngine:
 
             if self.eos_token_id is not None and tok_id == self.eos_token_id:
                 break
+
+            # After graph capture: switch to zero-sync GPU-only decode
+            if (self._graph_captured
+                    and self._graph_static_next_tok is not None
+                    and not do_sample):
+                return self._continue_graph_greedy(
+                    generated_tokens, prompt_len, max_new_tokens,
+                )
 
         return self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
 
@@ -1062,10 +1381,21 @@ def create_turbo_engine(
     tokenizer,
     transfer_manager=None,
     max_seq_len: int = 2048,
+    compile: bool = True,
+    cuda_graph: bool = False,
 ) -> "TurboEngine | MultiGPUTurboEngine":
     """Create the appropriate TurboEngine for a loaded model.
 
     Auto-detects single vs multi-GPU from the model's device_map.
+
+    Parameters
+    ----------
+    compile : bool
+        Enable torch.compile on the inner model (Inductor fusion).
+    cuda_graph : bool
+        Capture decode step as CUDA Graph (zero kernel-launch overhead).
+        Requires StaticCache. Best for quantized models where torch.compile
+        cannot trace custom ops (e.g. NVFP4).
     """
     if not _HAS_TORCH:
         raise RuntimeError("torch required for TurboEngine")
@@ -1106,4 +1436,6 @@ def create_turbo_engine(
             tokenizer,
             device=device,
             max_seq_len=max_seq_len,
+            compile=compile,
+            cuda_graph=cuda_graph,
         )

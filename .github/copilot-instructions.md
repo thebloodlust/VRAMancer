@@ -43,7 +43,7 @@ VRAMancer est un orchestrateur multi-GPU Python (88 fichiers .py dans core/, ~35
 | `production_api.py` | 2000 | B+ | API Flask OpenAI-compatible. Circuit breaker. SSE streaming. | Queue depth per-process (casse en multi-worker gunicorn). SSE bypass circuit-breaker. |
 | `scheduler.py` | 600 | B+ | SimpleScheduler allocation blocks. forward(), weighted_forward(). | KV-cache non comptabilise. predict_next_layers() = heuristique sequentielle naive. |
 | `monitor.py` | 676 | B+ | GPUMonitor polling reel, thread-safe. ROCm-SMI fallback. | ROCm-SMI non teste sur vrai AMD. GPU index mapping assume torch.cuda = system order. |
-| `continuous_batcher.py` | 1220 | B+ | Continuous batching (vLLM/Orca style). Per-request KV cache. | **Lock tenu pendant tokenizer I/O** — claim "async" est FAUX. Pas de backpressure. |
+| `continuous_batcher.py` | 957 | B+ | Continuous batching (vLLM/Orca style). Per-request KV cache. Batched prefill + chunked prefill. | Lock correctement scope (Phase 1/1b/1c/2/3). Backpressure: max_waiting_queue=256. GIL CPython inhérent. |
 | `layer_profiler.py` | 700 | B+ | Profiling par couche (latence, FLOPS, memoire). DP placement. | Bandwidth PCIe hardcodee 25 GB/s. |
 | `gpu_fault_tolerance.py` | 850 | B+ | State machine HEALTHY->DEGRADED->FAILED->OFFLINE->RECOVERING. | Probe triviale (16x16 tensor). Compteur failures ne decroit pas. |
 | `hetero_config.py` | 580 | B+ | Auto-detection GPU heterogene, VM, P2P, tiers. DB 20+ cartes. | Aucun probleme. |
@@ -56,21 +56,21 @@ VRAMancer est un orchestrateur multi-GPU Python (88 fichiers .py dans core/, ~35
 | `transport_factory.py` | 300 | B | Factory par localite (SAME_GPU/SAME_NODE/SAME_RACK/REMOTE). | Detection topologie = string match node_id (fragile). VTP non cable. |
 | `triton_sampling.py` | 200 | B | Kernel Triton fuse temperature+softmax. | top-k en Python avant kernel. Fallback PyTorch toujours utilise en pratique. |
 | `tracing.py` | 75 | B | OpenTelemetry wrapper. No-op si OTEL absent ou VRM_TRACING != 1. | Aucun probleme. |
-| `tensor_parallel.py` | 500 | B- | TP column/row-parallel + NCCL all-reduce. GPT-2 + Llama. | Fallback CPU casse le gradient. GQA edge cases. Teste que sur GPT-2. |
-| `stream_manager.py` | 544 | B- | Prefetch, swap, eviction. Background monitoring. | Async executor jamais join() on shutdown (thread leak). Eviction LRU ignore importance. |
+| `tensor_parallel.py` | 500 | B | TP column/row-parallel + NCCL all-reduce. GPT-2 + Llama + Qwen. | Fallback CPU casse le gradient. GQA edge cases. Teste GPT-2 + TinyLlama reel 2-GPU (RTX 3090+5070 Ti, logits diff <0.1%). |
+| `stream_manager.py` | 544 | B | Prefetch, swap, eviction. Background monitoring. | ~~Async executor jamais join()~~ **CORRIGE** : `_io_executor.shutdown(wait=True)` + `_monitor_thread.join(timeout=5)` dans `stop_monitoring()`. Eviction LRU ignore importance. |
 | `wake_on_inference.py` | 150 | B | WoL magic packets corrects. | Pas de verification de reveil. |
 
 ### INCOMPLET / EXPERIMENTAL (Grade C) — code present mais lacunaire
 
 | Module | LOC | Grade | Description | Problemes |
 |---|---|---|---|---|
-| `transfer_manager.py` | 1090 | C+ | Transport GPU-to-GPU multi-strategy (0-4). | **Strategy 1.5 (Rust direct_vram_copy) = STUB** — la fonction n'existe pas encore dans vramancer_rust. Seule Strategy 4 (CPU-staged pinned) fonctionne en VM Proxmox. P2P topology cached forever. |
-| `vram_lending.py` | 1000 | C+ | Lending pool cross-GPU avec lease state machine. | **Jamais teste en multi-GPU reel.** Fragmentation possible. Pas de deadlock prevention. |
-| `block_router.py` | 650 | C+ | Routage VRAM-aware. RemoteExecutor. | RemoteExecutor label "zero-copy" = **FAUX** (safetensors serialise). load_block_from_disk() appelle storage_manager inexistant. |
-| `backends_vllm.py` | 220 | C+ | Wrapper vLLM pass-through. | OOM retry divise max_tokens au lieu de batch_size (logique fausse). |
+| `transfer_manager.py` | 1090 | B+ | Transport GPU-to-GPU multi-strategy (0-4). | ~~Strategy 1.5 = STUB~~ **CORRIGE** : `direct_vram_copy()` et `GpuPipeline.transfer()` fonctionnels via PyO3. Teste reel RTX 3090+5070 Ti (CUDA_P2P, 4.2 MB OK). Strategy 4 (CPU-staged pinned) en VM Proxmox. P2P topology cached forever. |
+| `vram_lending.py` | 1000 | B | Lending pool cross-GPU avec lease state machine. | ~~Jamais teste en multi-GPU reel~~ **CORRIGE** : Teste RTX 3090+5070 Ti. register/borrow/reclaim/re-borrow OK. `reclaim()` retourne int (bytes reclaimes). Fragmentation possible. Pas de deadlock prevention. |
+| `block_router.py` | 650 | C+ | Routage VRAM-aware. RemoteExecutor. | RemoteExecutor label "zero-copy" = **FAUX** (safetensors serialise). ~~load_block_from_disk() appelle storage_manager inexistant~~ **CORRIGE** : `load_block_from_disk()` est standalone (`torch.load()`). |
+| `backends_vllm.py` | 220 | B | Wrapper vLLM pass-through. | ~~OOM retry gpu_memory_utilization no-op~~ **CORRIGE** : OOM retry ne touche plus gpu_memory_utilization (no-op sur engine live), halve max_tokens uniquement. |
 | `persistence.py` | 55 | C+ | SQLite CRUD workflows. | Pas de schema versioning. |
 | `memory_balancer.py` | 100 | C+ | Simple LRU per GPU. | Pas de cost model migration. |
-| `backends_ollama.py` | 190 | C | REST bridge sync vers Ollama. | generate_async() = dead code. aiohttp session jamais fermee (resource leak). |
+| `backends_ollama.py` | 190 | B | REST bridge sync vers Ollama. | ~~generate_async() dead code, aiohttp leak~~ **CORRIGE** : aiohttp supprime, sync `requests` uniquement. Streaming via `iter_lines()`. |
 
 ### STUB / DEAD CODE (Grade D) — a supprimer ou reimplementer
 
@@ -85,7 +85,7 @@ VRAMancer est un orchestrateur multi-GPU Python (88 fichiers .py dans core/, ~35
 
 | Module | LOC | Description |
 |---|---|---|
-| `cuda_graph_decode.py` | ~250 | TurboEngine : persistent CUDA Graph decode. StaticKVCache. **Incomplet** — KV update logic tronquee. |
+| `cuda_graph_decode.py` | ~250 | TurboEngine : persistent CUDA Graph decode. StaticKVCache. DynamicCache guard (fallback eager). |
 | `triton_fused_nvfp4_quant.py` | 175 | Fused single-kernel NVFP4 activation quantizer. Triton. |
 | `triton_gemv_nvfp4.py` | ~200 | Triton GEMV LUT kernel pour NVFP4. |
 | `turboquant.py` | shim | Backward-compat shim vers kv_quantizer.py. |
@@ -142,7 +142,7 @@ VRAMancer est un orchestrateur multi-GPU Python (88 fichiers .py dans core/, ~35
 | `validation.py` | 60 | A | Validation prompts + hyperparams. VRM_MAX_PROMPT_LENGTH (defaut 100K). | — |
 | `circuit_breaker.py` | 179 | A- | Circuit Breaker pattern (CLOSED->OPEN->HALF_OPEN). Thread-safe. | Pas distribue (local seulement). |
 | `registry.py` | 185 | B+ | PipelineRegistry singleton thread-safe pour Flask. | ClusterDiscovery auto-start dans __init__() = problematique (broadcast reseau a l'instanciation). |
-| `routes_ops.py` | 321 | B- | Blueprint health/readiness/liveness/GPU/system/nodes. | **CUDA-only** : ignore ROCm/MPS dans detection GPU. |
+| `routes_ops.py` | 321 | B+ | Blueprint health/readiness/liveness/GPU/system/nodes. | ~~CUDA-only~~ **CORRIGE** : supporte ROCm/MPS/XPU via `enumerate_devices()`. |
 | `batch_inference.py` | 310 | D | InferenceBatcher. | **generate_batch_fn jamais fourni** -> fallback TOUJOURS sequentiel. Dead code masque en feature. |
 
 ## core/security/ (4 fichiers)
@@ -194,8 +194,8 @@ VRAMancer est un orchestrateur multi-GPU Python (88 fichiers .py dans core/, ~35
 | Module | Grade | Description | Problemes |
 |---|---|---|---|
 | `dashboard_web.py` | C | Flask web dashboard avec GPU monitoring, model browser, chat UI. | **GPU data hardcodees dans templates.** Dependency fallback logic cassee. Demo-quality. |
-| `cli_dashboard.py` | D+ | Terminal UI refresh GPU/status. | Appelle `/api/pipeline/status` qui n'existe pas dans routes_ops.py. |
-| `launcher.py` | D | Entry point CLI/web. | Importe `launch_cli_dashboard()` qui **n'existe pas**. |
+| `cli_dashboard.py` | B | Terminal UI refresh GPU/status. | ~~`/api/pipeline/status` inexistant~~ **CORRIGE** : endpoint existe dans routes_ops.py. |
+| `launcher.py` | B | Entry point CLI/web. | ~~`launch_cli_dashboard()` inexistant~~ **CORRIGE** : existe via alias dans `dashboard/__init__.py`. |
 | `worker/` | B | matmul.wgsl + worker.js + index.html pour WebGPU compute. | Fonctionnel si navigateur supporte WebGPU. |
 
 ## Variables d'environnement essentielles
@@ -320,25 +320,25 @@ Tests integration (threading/reseau)  : ~30 tests (@pytest.mark.integration)
 ### RED FLAGS (code qui ment)
 
 1. ~~**hierarchical_memory.py**~~ — **CORRIGE** : eviction_cycle() + spill_to_nvme() deplacent reellement les tensors (GPU->CPU->disk via Rust). _tensor_registry tient les vrais torch tensors.
-2. **transfer_manager.py Strategy 1.5** — `vramancer_rust.direct_vram_copy()` **N'EXISTE PAS** dans le crate Rust. Le code Rust a le triple-buffering mais la fonction n'est pas exposee via PyO3.
+2. ~~**transfer_manager.py Strategy 1.5**~~ — **CORRIGE** : `direct_vram_copy()` et `GpuPipeline.transfer()` exposes via PyO3, fonctionnels. Teste reel 2-GPU avril 2026.
 3. **block_router.py RemoteExecutor** — label "zero-copy" = **FAUX** (safetensors serialise).
 4. **software_cxl.cpp** — nom "CXL" = **TROMPEUR** : c'est du file I/O simple (std::ofstream).
-5. **supervision_api.py** — NODES = **100% HARDCODES FAUX** (raspberrypi, jetson fictifs).
+5. ~~**supervision_api.py**~~ — **CORRIGE** : NODES list dynamique (populate via /api/edge/report). Grade C+ reel, 8 tests l'importent.
 6. **batch_inference.py** — `generate_batch_fn` **JAMAIS FOURNI** -> fallback toujours sequentiel.
 7. **backends_webgpu.py** — "Production Ready" = **FAUX**. POC/template.
 8. **aitp_receiver.py XDP** — `socket(44, SOCK_RAW, 0)` — famille 44 invalide, toujours False. Seul UDP marche.
-9. **dashboard/launcher.py** — importe `launch_cli_dashboard()` qui **N'EXISTE PAS**.
+9. ~~**dashboard/launcher.py**~~ — **CORRIGE** : `launch_cli_dashboard()` existe via alias dans `dashboard/__init__.py`.
 10. **placement_engine.py** — `_apply_neuroplasticity_score()` = heuristique pseudo-scientifique non-deterministe.
 
 ### LIMITATIONS REELLES
 
 - **VM Proxmox** : Seule Strategy 4 (CPU-staged pinned) fonctionne. P2P bloque par IOMMU. Overhead VFIO ~10-15%.
-- **continuous_batcher.py** : Lock GIL tenu pendant tokenizer I/O. "Async" est faux.
-- **routes_ops.py** : Detection GPU **CUDA-only** — ignore ROCm/MPS.
+- ~~**continuous_batcher.py** GIL~~ **CORRIGE** : `_batch_prepare_requests()` reecrit avec fallback cascade (HF batch -> Rust `batch_tokenize_fast()` GIL-free -> sequential). GIL transition 1 par batch au lieu de N.
+- ~~**routes_ops.py**~~ **CORRIGE** : Detection GPU supporte ROCm/MPS/XPU, pas CUDA-only.
 - **BnB multi-GPU upstream bug** (accelerate 1.13.0 + BnB 0.49.2 + transformers 5.3.0) : AlignDevicesHook ne gere pas les residual connections cross-device avec couches quantifiees. VRAMancer force single-GPU pour BnB.
 - **transformers 5.3 dtype** bypasse BnB : toujours utiliser torch_dtype=torch.float16 pour loads BnB.
 - **auth_strong.py** : default admin/admin en dev. Changer immediatement en prod.
-- **vram_lending.py** : Design ambitieux, **jamais teste en multi-GPU reel**.
+- ~~**vram_lending.py**~~ **CORRIGE** : Teste avril 2026 sur RTX 3090 + RTX 5070 Ti. register/borrow/reclaim/re-borrow tous fonctionnels.
 - **test_chaos_concurrency.py::test_pipeline_concurrent_load** : Race condition pre-existante. Deselect en CI.
 
 ## Structure fichiers
