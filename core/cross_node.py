@@ -95,27 +95,29 @@ def load_partial_model(model_name: str, start_layer: int, end_layer: int,
     end_layer = min(end_layer, num_layers)
     model_type = getattr(config, "model_type", "")
 
+    # Worker only runs assigned layers — everything else goes to disk
+    # to avoid RAM OOM on machines with limited memory (e.g. 16 GB laptop).
     if model_type in ("llama", "qwen2", "mistral", "gemma", "phi", "phi3"):
         layer_prefix = "model.layers"
         device_map = {
-            "model.embed_tokens": "cpu",
-            "model.norm": "cpu",
-            "model.rotary_emb": "cpu",
-            "lm_head": "cpu",
+            "model.embed_tokens": "disk",
+            "model.norm": "disk",
+            "model.rotary_emb": "disk",
+            "lm_head": "disk",
         }
     elif model_type == "gpt2":
         layer_prefix = "transformer.h"
         device_map = {
-            "transformer.wte": "cpu", "transformer.wpe": "cpu",
-            "transformer.ln_f": "cpu", "transformer.drop": "cpu",
-            "lm_head": "cpu",
+            "transformer.wte": "disk", "transformer.wpe": "disk",
+            "transformer.ln_f": "disk", "transformer.drop": "disk",
+            "lm_head": "disk",
         }
     else:
         raise ValueError(f"Unsupported model_type for partial load: {model_type}")
 
     for i in range(num_layers):
         key = f"{layer_prefix}.{i}"
-        device_map[key] = device if start_layer <= i < end_layer else "cpu"
+        device_map[key] = device if start_layer <= i < end_layer else "disk"
 
     offload_dir = os.path.join(tempfile.gettempdir(), "vramancer_offload")
     os.makedirs(offload_dir, exist_ok=True)
