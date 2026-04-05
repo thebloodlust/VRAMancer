@@ -1,9 +1,28 @@
 
-REM --- Ouvrir les ports VRAMancer (PowerShell ADMIN) ---
+REM ============================================
+REM  ETAPE 1 : Ouvrir cmd en ADMIN
+REM  Clic droit sur cmd > Executer en tant qu'administrateur
+REM ============================================
+
+REM ETAPE 2 : Ouvrir les ports firewall (copie les 2 lignes)
 netsh advfirewall firewall add rule name="VRAMancer Cluster 55555" dir=in action=allow protocol=TCP localport=55555
 netsh advfirewall firewall add rule name="VRAMancer API 5030" dir=in action=allow protocol=TCP localport=5030
 
-netstat -an | findstr "55555 5030"
+REM ETAPE 3 : Verifier que les regles sont ajoutees
+netsh advfirewall firewall show rule name="VRAMancer Cluster 55555"
+netsh advfirewall firewall show rule name="VRAMancer API 5030"
+
+REM ETAPE 4 : Lancer VRAMancer API (dans un NOUVEAU cmd normal, pas admin)
+cd C:\Users\the_b\Downloads\VRAMancer-main\VRAMancer-main
+.venv\Scripts\activate
+set VRM_MINIMAL_TEST=1
+set VRM_DISABLE_RATE_LIMIT=1
+set VRM_TEST_MODE=1
+set VRM_API_TOKEN=testtoken
+python -m core.production_api
+
+REM Ca devrait afficher "Running on http://0.0.0.0:5030"
+REM Ensuite je scanne depuis Ubuntu pour verifier
 
 ============================= test session starts =============================
 platform win32 -- Python 3.12.10, pytest-8.2.0, pluggy-1.6.0 -- C:\Users\the_b\Downloads\VRAMancer-main\VRAMancer-main\.venv\Scripts\python.exe
