@@ -112,6 +112,8 @@ def bench_gguf():
         from core.backends_llamacpp import LlamaCppBackend
     except ImportError:
         print("  llama-cpp-python not installed, SKIP")
+        print("  Install: pip install llama-cpp-python")
+        print("  For CUDA: set CMAKE_ARGS=-DGGML_CUDA=on && pip install llama-cpp-python --no-cache-dir")
         return None
 
     # Use a small GGUF model
