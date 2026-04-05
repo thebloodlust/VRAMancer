@@ -1,28 +1,23 @@
 
 REM ============================================
-REM  ETAPE 1 : Ouvrir cmd en ADMIN
-REM  Clic droit sur cmd > Executer en tant qu'administrateur
+REM  CLUSTER MODE - 5 avril 2026
 REM ============================================
-
-REM ETAPE 2 : Ouvrir les ports firewall (copie les 2 lignes)
-netsh advfirewall firewall add rule name="VRAMancer Cluster 55555" dir=in action=allow protocol=TCP localport=55555
-netsh advfirewall firewall add rule name="VRAMancer API 5030" dir=in action=allow protocol=TCP localport=5030
-
-REM ETAPE 3 : Verifier que les regles sont ajoutees
-netsh advfirewall firewall show rule name="VRAMancer Cluster 55555"
-netsh advfirewall firewall show rule name="VRAMancer API 5030"
-
-REM ETAPE 4 : Lancer VRAMancer API (dans un NOUVEAU cmd normal, pas admin)
+REM
+REM ETAPE 1 : cmd ADMIN - ajouter regle UDP pour cluster discovery
+netsh advfirewall firewall add rule name="VRAMancer Cluster UDP 55555" dir=in action=allow protocol=UDP localport=55555
+REM
+REM ETAPE 2 : ARRETER l'ancien python (Ctrl+C dans le cmd qui tourne)
+REM           Puis relancer avec cluster secret :
+REM
 cd C:\Users\the_b\Downloads\VRAMancer-main\VRAMancer-main
 .venv\Scripts\activate
 set VRM_MINIMAL_TEST=1
 set VRM_DISABLE_RATE_LIMIT=1
 set VRM_TEST_MODE=1
 set VRM_API_TOKEN=testtoken
+set VRM_CLUSTER_SECRET=testtoken
+set VRM_BACKEND_ALLOW_STUB=1
 python -m core.production_api
-
-REM Ca devrait afficher "Running on http://0.0.0.0:5030"
-REM Ensuite je scanne depuis Ubuntu pour verifier
 
 ============================= test session starts =============================
 platform win32 -- Python 3.12.10, pytest-8.2.0, pluggy-1.6.0 -- C:\Users\the_b\Downloads\VRAMancer-main\VRAMancer-main\.venv\Scripts\python.exe
