@@ -1,23 +1,24 @@
-=== CROSS-NODE 14B TEST ===
+=== INSTRUCTIONS WINDOWS - 14B Cross-Node (v2) ===
 
-GPT-2 cross-node: DONE (22 tok/s)
-Now: Qwen2.5-14B across 3 GPUs!
+Le premier essai a planté : le modèle met TOUTES les couches en RAM = OOM.
+Nouveau code met les couches non-GPU sur disque.
 
-ETAPE 1: git pull
-ETAPE 2: relancer l'API (nouveau terminal CMD):
-   cd C:\Users\jerem\VRAMancer
-   .venv\Scripts\activate
-   set VRM_DISABLE_RATE_LIMIT=1
-   set VRM_API_TOKEN=testtoken
-   set VRM_CLUSTER_SECRET=testtoken
-   set VRM_BACKEND_ALLOW_STUB=1
-   python -m core.production_api
+ETAPES :
+1) Fermer le serveur VRAMancer (Ctrl+C)
+2) git pull
+3) Relancer le serveur :
 
-ETAPE 3: charger les layers 40-47 du 14B sur la 4060 (dans un AUTRE terminal CMD):
-   curl -X POST http://localhost:5030/api/worker/load_partial -H "Content-Type: application/json" -H "Authorization: Bearer testtoken" -d "{\"model\": \"Qwen/Qwen2.5-14B\", \"start_layer\": 40, \"end_layer\": 48, \"dtype\": \"bfloat16\"}"
+set VRM_DISABLE_RATE_LIMIT=1
+set VRM_API_TOKEN=testtoken
+set VRM_CLUSTER_SECRET=testtoken
+set VRM_BACKEND_ALLOW_STUB=1
+python -m core.production_api
 
-NOTE: ca va telecharger ~28GB de weights HuggingFace la premiere fois.
-Seules les 8 layers (40-47) iront sur le GPU (~4.5 GB), le reste
-sur CPU. Ca devrait passer meme avec 16GB RAM.
+4) Confirme quand c'est relancé dans le chat
 
-Dis quand c'est pret!
+NOTE: Le chargement du Qwen2.5-14B va d'abord TELECHARGER le modèle (~28 GB).
+Ça peut prendre 10-30 min selon ta connexion.
+Tu verras des barres de progression dans le terminal Windows.
+C'est normal que ça prenne du temps.
+
+On lance le chargement depuis Ubuntu une fois le serveur up.
