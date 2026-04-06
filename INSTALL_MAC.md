@@ -41,6 +41,50 @@ python3 -c "import platform; print(platform.machine())"
 pip install mlx mlx-lm numpy
 ```
 
+### Si les deux Python (x64 et arm64) cohabitent dans le même dossier
+
+macOS peut avoir un binaire universel (fat binary) qui contient les deux architectures. Par défaut il peut choisir x86_64 si le Terminal tourne sous Rosetta.
+
+**Forcer arm64 :**
+```bash
+# Force l'architecture arm64 sur n'importe quel Python
+arch -arm64 python3 -c "import platform; print(platform.machine())"
+# → doit afficher arm64
+
+# Créer le venv en forçant arm64
+arch -arm64 python3 -m venv ~/venv_vrm
+```
+
+**Si `arch -arm64` ne suffit pas**, utilise le chemin complet :
+```bash
+arch -arm64 /Library/Frameworks/Python.framework/Versions/3.14/bin/python3.14 -m venv ~/venv_vrm
+```
+
+**Vérifier que le Terminal lui-même n'est pas en Rosetta :**
+1. Finder → Applications → Utilitaires → Terminal
+2. Clic droit → Lire les informations
+3. **Décocher** "Ouvrir avec Rosetta" si c'est coché
+4. Fermer et rouvrir le Terminal
+
+**Désinstaller le Python x86 (optionnel) :**
+```bash
+# Si c'est un Homebrew x86 (installé sous /usr/local)
+arch -x86_64 /usr/local/bin/brew uninstall python3
+
+# Si c'est un installeur python.org x86 (adapter la version)
+sudo rm -rf /Library/Frameworks/Python.framework/Versions/3.12
+sudo rm -f /usr/local/bin/python3.12 /usr/local/bin/pip3.12
+sudo rm -rf "/Applications/Python 3.12"
+```
+
+**Après désinstallation / fix, vérifier :**
+```bash
+source ~/venv_vrm/bin/activate
+python3 -c "import platform; print(platform.machine())"
+# → DOIT afficher arm64, sinon MLX ne s'installera pas
+pip install mlx mlx-lm numpy
+```
+
 ## Étape 2 : Créer le fichier worker
 
 Créer le fichier `~/mac_worker.py` et coller tout le code ci-dessous :
