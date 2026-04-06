@@ -1,23 +1,25 @@
-=== INSTRUCTIONS WINDOWS - Setup venv + API (v3) ===
+=== INSTRUCTIONS WINDOWS - Cross-node VTP bench ===
 
 1) Ouvrir un CMD dans le dossier VRAMancer
+
 2) git pull
-3) Creer le venv :
 
-python -m venv .venv
-.venv\Scripts\activate
+3) Si le venv existe deja, juste activer :
+   .venv\Scripts\activate
+   
+   Sinon creer le venv :
+   python -m venv .venv
+   .venv\Scripts\activate
+   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+   pip install flask transformers accelerate safetensors requests huggingface_hub sentencepiece protobuf
 
-4) Installer les deps :
-
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
-pip install flask transformers accelerate safetensors requests huggingface_hub sentencepiece protobuf
-
-5) Lancer le serveur :
+4) Lancer le worker VTP (PAS l'API, juste le worker) :
 
 set VRM_DISABLE_RATE_LIMIT=1
 set VRM_API_TOKEN=testtoken
 set VRM_CLUSTER_SECRET=testtoken
 set VRM_BACKEND_ALLOW_STUB=1
-python -m core.production_api
+python -c "from core.cross_node import VTPWorkerServer; s = VTPWorkerServer('0.0.0.0', 18951); s.start(); input('Worker VTP ready on port 18951, press Enter to stop...')"
 
-6) Confirme dans le chat quand le serveur affiche "Running on http://0.0.0.0:5030"
+5) Ca doit afficher "Worker VTP ready on port 18951, press Enter to stop..."
+   Confirme dans le chat quand c'est bon.
