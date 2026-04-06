@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VRAMancer — WebGPU Inference</title>
+    <title>VRAMancer — WebNPU Inference</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -20,6 +20,11 @@
         .header .badge {
             background: #238636; color: #fff; padding: 2px 8px;
             border-radius: 12px; font-size: 11px;
+        }
+        .header .device-badge {
+            background: #1f6feb; padding: 2px 10px;
+            border-radius: 12px; font-size: 11px; color: #fff;
+            transition: background 0.3s;
         }
         .controls {
             padding: 16px 20px; display: flex; gap: 12px;
@@ -87,12 +92,31 @@
             transition: width 0.3s;
             width: 0%;
         }
+        .device-info {
+            background: #161b22; padding: 8px 20px;
+            font-size: 11px; border-bottom: 1px solid #21262d;
+            color: #8b949e;
+        }
+        .device-info .chip {
+            display: inline-block; padding: 1px 8px; margin: 0 4px;
+            border-radius: 8px; font-size: 10px;
+        }
+        .chip.npu { background: #238636; color: #fff; }
+        .chip.gpu { background: #1f6feb; color: #fff; }
+        .chip.cpu { background: #6e7681; color: #fff; }
+        .chip.fallback { background: #d29922; color: #fff; }
+        .chip.none { background: #da3633; color: #fff; }
     </style>
 </head>
 <body>
     <div class="header">
         <h1>VRAMancer</h1>
-        <span class="badge">WebGPU Inference</span>
+        <span class="badge" id="badge">WebNPU</span>
+        <span class="device-badge" id="deviceBadge">Detecting...</span>
+    </div>
+
+    <div class="device-info" id="deviceInfo">
+        Accelerator: detecting available backends...
     </div>
 
     <div class="controls">
@@ -103,6 +127,7 @@
 
     <div class="status-bar">
         <span><span class="label">Status: </span><span class="value" id="stStatus">Disconnected</span></span>
+        <span><span class="label">Backend: </span><span class="value" id="stBackend">—</span></span>
         <span><span class="label">Weights: </span><span class="value" id="stWeights">0</span></span>
         <span><span class="label">VRAM: </span><span class="value" id="stVRAM">—</span></span>
         <span><span class="label">Tok/s: </span><span class="value" id="stTPS">—</span></span>
@@ -121,19 +146,99 @@
         </div>
     </div>
 
-    <script src="inference_worker_gpu.js"></script>
     <script>
-        // WS URL = same host:port as the page (single-port server)
+        // ====== Detect best backend and load appropriate worker ======
+        let workerType = "none";
+
+        (async function detectAndLoad() {
+            const badge = document.getElementById("deviceBadge");
+            const badgeMain = document.getElementById("badge");
+            const info = document.getElementById("deviceInfo");
+            const backendEl = document.getElementById("stBackend");
+
+            const caps = { webnn_npu: false, webnn_gpu: false, webnn_cpu: false, webgpu: false };
+
+            // Probe WebNN device types
+            if (navigator.ml) {
+                for (const dt of ["npu", "gpu", "cpu"]) {
+                    try {
+                        const ctx = await navigator.ml.createContext({ deviceType: dt });
+                        caps["webnn_" + dt] = true;
+                        if (ctx.destroy) ctx.destroy();
+                    } catch {}
+                }
+            }
+
+            // Probe WebGPU
+            if (navigator.gpu) {
+                try {
+                    const adapter = await navigator.gpu.requestAdapter();
+                    if (adapter) caps.webgpu = true;
+                } catch {}
+            }
+
+            // Build capability display
+            const chips = [];
+            if (caps.webnn_npu) chips.push('<span class="chip npu">NPU</span>');
+            if (caps.webnn_gpu) chips.push('<span class="chip gpu">WebNN-GPU</span>');
+            if (caps.webnn_cpu) chips.push('<span class="chip cpu">WebNN-CPU</span>');
+            if (caps.webgpu) chips.push('<span class="chip fallback">WebGPU</span>');
+            if (chips.length === 0) chips.push('<span class="chip none">None</span>');
+            info.innerHTML = "Available: " + chips.join(" ");
+
+            // Choose best backend and load worker
+            let scriptSrc;
+
+            if (caps.webnn_npu || caps.webnn_gpu || caps.webnn_cpu) {
+                // WebNN available — load WebNPU worker
+                scriptSrc = "inference_worker_webnn.js";
+                workerType = "webnn";
+
+                if (caps.webnn_npu) {
+                    badge.textContent = "NPU";
+                    badge.style.background = "#238636";
+                    backendEl.textContent = "WebNN → NPU";
+                } else if (caps.webnn_gpu) {
+                    badge.textContent = "GPU (WebNN)";
+                    badge.style.background = "#1f6feb";
+                    backendEl.textContent = "WebNN → GPU";
+                } else {
+                    badge.textContent = "CPU (WebNN)";
+                    badge.style.background = "#6e7681";
+                    backendEl.textContent = "WebNN → CPU";
+                }
+            } else if (caps.webgpu) {
+                // Fallback to WebGPU
+                scriptSrc = "inference_worker_gpu.js";
+                workerType = "webgpu";
+                badge.textContent = "WebGPU Fallback";
+                badge.style.background = "#d29922";
+                badgeMain.textContent = "WebGPU";
+                backendEl.textContent = "WebGPU (fallback)";
+            } else {
+                badge.textContent = "No Accelerator";
+                badge.style.background = "#da3633";
+                backendEl.textContent = "Unavailable";
+                return;
+            }
+
+            // Dynamically load the chosen worker script
+            const script = document.createElement("script");
+            script.src = scriptSrc;
+            script.onload = () => log("init", `Loaded ${scriptSrc} (${workerType})`);
+            script.onerror = () => log("error", `Failed to load ${scriptSrc}`);
+            document.head.appendChild(script);
+        })();
+
+        // ====== Auto-detect WSS URL ======
         (function() {
             const proto = location.protocol === "https:" ? "wss" : "ws";
-            const host = location.host;  // includes port
+            const host = location.host;
             document.getElementById("wsUrl").value = `${proto}://${host}`;
         })();
 
+        // ====== UI Logic (same as inference.html) ======
         let worker = null;
-        let tokenCount = 0;
-        let decodeTokens = 0;
-        let decodeStart = 0;
 
         function log(cls, msg) {
             const el = document.getElementById("logOutput");
@@ -153,13 +258,18 @@
             log(status, message);
 
             if (status === "connected") setStatus("Connected", "ok");
-            else if (status === "ready") setStatus("GPU Ready", "ok");
+            else if (status === "ready") setStatus("Ready", "ok");
             else if (status === "error") setStatus(message, "err");
             else if (status === "upload") {
                 const match = message.match(/total: (\d+) MB/);
                 if (match) document.getElementById("stVRAM").textContent = match[1] + " MB";
                 const stats = worker ? worker.getStats() : null;
-                if (stats) document.getElementById("stWeights").textContent = stats.weights;
+                if (stats) {
+                    document.getElementById("stWeights").textContent = stats.weights;
+                    if (stats.backend) {
+                        document.getElementById("stBackend").textContent = stats.backend;
+                    }
+                }
             }
             else if (status === "compute") {
                 const tpsMatch = message.match(/([\d.]+) tok\/s/);
@@ -172,7 +282,6 @@
             document.getElementById("btnConnect").disabled = true;
             document.getElementById("btnStop").disabled = false;
             document.getElementById("textOutput").innerHTML = "";
-            tokenCount = 0;
 
             try {
                 worker = await VRAMancerInference.connectAndServe(url);
