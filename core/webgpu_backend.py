@@ -10,11 +10,13 @@ Binary protocol (matching worker.js):
 """
 
 import asyncio
+import ssl
 import struct
+import subprocess
+import tempfile
 import threading
 import time
 import os
-from http.server import HTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 from typing import Any, List, Optional
 
@@ -48,6 +50,11 @@ except ImportError:
 
 OP_MATMUL = 0x01
 OP_PING = 0x02
+OP_UPLOAD_TENSOR = 0x10
+OP_SET_CONFIG = 0x11
+OP_GENERATE = 0x30
+OP_TOKEN = 0x31
+OP_GENERATE_DONE = 0x32
 OP_SHUTDOWN = 0xFF
 
 _TIMEOUT_S = float(os.environ.get("VRM_WEBGPU_TIMEOUT", "30.0"))
@@ -118,6 +125,86 @@ class _WorkerConnection:
         except Exception:
             pass
 
+    async def rpc_upload_tensor(self, name: str, shape: tuple,
+                                data: bytes,
+                                timeout: float = _TIMEOUT_S) -> None:
+        """Upload a named tensor to the browser worker."""
+        name_bytes = name.encode("utf-8")
+        ndim = len(shape)
+        # Header: [0x10:u8] [name_len:u16le] [name] [ndim:u8] [shapes:u32le*]
+        header = struct.pack("<BH", OP_UPLOAD_TENSOR, len(name_bytes))
+        header += name_bytes
+        header += struct.pack("<B", ndim)
+        for s in shape:
+            header += struct.pack("<I", s)
+        # Align to 4 bytes for float32 data
+        pad = (4 - len(header) % 4) % 4
+        header += b"\x00" * pad
+        frame = header + data
+
+        async with self.lock:
+            await self.ws.send(frame)
+            resp = await asyncio.wait_for(self.ws.recv(), timeout=timeout)
+        if isinstance(resp, str):
+            resp = resp.encode()
+        if resp[0] != OP_UPLOAD_TENSOR or resp[1] != 0x00:
+            raise RuntimeError(f"Upload tensor '{name}' failed: {resp!r}")
+
+    async def rpc_set_config(self, config_json: str,
+                             timeout: float = _TIMEOUT_S) -> None:
+        """Send model config JSON to the browser worker."""
+        json_bytes = config_json.encode("utf-8")
+        header = struct.pack("<BI", OP_SET_CONFIG, len(json_bytes))
+        frame = header + json_bytes
+
+        async with self.lock:
+            await self.ws.send(frame)
+            resp = await asyncio.wait_for(self.ws.recv(), timeout=timeout)
+        if isinstance(resp, str):
+            resp = resp.encode()
+        if resp[0] != OP_SET_CONFIG or resp[1] != 0x00:
+            raise RuntimeError(f"Set config failed: {resp!r}")
+
+    async def rpc_generate(self, max_tokens: int, prompt_ids: list,
+                           token_callback=None,
+                           timeout: float = 600.0) -> dict:
+        """Start autoregressive generation. Calls token_callback(token_id, step, time_ms)
+        for each generated token. Returns summary dict."""
+        n = len(prompt_ids)
+        header = struct.pack("<BII", OP_GENERATE, max_tokens, n)
+        for tid in prompt_ids:
+            header += struct.pack("<I", tid)
+
+        async with self.lock:
+            await self.ws.send(header)
+            tokens = []
+            while True:
+                resp = await asyncio.wait_for(
+                    self.ws.recv(), timeout=timeout
+                )
+                if isinstance(resp, str):
+                    resp = resp.encode()
+                op = resp[0]
+                if op == OP_TOKEN:
+                    token_id = struct.unpack_from("<I", resp, 1)[0]
+                    step = struct.unpack_from("<I", resp, 5)[0]
+                    time_ms = struct.unpack_from("<f", resp, 9)[0]
+                    tokens.append(token_id)
+                    if token_callback:
+                        token_callback(token_id, step, time_ms)
+                elif op == OP_GENERATE_DONE:
+                    total_tokens = struct.unpack_from("<I", resp, 1)[0]
+                    total_ms = struct.unpack_from("<f", resp, 5)[0]
+                    return {
+                        "tokens": tokens,
+                        "total_tokens": total_tokens,
+                        "total_ms": total_ms,
+                    }
+                else:
+                    raise RuntimeError(
+                        f"Unexpected op during generate: 0x{op:02x}"
+                    )
+
 
 class WebGPUBackend(BaseLLMBackend):
     """WebSocket server dispatching matmul to browser WebGPU workers.
@@ -137,6 +224,7 @@ class WebGPUBackend(BaseLLMBackend):
         self._ws_host = ws_host
         self._ws_port = ws_port
         self._http_port = http_port
+        self._serve_ui = serve_ui
 
         self._workers: list[_WorkerConnection] = []
         self._workers_lock = threading.Lock()
@@ -147,6 +235,7 @@ class WebGPUBackend(BaseLLMBackend):
         self._http_thread: Optional[threading.Thread] = None
         self._ws_server = None
         self._http_server = None
+        self._ssl_context = None
 
         if websockets is None:
             self.log.warning(
@@ -154,9 +243,14 @@ class WebGPUBackend(BaseLLMBackend):
             )
             return
 
+        # Build shared SSL context for WSS + HTTPS
+        cert_path, key_path = self._ensure_self_signed_cert()
+        if cert_path:
+            self._ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            self._ssl_context.load_cert_chain(cert_path, key_path)
+
+        # Single port: WSS + static files on ws_port (avoids cert-per-port issues)
         self._start_ws_server()
-        if serve_ui and _WORKER_DIR.exists():
-            self._start_http_server()
 
     # ------------------------------------------------------------------
     # WebSocket Server
@@ -172,13 +266,48 @@ class WebGPUBackend(BaseLLMBackend):
             if self._ws_server is not None:
                 break
             time.sleep(0.01)
+        proto = "wss" if self._ssl_context else "ws"
         self.log.info(
-            f"WebSocket server on ws://{self._ws_host}:{self._ws_port}"
+            f"WebGPU server on {proto}://{self._ws_host}:{self._ws_port} "
+            f"(WSS + static files on same port)"
         )
 
     def _run_loop(self):
         asyncio.set_event_loop(self._loop)
         self._loop.run_until_complete(self._serve())
+
+    async def _http_process_request(self, path, request_headers):
+        """Serve static files for non-WebSocket HTTP requests.
+        Return (status, headers, body) to send HTTP response.
+        Return None to proceed with WebSocket upgrade."""
+        # WebSocket upgrades pass through
+        if request_headers.get("Upgrade", "").lower() == "websocket":
+            return None
+
+        if path == "/" or path == "":
+            path = "/inference.html"
+
+        # Sanitize to prevent path traversal
+        safe = Path(path.lstrip("/")).name
+        if not safe:
+            return (404, {"Content-Type": "text/plain"}, b"Not Found")
+
+        file_path = _WORKER_DIR / safe
+        if not file_path.exists() or not file_path.is_file():
+            return (404, {"Content-Type": "text/plain"}, b"Not Found")
+
+        # MIME types
+        ext = file_path.suffix.lower()
+        mime = {
+            ".html": "text/html",
+            ".js": "application/javascript",
+            ".wgsl": "text/plain",
+            ".css": "text/css",
+            ".json": "application/json",
+        }.get(ext, "application/octet-stream")
+
+        body = file_path.read_bytes()
+        return (200, {"Content-Type": mime}, body)
 
     async def _serve(self):
         async def handler(ws):
@@ -202,37 +331,82 @@ class WebGPUBackend(BaseLLMBackend):
                     f"gflops={worker.total_gflops:.1f})"
                 )
 
+        serve_kwargs = dict(
+            max_size=256 * 1024 * 1024,
+            ping_interval=None,
+            write_limit=2 ** 22,
+            ssl=self._ssl_context,
+        )
+        # Serve static files on the same port (single cert = no browser issues)
+        if self._serve_ui and _WORKER_DIR.exists():
+            serve_kwargs["process_request"] = self._http_process_request
+
         self._ws_server = await websockets.server.serve(
             handler, self._ws_host, self._ws_port,
-            max_size=256 * 1024 * 1024,  # 256 MB max message
-            ping_interval=None,  # disable auto-ping (we do manual ping)
-            write_limit=2 ** 22,  # 4 MB write buffer
+            **serve_kwargs,
         )
         await self._ws_server.wait_closed()
 
-    # ------------------------------------------------------------------
-    # HTTP Static Server (serves dashboard/worker/ UI)
-    # ------------------------------------------------------------------
-
-    def _start_http_server(self):
-        worker_dir = str(_WORKER_DIR)
-
-        class Handler(SimpleHTTPRequestHandler):
-            def __init__(self, *args, **kwargs):
-                super().__init__(*args, directory=worker_dir, **kwargs)
-
-            def log_message(self, fmt, *args):
-                pass  # silence HTTP logs
-
-        self._http_server = HTTPServer(("0.0.0.0", self._http_port), Handler)
-        self._http_thread = threading.Thread(
-            target=self._http_server.serve_forever,
-            daemon=True, name="webgpu-http",
-        )
-        self._http_thread.start()
-        self.log.info(
-            f"Worker UI on http://localhost:{self._http_port}/index.html"
-        )
+    @staticmethod
+    def _ensure_self_signed_cert():
+        """Generate a self-signed cert for HTTPS (WebGPU secure context).
+        Includes SAN with all local IPs so browsers accept it."""
+        cert_dir = Path(tempfile.gettempdir()) / "vramancer_certs"
+        cert_path = cert_dir / "cert.pem"
+        key_path = cert_dir / "key.pem"
+        ext_path = cert_dir / "openssl_ext.cnf"
+        # Always regenerate to pick up IP changes
+        try:
+            cert_dir.mkdir(parents=True, exist_ok=True)
+            # Collect all local IPs for SAN
+            import socket
+            san_entries = ["IP:127.0.0.1", "IP:::1", "DNS:localhost"]
+            try:
+                for info in socket.getaddrinfo(
+                    socket.gethostname(), None, socket.AF_UNSPEC
+                ):
+                    addr = info[4][0]
+                    if ":" in addr:
+                        san_entries.append(f"IP:{addr}")
+                    else:
+                        san_entries.append(f"IP:{addr}")
+            except Exception:
+                pass
+            # Also try common method to get LAN IP
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                s.connect(("8.8.8.8", 80))
+                lan_ip = s.getsockname()[0]
+                s.close()
+                entry = f"IP:{lan_ip}"
+                if entry not in san_entries:
+                    san_entries.append(entry)
+            except Exception:
+                pass
+            san_str = ",".join(san_entries)
+            # Write OpenSSL config file for SAN
+            ext_path.write_text(
+                "[req]\n"
+                "distinguished_name = req_dn\n"
+                "x509_extensions = v3_req\n"
+                "prompt = no\n"
+                "[req_dn]\n"
+                "CN = VRAMancer-WebGPU\n"
+                "[v3_req]\n"
+                "subjectAltName = " + san_str + "\n"
+            )
+            subprocess.run(
+                [
+                    "openssl", "req", "-x509", "-newkey", "rsa:2048",
+                    "-keyout", str(key_path), "-out", str(cert_path),
+                    "-days", "365", "-nodes",
+                    "-config", str(ext_path),
+                ],
+                check=True, capture_output=True,
+            )
+            return str(cert_path), str(key_path)
+        except Exception:
+            return None, None
 
     # ------------------------------------------------------------------
     # Worker selection
@@ -259,7 +433,7 @@ class WebGPUBackend(BaseLLMBackend):
                 raise TimeoutError(
                     f"Waited {timeout}s for {n} WebGPU worker(s), "
                     f"got {self.num_workers}. "
-                    f"Open http://localhost:{self._http_port}/index.html "
+                    f"Open https://localhost:{self._ws_port}/inference.html "
                     f"in a WebGPU browser."
                 )
             time.sleep(0.1)
@@ -429,6 +603,206 @@ class WebGPUBackend(BaseLLMBackend):
 
         if self._http_server:
             self._http_server.shutdown()
+
+    # ------------------------------------------------------------------
+    # Inference: upload tensors, push model, generate
+    # ------------------------------------------------------------------
+
+    def upload_tensor(self, name: str, tensor, timeout: float = _TIMEOUT_S):
+        """Upload a named tensor to the first connected worker.
+
+        Args:
+            name: weight name (e.g. 'h.0.attn.c_attn.weight')
+            tensor: torch.Tensor or numpy array (float32)
+        """
+        if self._loop is None:
+            raise RuntimeError("WebSocket server not running")
+        worker = self._pick_worker()
+        if worker is None:
+            raise RuntimeError("No workers connected")
+
+        if torch is not None and isinstance(tensor, torch.Tensor):
+            arr = tensor.detach().cpu().float().contiguous().numpy()
+        elif np is not None:
+            arr = np.ascontiguousarray(tensor, dtype=np.float32)
+        else:
+            raise RuntimeError("Neither torch nor numpy available")
+
+        shape = tuple(arr.shape)
+        data = arr.tobytes()
+
+        fut = asyncio.run_coroutine_threadsafe(
+            worker.rpc_upload_tensor(name, shape, data, timeout),
+            self._loop,
+        )
+        fut.result(timeout=timeout + 5.0)
+
+    def set_config(self, config_dict: dict, timeout: float = _TIMEOUT_S):
+        """Send model config to worker."""
+        import json
+        if self._loop is None:
+            raise RuntimeError("WebSocket server not running")
+        worker = self._pick_worker()
+        if worker is None:
+            raise RuntimeError("No workers connected")
+
+        config_json = json.dumps(config_dict)
+        fut = asyncio.run_coroutine_threadsafe(
+            worker.rpc_set_config(config_json, timeout),
+            self._loop,
+        )
+        fut.result(timeout=timeout + 5.0)
+
+    def push_gpt2_model(self, model, tokenizer_inst=None):
+        """Extract GPT-2 weights and upload them all to the browser.
+
+        GPT-2 uses Conv1D (weights are [in, out]) — we transpose to
+        [out, in] for the WGSL matmul shader (C = A @ B^T).
+        """
+        if torch is None:
+            raise RuntimeError("torch required for push_gpt2_model")
+
+        sd = model.state_dict()
+        gpt2_config = model.config
+
+        # Send model config
+        config_dict = {
+            "arch": "gpt2",
+            "model_name": getattr(gpt2_config, "name_or_path", "gpt2"),
+            "hidden_size": gpt2_config.n_embd,
+            "num_heads": gpt2_config.n_head,
+            "num_layers": gpt2_config.n_layer,
+            "vocab_size": gpt2_config.vocab_size,
+            "max_position": gpt2_config.n_positions,
+            "intermediate_size": gpt2_config.n_embd * 4,
+        }
+        self.set_config(config_dict)
+
+        # Upload embeddings (CPU-only in browser — no GPU buffer for 1D-ish)
+        self.upload_tensor("wte.weight", sd["transformer.wte.weight"])
+        self.upload_tensor("wpe.weight", sd["transformer.wpe.weight"])
+
+        # Upload final layer norm
+        self.upload_tensor("ln_f.weight", sd["transformer.ln_f.weight"])
+        self.upload_tensor("ln_f.bias", sd["transformer.ln_f.bias"])
+
+        # Upload each transformer layer
+        for i in range(gpt2_config.n_layer):
+            prefix = f"transformer.h.{i}"
+            short = f"h.{i}"
+
+            # LayerNorms (1D, CPU-only in browser)
+            self.upload_tensor(
+                f"{short}.ln_1.weight", sd[f"{prefix}.ln_1.weight"]
+            )
+            self.upload_tensor(
+                f"{short}.ln_1.bias", sd[f"{prefix}.ln_1.bias"]
+            )
+            self.upload_tensor(
+                f"{short}.ln_2.weight", sd[f"{prefix}.ln_2.weight"]
+            )
+            self.upload_tensor(
+                f"{short}.ln_2.bias", sd[f"{prefix}.ln_2.bias"]
+            )
+
+            # Attention weights: Conv1D [in, out] → transpose to [out, in]
+            self.upload_tensor(
+                f"{short}.attn.c_attn.weight",
+                sd[f"{prefix}.attn.c_attn.weight"].T.contiguous(),
+            )
+            self.upload_tensor(
+                f"{short}.attn.c_attn.bias",
+                sd[f"{prefix}.attn.c_attn.bias"],
+            )
+            self.upload_tensor(
+                f"{short}.attn.c_proj.weight",
+                sd[f"{prefix}.attn.c_proj.weight"].T.contiguous(),
+            )
+            self.upload_tensor(
+                f"{short}.attn.c_proj.bias",
+                sd[f"{prefix}.attn.c_proj.bias"],
+            )
+
+            # MLP weights: Conv1D [in, out] → transpose to [out, in]
+            self.upload_tensor(
+                f"{short}.mlp.c_fc.weight",
+                sd[f"{prefix}.mlp.c_fc.weight"].T.contiguous(),
+            )
+            self.upload_tensor(
+                f"{short}.mlp.c_fc.bias",
+                sd[f"{prefix}.mlp.c_fc.bias"],
+            )
+            self.upload_tensor(
+                f"{short}.mlp.c_proj.weight",
+                sd[f"{prefix}.mlp.c_proj.weight"].T.contiguous(),
+            )
+            self.upload_tensor(
+                f"{short}.mlp.c_proj.bias",
+                sd[f"{prefix}.mlp.c_proj.bias"],
+            )
+
+            self.log.info(f"Uploaded layer {i}/{gpt2_config.n_layer}")
+
+        total_params = sum(p.numel() for p in model.parameters())
+        total_mb = total_params * 4 / 1024 / 1024
+        self.log.info(
+            f"GPT-2 model uploaded: {gpt2_config.n_layer} layers, "
+            f"{total_params/1e6:.0f}M params, {total_mb:.0f} MB float32"
+        )
+
+        if tokenizer_inst:
+            self.tokenizer = tokenizer_inst
+
+    def generate_browser(self, prompt: str = None, prompt_ids: list = None,
+                         max_tokens: int = 50,
+                         token_callback=None,
+                         timeout: float = 600.0) -> dict:
+        """Run autoregressive generation on the browser WebGPU worker.
+
+        Args:
+            prompt: text prompt (requires tokenizer)
+            prompt_ids: token IDs (alternative to prompt)
+            max_tokens: max tokens to generate
+            token_callback: called with (token_id, step, time_ms) per token
+            timeout: max seconds to wait
+
+        Returns:
+            dict with 'tokens', 'text', 'total_tokens', 'total_ms', 'tok_per_s'
+        """
+        if self._loop is None:
+            raise RuntimeError("WebSocket server not running")
+        worker = self._pick_worker()
+        if worker is None:
+            raise RuntimeError("No workers connected")
+
+        if prompt_ids is None:
+            if prompt is None:
+                raise ValueError("Provide prompt or prompt_ids")
+            if self.tokenizer is None:
+                raise RuntimeError("No tokenizer loaded — provide prompt_ids")
+            prompt_ids = self.tokenizer.encode(prompt)
+
+        fut = asyncio.run_coroutine_threadsafe(
+            worker.rpc_generate(max_tokens, prompt_ids,
+                                token_callback, timeout),
+            self._loop,
+        )
+        result = fut.result(timeout=timeout + 5.0)
+
+        # Decode tokens to text if tokenizer available
+        if self.tokenizer:
+            result["text"] = self.tokenizer.decode(result["tokens"])
+            result["prompt_text"] = self.tokenizer.decode(prompt_ids)
+        else:
+            result["text"] = None
+
+        if result["total_ms"] > 0:
+            decode_tokens = result["total_tokens"] - 1
+            result["tok_per_s"] = decode_tokens / (result["total_ms"] / 1000)
+        else:
+            result["tok_per_s"] = 0.0
+
+        return result
 
     # ------------------------------------------------------------------
     # BaseLLMBackend interface

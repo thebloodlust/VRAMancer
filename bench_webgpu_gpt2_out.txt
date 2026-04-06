@@ -1,0 +1,112 @@
+/home/jeremie/VRAMancer/VRAMancer/.venv/lib/python3.12/site-packages/torch/cuda/__init__.py:65: FutureWarning: The pynvml package is deprecated. Please install nvidia-ml-py instead. If you did not install pynvml directly, please report this to the maintainers of the package that installed pynvml for you.
+  import pynvml  # type: ignore[import]
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+WARNING:huggingface_hub.utils._http:Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+`torch_dtype` is deprecated! Use `dtype` instead!
+=== VRAMancer WebGPU Inference Benchmark ===
+Model: gpt2
+Prompt: 'The meaning of life is'
+Max tokens: 50
+
+[1/5] Loading model locally...
+Loading weights:   0%|          | 0/148 [00:00<?, ?it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 3790.16it/s]
+  Loaded: 124M params in 3.4s
+
+[2/5] Starting WebGPU backend...
+[04/06/26 22:57:43] INFO     WebGPU server on wss://0.0.0.0:8765 (WSS + static  
+                             files on same port)                                
+  Server: wss://0.0.0.0:8765
+  Open browser: https://localhost:8765/inference.html
+  Waiting for browser to connect...
+[04/06/26 22:59:10] INFO     WebGPU worker connected: ('192.168.1.23', 58379)   
+                             (total: 1)                                         
+                    INFO     1 WebGPU worker(s) connected                       
+  Worker ('192.168.1.23', 58379): RTT 3.77ms
+
+[3/5] Uploading GPT-2 weights to browser...
+[04/06/26 22:59:30] INFO     Uploaded layer 0/12                                
+[04/06/26 22:59:33] INFO     Uploaded layer 1/12                                
+[04/06/26 22:59:36] INFO     Uploaded layer 2/12                                
+[04/06/26 22:59:39] INFO     Uploaded layer 3/12                                
+[04/06/26 22:59:42] INFO     Uploaded layer 4/12                                
+[04/06/26 22:59:46] INFO     Uploaded layer 5/12                                
+[04/06/26 22:59:49] INFO     Uploaded layer 6/12                                
+[04/06/26 22:59:52] INFO     Uploaded layer 7/12                                
+[04/06/26 22:59:55] INFO     Uploaded layer 8/12                                
+[04/06/26 22:59:58] INFO     Uploaded layer 9/12                                
+[04/06/26 23:00:01] INFO     Uploaded layer 10/12                               
+[04/06/26 23:00:04] INFO     Uploaded layer 11/12                               
+                    INFO     GPT-2 model uploaded: 12 layers, 124M params, 475  
+                             MB float32                                         
+The attention mask and the pad token id were not set. As a consequence, you may observe unexpected behavior. Please pass your input's `attention_mask` to obtain reliable results.
+Setting `pad_token_id` to `eos_token_id`:50256 for open-end generation.
+The attention mask is not set and cannot be inferred from input because pad token is same as eos token. As a consequence, you may observe unexpected behavior. Please pass your input's `attention_mask` to obtain reliable results.
+  Uploaded 475 MB in 54.2s (9 MB/s)
+
+[4/5] Local PyTorch reference generation...
+  Local: 50 tokens in 12.07s (4.1 tok/s)
+  Text: 'The meaning of life is not the same as the meaning of death.\n\nThe meaning of life is not the same as the meaning of death.\n\nThe meaning of life is not the same as the meaning of death.\n\nThe meaning of life is not the'
+
+[5/5] Browser WebGPU generation...
+  Token 0: 407 (' not') 432.8ms
+  Token 1: 262 (' the') 411.2ms
+  Token 2: 976 (' same') 418.8ms
+  Token 3: 355 (' as') 401.8ms
+  Token 4: 262 (' the') 410.1ms
+  Token 5: 3616 (' meaning') 411.1ms
+  Token 6: 286 (' of') 407.4ms
+  Token 7: 1918 (' death') 407.0ms
+  Token 8: 13 ('.') 386.9ms
+  Token 9: 198 ('\n') 390.3ms
+  Token 10: 198 ('\n') 381.6ms
+  Token 11: 464 ('The') 399.2ms
+  Token 12: 3616 (' meaning') 390.7ms
+  Token 13: 286 (' of') 387.7ms
+  Token 14: 1204 (' life') 392.8ms
+  Token 15: 318 (' is') 410.3ms
+  Token 16: 407 (' not') 381.8ms
+  Token 17: 262 (' the') 391.0ms
+  Token 18: 976 (' same') 384.7ms
+  Token 19: 355 (' as') 389.6ms
+  Token 20: 262 (' the') 392.9ms
+  Token 21: 3616 (' meaning') 384.8ms
+  Token 22: 286 (' of') 390.0ms
+  Token 23: 1918 (' death') 394.0ms
+  Token 24: 13 ('.') 405.2ms
+  Token 25: 198 ('\n') 400.3ms
+  Token 26: 198 ('\n') 392.6ms
+  Token 27: 464 ('The') 400.7ms
+  Token 28: 3616 (' meaning') 389.6ms
+  Token 29: 286 (' of') 396.7ms
+  Token 30: 1204 (' life') 390.1ms
+  Token 31: 318 (' is') 377.2ms
+  Token 32: 407 (' not') 384.0ms
+  Token 33: 262 (' the') 392.8ms
+  Token 34: 976 (' same') 397.3ms
+  Token 35: 355 (' as') 391.3ms
+  Token 36: 262 (' the') 384.5ms
+  Token 37: 3616 (' meaning') 388.0ms
+  Token 38: 286 (' of') 392.9ms
+  Token 39: 1918 (' death') 387.0ms
+  Token 40: 13 ('.') 391.6ms
+  Token 41: 198 ('\n') 389.8ms
+  Token 42: 198 ('\n') 389.1ms
+  Token 43: 464 ('The') 402.3ms
+  Token 44: 3616 (' meaning') 390.4ms
+  Token 45: 286 (' of') 384.0ms
+  Token 46: 1204 (' life') 391.3ms
+  Token 47: 318 (' is') 389.1ms
+  Token 48: 407 (' not') 383.7ms
+  Token 49: 262 (' the') 379.3ms
+
+=== Results ===
+Prompt: 'The meaning of life is'
+WebGPU output: ' not the same as the meaning of death.\n\nThe meaning of life is not the same as the meaning of death.\n\nThe meaning of life is not the same as the meaning of death.\n\nThe meaning of life is not the'
+Local output:  'The meaning of life is not the same as the meaning of death.\n\nThe meaning of life is not the same as the meaning of death.\n\nThe meaning of life is not the same as the meaning of death.\n\nThe meaning of life is not the'
+
+WebGPU: 50 tokens, 19734ms total, 2.5 tok/s (decode)
+Local:  50 tokens, 12073ms total, 4.1 tok/s
+
+Token match: 50/50 (PASS)
+
+Done.

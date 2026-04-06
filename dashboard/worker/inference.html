@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VRAMancer — WebGPU Inference</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'JetBrains Mono', 'Fira Code', monospace;
+            background: #0d1117; color: #c9d1d9;
+        }
+        .header {
+            background: #161b22; border-bottom: 1px solid #30363d;
+            padding: 12px 20px; display: flex; align-items: center; gap: 16px;
+        }
+        .header h1 {
+            font-size: 16px; color: #58a6ff; font-weight: 600;
+        }
+        .header .badge {
+            background: #238636; color: #fff; padding: 2px 8px;
+            border-radius: 12px; font-size: 11px;
+        }
+        .controls {
+            padding: 16px 20px; display: flex; gap: 12px;
+            align-items: center; flex-wrap: wrap;
+            border-bottom: 1px solid #21262d;
+        }
+        input[type="text"] {
+            background: #0d1117; border: 1px solid #30363d;
+            color: #c9d1d9; padding: 6px 12px; border-radius: 6px;
+            font-family: inherit; font-size: 13px; width: 300px;
+        }
+        button {
+            background: #238636; color: #fff; border: none;
+            padding: 6px 16px; border-radius: 6px; cursor: pointer;
+            font-family: inherit; font-size: 13px; font-weight: 600;
+        }
+        button:hover { background: #2ea043; }
+        button.stop { background: #da3633; }
+        button.stop:hover { background: #f85149; }
+        button:disabled { opacity: 0.4; cursor: default; }
+        .status-bar {
+            background: #161b22; padding: 8px 20px;
+            font-size: 12px; display: flex; gap: 24px;
+            border-bottom: 1px solid #21262d;
+        }
+        .status-bar .label { color: #8b949e; }
+        .status-bar .value { color: #58a6ff; }
+        .status-bar .value.ok { color: #3fb950; }
+        .status-bar .value.err { color: #f85149; }
+        .main { display: flex; height: calc(100vh - 160px); }
+        .panel {
+            flex: 1; display: flex; flex-direction: column;
+            border-right: 1px solid #21262d;
+        }
+        .panel:last-child { border-right: none; }
+        .panel-title {
+            padding: 8px 16px; background: #161b22;
+            border-bottom: 1px solid #21262d;
+            font-size: 12px; color: #8b949e; text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .output {
+            flex: 1; padding: 16px; overflow-y: auto;
+            font-size: 14px; line-height: 1.6;
+            white-space: pre-wrap; word-wrap: break-word;
+        }
+        .output .generated { color: #3fb950; }
+        .output .prompt { color: #c9d1d9; }
+        .log {
+            flex: 1; padding: 12px 16px; overflow-y: auto;
+            font-size: 11px; line-height: 1.5;
+        }
+        .log .entry { padding: 1px 0; }
+        .log .ts { color: #484f58; }
+        .log .upload { color: #d2a8ff; }
+        .log .compute { color: #79c0ff; }
+        .log .init, .log .ready, .log .config { color: #3fb950; }
+        .log .error { color: #f85149; }
+        .log .connected { color: #3fb950; font-weight: bold; }
+        .progress {
+            height: 3px; background: #21262d;
+        }
+        .progress-bar {
+            height: 100%; background: #58a6ff;
+            transition: width 0.3s;
+            width: 0%;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>VRAMancer</h1>
+        <span class="badge">WebGPU Inference</span>
+    </div>
+
+    <div class="controls">
+        <input type="text" id="wsUrl" value="wss://localhost:8765" placeholder="WebSocket URL">
+        <button id="btnConnect" onclick="doConnect()">Connect</button>
+        <button id="btnStop" class="stop" onclick="doStop()" disabled>Stop</button>
+    </div>
+
+    <div class="status-bar">
+        <span><span class="label">Status: </span><span class="value" id="stStatus">Disconnected</span></span>
+        <span><span class="label">Weights: </span><span class="value" id="stWeights">0</span></span>
+        <span><span class="label">VRAM: </span><span class="value" id="stVRAM">—</span></span>
+        <span><span class="label">Tok/s: </span><span class="value" id="stTPS">—</span></span>
+    </div>
+
+    <div class="progress"><div class="progress-bar" id="progressBar"></div></div>
+
+    <div class="main">
+        <div class="panel" style="flex: 2;">
+            <div class="panel-title">Generated Text</div>
+            <div class="output" id="textOutput"></div>
+        </div>
+        <div class="panel">
+            <div class="panel-title">Log</div>
+            <div class="log" id="logOutput"></div>
+        </div>
+    </div>
+
+    <script src="inference_worker.js"></script>
+    <script>
+        // WS URL = same host:port as the page (single-port server)
+        (function() {
+            const proto = location.protocol === "https:" ? "wss" : "ws";
+            const host = location.host;  // includes port
+            document.getElementById("wsUrl").value = `${proto}://${host}`;
+        })();
+
+        let worker = null;
+        let tokenCount = 0;
+        let decodeTokens = 0;
+        let decodeStart = 0;
+
+        function log(cls, msg) {
+            const el = document.getElementById("logOutput");
+            const ts = new Date().toLocaleTimeString();
+            el.innerHTML += `<div class="entry"><span class="ts">${ts}</span> <span class="${cls}">${msg}</span></div>`;
+            el.scrollTop = el.scrollHeight;
+        }
+
+        function setStatus(text, cls) {
+            const el = document.getElementById("stStatus");
+            el.textContent = text;
+            el.className = "value" + (cls ? " " + cls : "");
+        }
+
+        window.addEventListener("vramancer-status", (e) => {
+            const { status, message } = e.detail;
+            log(status, message);
+
+            if (status === "connected") setStatus("Connected", "ok");
+            else if (status === "ready") setStatus("GPU Ready", "ok");
+            else if (status === "error") setStatus(message, "err");
+            else if (status === "upload") {
+                const match = message.match(/total: (\d+) MB/);
+                if (match) document.getElementById("stVRAM").textContent = match[1] + " MB";
+                const stats = worker ? worker.getStats() : null;
+                if (stats) document.getElementById("stWeights").textContent = stats.weights;
+            }
+            else if (status === "compute") {
+                const tpsMatch = message.match(/([\d.]+) tok\/s/);
+                if (tpsMatch) document.getElementById("stTPS").textContent = tpsMatch[1] + " tok/s";
+            }
+        });
+
+        async function doConnect() {
+            const url = document.getElementById("wsUrl").value;
+            document.getElementById("btnConnect").disabled = true;
+            document.getElementById("btnStop").disabled = false;
+            document.getElementById("textOutput").innerHTML = "";
+            tokenCount = 0;
+
+            try {
+                worker = await VRAMancerInference.connectAndServe(url);
+            } catch (e) {
+                log("error", e.message);
+                setStatus("Failed", "err");
+                document.getElementById("btnConnect").disabled = false;
+                document.getElementById("btnStop").disabled = true;
+            }
+        }
+
+        function doStop() {
+            if (worker) { worker.stop(); worker = null; }
+            setStatus("Disconnected");
+            document.getElementById("btnConnect").disabled = false;
+            document.getElementById("btnStop").disabled = true;
+        }
+    </script>
+</body>
+</html>
