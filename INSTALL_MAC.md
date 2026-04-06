@@ -45,14 +45,26 @@ pip install mlx mlx-lm numpy
 
 macOS peut avoir un binaire universel (fat binary) qui contient les deux architectures. Par défaut il peut choisir x86_64 si le Terminal tourne sous Rosetta.
 
-**Forcer arm64 :**
+**ATTENTION : un venv "bake" l'architecture du Python qui l'a créé.** Si tu as créé `~/venv_vrm` quand le terminal était en x86, le venv restera x86 même après `source`. **Il faut le supprimer et le recréer :**
+
 ```bash
-# Force l'architecture arm64 sur n'importe quel Python
+# 1. Supprimer l'ancien venv x86
+deactivate 2>/dev/null
+rm -rf ~/venv_vrm
+
+# 2. Forcer arm64 et recréer
 arch -arm64 python3 -c "import platform; print(platform.machine())"
 # → doit afficher arm64
 
-# Créer le venv en forçant arm64
 arch -arm64 python3 -m venv ~/venv_vrm
+source ~/venv_vrm/bin/activate
+
+# 3. Vérifier que le venv est bien arm64
+python3 -c "import platform; print(platform.machine())"
+# → DOIT afficher arm64
+
+# 4. Installer
+pip install mlx mlx-lm numpy
 ```
 
 **Si `arch -arm64` ne suffit pas**, utilise le chemin complet :
