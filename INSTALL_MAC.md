@@ -1,8 +1,10 @@
 # Installation VRAMancer MLX Worker — MacBook M4
 
-## Étape 1 : Installer les dépendances
+## Étape 1 : Créer un venv et installer les dépendances
 
 ```bash
+python3 -m venv ~/venv_vrm
+source ~/venv_vrm/bin/activate
 pip install mlx mlx-lm numpy
 ```
 
@@ -19,6 +21,7 @@ Ou copier-coller le contenu du fichier `mac` dans `~/mac_worker.py` sur le Mac.
 ## Étape 3 : Lancer le worker
 
 ```bash
+source ~/venv_vrm/bin/activate
 python3 ~/mac_worker.py --model mlx-community/Qwen2.5-14B-4bit --start-layer 42 --end-layer 48
 ```
 
