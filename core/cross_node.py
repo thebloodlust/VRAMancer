@@ -310,10 +310,15 @@ class VTPWorkerServer:
                     except Exception:
                         pass
                 if model is None:
-                    logger.error("VTP: no model loaded")
-                    # Send empty response
-                    _send_all(conn, VTP_MAGIC + struct.pack("!BB", 0, 0)
-                              + struct.pack("!I", 0))
+                    # Echo mode: return input tensor unchanged (bench transport)
+                    logger.debug("VTP: no model, echo mode")
+                    out_ndim = ndim
+                    resp = VTP_MAGIC
+                    resp += struct.pack("!BB", out_ndim, dtype_code)
+                    resp += struct.pack(f"!{out_ndim}I", *shape)
+                    resp += struct.pack("!I", payload_len)
+                    _send_all(conn, resp)
+                    _send_all(conn, payload)
                     continue
 
                 hidden = raw_to_tensor(payload, dtype_code, shape)
