@@ -151,7 +151,7 @@ def main():
     # VRAM usage
     for i in range(n_gpus):
         alloc = torch.cuda.memory_allocated(i) / 1e9
-        total = torch.cuda.get_device_properties(i).total_mem / 1e9
+        total = torch.cuda.get_device_properties(i).total_memory / 1e9
         print(f"  GPU {i}: {alloc:.1f} / {total:.1f} GB allocated")
 
     # ── Create VTP remote worker for Mac ──────────────────────────

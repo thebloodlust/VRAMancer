@@ -1,0 +1,25 @@
+{
+  "timestamp": "2026-04-06 04:59:49",
+  "model": "Qwen/Qwen2.5-14B",
+  "nodes": 3,
+  "gpu0": {
+    "name": "NVIDIA GeForce RTX 3090",
+    "layers": 30,
+    "dtype": "bfloat16"
+  },
+  "gpu1": {
+    "name": "NVIDIA GeForce RTX 5070 Ti",
+    "layers": 12,
+    "dtype": "bfloat16"
+  },
+  "mac": {
+    "host": "192.168.1.24",
+    "layers": 6,
+    "dtype": "4-bit MLX"
+  },
+  "tokens": 50,
+  "total_seconds": 8.5943,
+  "tokens_per_second": 5.82,
+  "prompt": "Explain quantum computing in simple terms:",
+  "text": " Quantum computing is a type of computing that uses the principles of quantum mechanics to perform calculations and process information. Unlike classical computers, which use bits to represent information as either a 0 or 1, quantum computers use quantum bits or qubits. Q"
+}
