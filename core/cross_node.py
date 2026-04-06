@@ -1,18 +1,25 @@
 """
-Cross-node distributed inference via HTTP layer relay.
+Cross-node distributed inference via VTP (binary TCP) or HTTP layer relay.
 
 Enables pipeline-parallel inference across multiple VRAMancer nodes
 on a LAN.  Each node executes a range of transformer layers and relays
-hidden states to the next node via HTTP.
+hidden states to the next node.
+
+Transport modes:
+  1. VTP-lite (default): Persistent TCP + raw binary tensor framing.
+     ~10x less overhead than HTTP.  Port 18951.
+  2. HTTP fallback: requests-based, via Flask API on port 5030.
 
 Master:  POST /api/distributed/generate  (orchestrates the generation)
-Worker:  POST /api/worker/forward_layers  (runs assigned layers)
+Worker:  VTP server on port 18951  (or HTTP /api/worker/forward_layers)
 """
 
 import io
 import os
 import time
 import struct
+import socket
+import threading
 from typing import List, Tuple, Optional
 
 try:
@@ -34,8 +41,24 @@ logger = get_logger("cross_node")
 # Partially loaded model for worker role
 _partial_model = None
 
+# ─── VTP-lite constants ───────────────────────────────────────────
+VTP_PORT = int(os.environ.get("VRM_VTP_WORKER_PORT", "18951"))
+VTP_MAGIC = b"VTP1"
+
+# Dtype encoding for raw tensor transport (compact, no pickle)
+_DTYPE_TO_CODE = {}
+_CODE_TO_DTYPE = {}
+if _HAS_TORCH:
+    _DTYPE_TO_CODE = {
+        torch.float32: 0, torch.float16: 1, torch.bfloat16: 2,
+        torch.float64: 3, torch.int32: 4, torch.int64: 5,
+        torch.int8: 6, torch.uint8: 7, torch.int16: 8,
+    }
+    _CODE_TO_DTYPE = {v: k for k, v in _DTYPE_TO_CODE.items()}
+
 
 # ─── Tensor serialisation (torch.save/load, all dtypes) ──────────
+# Used by HTTP fallback path
 
 def tensor_to_bytes(t: "torch.Tensor") -> bytes:
     buf = io.BytesIO()
@@ -46,6 +69,445 @@ def tensor_to_bytes(t: "torch.Tensor") -> bytes:
 def bytes_to_tensor(data: bytes, device: str = "cpu") -> "torch.Tensor":
     buf = io.BytesIO(data)
     return torch.load(buf, weights_only=True, map_location="cpu").to(device)
+
+
+# ─── Fast raw tensor serialisation (VTP path, no pickle) ─────────
+
+def tensor_to_raw(t: "torch.Tensor") -> Tuple[bytes, int, Tuple[int, ...], int]:
+    """Serialize tensor to raw bytes + metadata. ~10x faster than torch.save."""
+    t = t.detach().contiguous().cpu()
+    dtype_code = _DTYPE_TO_CODE.get(t.dtype, 0)
+    shape = tuple(t.shape)
+    if t.dtype == torch.bfloat16:
+        # numpy has no bfloat16 — view as uint16 for raw bytes
+        raw = t.view(torch.uint16).numpy().tobytes()
+    else:
+        raw = t.numpy().tobytes()
+    return raw, dtype_code, shape, len(raw)
+
+
+def raw_to_tensor(data: bytes, dtype_code: int, shape: Tuple[int, ...],
+                  device: str = "cpu") -> "torch.Tensor":
+    """Deserialize raw bytes to tensor. ~10x faster than torch.load."""
+    import numpy as np
+    dtype = _CODE_TO_DTYPE.get(dtype_code, torch.float32)
+    # numpy dtype mapping
+    np_dtype_map = {
+        torch.float32: np.float32, torch.float16: np.float16,
+        torch.bfloat16: np.float32,  # bfloat16 has no numpy equivalent
+        torch.float64: np.float64, torch.int32: np.int32,
+        torch.int64: np.int64, torch.int8: np.int8, torch.uint8: np.uint8,
+        torch.int16: np.int16,
+    }
+    np_dt = np_dtype_map.get(dtype, np.float32)
+
+    if dtype == torch.bfloat16:
+        # bfloat16: deserialize as uint16, view as bfloat16
+        arr = np.frombuffer(data, dtype=np.uint16).reshape(shape)
+        t = torch.from_numpy(arr.copy()).view(torch.bfloat16)
+    else:
+        arr = np.frombuffer(data, dtype=np_dt).reshape(shape)
+        t = torch.from_numpy(arr.copy())
+    return t.to(device)
+
+
+# ─── VTP socket helpers ──────────────────────────────────────────
+
+def _recv_exact(sock: socket.socket, n: int) -> bytes:
+    """Receive exactly n bytes from socket."""
+    chunks = []
+    remaining = n
+    while remaining > 0:
+        chunk = sock.recv(min(remaining, 1048576))  # 1MB chunks
+        if not chunk:
+            raise ConnectionError("Connection closed while receiving")
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
+
+
+def _send_all(sock: socket.socket, data: bytes):
+    """Send all bytes, handling partial sends."""
+    sock.sendall(data)
+
+
+# ─── VTP Worker Server (runs on worker nodes) ────────────────────
+
+def _make_forward_callback():
+    """Create a GPU-pointer forward callback for RustVTPServer.
+
+    Called from Rust with GIL acquired. Input data is already on GPU
+    (Rust did TCP→pinned→HtoD). Returns GPU pointer of output tensor
+    so Rust can DtoH→TCP without copying bytes through Python.
+    """
+    # Pre-allocate GPU input buffer — Rust writes incoming data here via HtoD
+    _gpu_in_buf = torch.empty(64 * 1024 * 1024, dtype=torch.uint8, device='cuda:0')
+    _gpu_in_ptr = _gpu_in_buf.data_ptr()
+    # Keep a reference to prevent GC
+    _last_result = [None]
+
+    def _forward_gpu(n_bytes, dtype_code, shape, start_layer, end_layer, seq_len):
+        model = _partial_model
+        if model is None:
+            try:
+                from core.production_api import _registry
+                if _registry.is_loaded:
+                    model = _registry._pipeline.backend.model
+            except Exception:
+                pass
+        if model is None:
+            # Return a zero-length tensor on GPU
+            dummy = torch.empty(0, device='cuda:0')
+            return (dummy.data_ptr(), 0, 0, [0])
+
+        # View the GPU input buffer as the correct dtype/shape (zero-copy)
+        dtype = _CODE_TO_DTYPE.get(int(dtype_code), torch.float32)
+        elem_size = torch.tensor([], dtype=dtype).element_size()
+        numel = int(n_bytes) // elem_size
+        hidden = _gpu_in_buf[:int(n_bytes)].view(dtype)[:numel].reshape(
+            [int(s) for s in shape])
+
+        result = _worker_forward_tensor(
+            model, hidden, int(start_layer), int(end_layer), int(seq_len))
+
+        # Ensure CUDA kernels complete before Rust reads the output
+        torch.cuda.synchronize()
+
+        # Keep result alive until next call (Rust does DtoH inside GIL,
+        # but just in case)
+        _last_result[0] = result
+        out_bytes = result.nelement() * result.element_size()
+        out_dtype = _DTYPE_TO_CODE.get(result.dtype, 0)
+        return (result.data_ptr(), out_bytes, out_dtype,
+                [int(s) for s in result.shape])
+
+    return _forward_gpu, _gpu_in_ptr
+
+
+class VTPWorkerServer:
+    """Binary TCP server for fast tensor forward on worker nodes.
+
+    Protocol per request:
+      Request:  VTP1 | start_layer(H) | end_layer(H) | seq_len(I) |
+                ndim(B) | dtype_code(B) | shape(I*ndim) | payload_len(I) | raw_bytes
+      Response: VTP1 | ndim(B) | dtype_code(B) | shape(I*ndim) | payload_len(I) | raw_bytes
+    """
+
+    def __init__(self, host: str = "0.0.0.0", port: int = VTP_PORT):
+        self.host = host
+        self.port = port
+        self._sock = None
+        self._running = False
+        self._thread = None
+        self._rust_server = None  # RustVTPServer (optional)
+
+    def start(self):
+        # ── Try Rust VTP server first (GIL-free network I/O) ──────
+        if _HAS_TORCH:
+            try:
+                import vramancer_rust
+                if hasattr(vramancer_rust, "RustVTPServer"):
+                    forward_fn, gpu_in_ptr = _make_forward_callback()
+                    gpu_id = torch.cuda.current_device()
+                    self._rust_server = vramancer_rust.RustVTPServer(
+                        gpu_id=gpu_id, buf_size_mb=64, gpu_in_ptr=gpu_in_ptr)
+                    self._rust_server.start(self.host, self.port, forward_fn)
+                    self._forward_callback = forward_fn  # prevent GC
+                    self._running = True
+                    logger.info("VTP Rust server listening on %s:%d (GPU %d, zero-copy)",
+                                self.host, self.port, gpu_id)
+                    return
+            except Exception as exc:
+                logger.warning("VTP: Rust server unavailable, Python fallback: %s", exc)
+                self._rust_server = None
+
+        # ── Python fallback ───────────────────────────────────────
+        self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._sock.settimeout(1.0)
+        self._sock.bind((self.host, self.port))
+        self._sock.listen(8)
+        self._running = True
+        self._thread = threading.Thread(target=self._accept_loop,
+                                        daemon=True, name="vtp-worker")
+        self._thread.start()
+        logger.info("VTP worker server listening on %s:%d", self.host, self.port)
+
+    def stop(self):
+        self._running = False
+        if self._rust_server is not None:
+            try:
+                self._rust_server.stop()
+            except Exception:
+                pass
+            self._rust_server = None
+        if self._thread:
+            self._thread.join(timeout=5)
+        if self._sock:
+            try:
+                self._sock.close()
+            except Exception:
+                pass
+        logger.info("VTP worker server stopped")
+
+    def _accept_loop(self):
+        while self._running:
+            try:
+                conn, addr = self._sock.accept()
+                conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                # Large buffers for tensor data
+                try:
+                    conn.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF,
+                                    4 * 1024 * 1024)
+                    conn.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF,
+                                    4 * 1024 * 1024)
+                except Exception:
+                    pass
+                threading.Thread(target=self._handle_conn,
+                                 args=(conn, addr), daemon=True).start()
+            except socket.timeout:
+                continue
+            except Exception as exc:
+                if self._running:
+                    logger.error("VTP accept error: %s", exc)
+
+    def _handle_conn(self, conn: socket.socket, addr):
+        """Handle persistent connection — multiple forward requests."""
+        logger.info("VTP: connection from %s", addr)
+        try:
+            while self._running:
+                # Read magic
+                try:
+                    magic = _recv_exact(conn, 4)
+                except ConnectionError:
+                    break
+                if magic != VTP_MAGIC:
+                    logger.warning("VTP: bad magic from %s", addr)
+                    break
+
+                # Read header: start(H) end(H) seq_len(I) ndim(B) dtype(B)
+                hdr = _recv_exact(conn, 10)
+                start_layer, end_layer, seq_len, ndim, dtype_code = \
+                    struct.unpack("!HHIBB", hdr)
+
+                # Read shape
+                shape_data = _recv_exact(conn, ndim * 4)
+                shape = struct.unpack(f"!{ndim}I", shape_data)
+
+                # Read payload
+                payload_len_data = _recv_exact(conn, 4)
+                payload_len = struct.unpack("!I", payload_len_data)[0]
+                payload = _recv_exact(conn, payload_len)
+
+                # Reconstruct tensor and run forward
+                model = _partial_model
+                if model is None:
+                    # Try registry
+                    try:
+                        from core.production_api import _registry
+                        if _registry.is_loaded:
+                            model = _registry._pipeline.backend.model
+                    except Exception:
+                        pass
+                if model is None:
+                    logger.error("VTP: no model loaded")
+                    # Send empty response
+                    _send_all(conn, VTP_MAGIC + struct.pack("!BB", 0, 0)
+                              + struct.pack("!I", 0))
+                    continue
+
+                hidden = raw_to_tensor(payload, dtype_code, shape)
+                result_tensor = _worker_forward_tensor(
+                    model, hidden, start_layer, end_layer, seq_len)
+
+                # Encode response
+                out_raw, out_dtype, out_shape, out_len = \
+                    tensor_to_raw(result_tensor)
+                out_ndim = len(out_shape)
+
+                resp = VTP_MAGIC
+                resp += struct.pack("!BB", out_ndim, out_dtype)
+                resp += struct.pack(f"!{out_ndim}I", *out_shape)
+                resp += struct.pack("!I", out_len)
+                _send_all(conn, resp)
+                _send_all(conn, out_raw)
+
+        except Exception as exc:
+            logger.error("VTP: connection error from %s: %s", addr, exc)
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            logger.info("VTP: connection closed from %s", addr)
+
+
+# Global VTP server instance
+_vtp_server = None
+
+
+def start_vtp_server(port: int = VTP_PORT):
+    """Start the VTP worker server (called from production_api)."""
+    global _vtp_server
+    if _vtp_server is not None:
+        return
+    _vtp_server = VTPWorkerServer(port=port)
+    _vtp_server.start()
+
+
+def stop_vtp_server():
+    """Stop the VTP worker server."""
+    global _vtp_server
+    if _vtp_server is not None:
+        _vtp_server.stop()
+        _vtp_server = None
+
+
+# ─── VTP Remote Worker (master-side, persistent TCP) ─────────────
+
+class VTPRemoteWorker:
+    """Persistent TCP connection to a remote VTP worker.
+
+    ~10x less overhead than HTTP RemoteWorker:
+    - No HTTP headers/parsing per request
+    - No torch.save/load pickle overhead (raw bytes)
+    - TCP_NODELAY (no Nagle buffering)
+    - Connection reuse across all tokens
+
+    When vramancer_rust.GpuNetBridge is available, the entire
+    GPU→pinned→TCP→pinned→GPU data path runs in Rust with GIL released,
+    eliminating all Python/numpy overhead from the hot loop.
+    """
+
+    def __init__(self, host: str, port: int, start_layer: int, end_layer: int):
+        self.host = host
+        self.port = port
+        self.start_layer = start_layer
+        self.end_layer = end_layer
+        self._sock = None
+        self._bridge = None  # Rust GpuNetBridge (optional)
+
+        # Try to initialize the Rust GPU→Network bridge
+        if _HAS_TORCH and torch.cuda.is_available():
+            try:
+                import vramancer_rust
+                if hasattr(vramancer_rust, "GpuNetBridge"):
+                    gpu_id = torch.cuda.current_device()
+                    self._bridge = vramancer_rust.GpuNetBridge(
+                        gpu_id=gpu_id, buf_size_mb=64)
+                    self._bridge.connect(host, port)
+                    logger.info("VTP: Rust GpuNetBridge active → %s:%d (GPU %d)",
+                                host, port, gpu_id)
+            except Exception as exc:
+                logger.warning("VTP: Rust bridge unavailable, Python fallback: %s", exc)
+                self._bridge = None
+
+    def _ensure_connected(self):
+        if self._sock is not None:
+            return
+        self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        try:
+            self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF,
+                                  4 * 1024 * 1024)
+            self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF,
+                                  4 * 1024 * 1024)
+        except Exception:
+            pass
+        self._sock.settimeout(120)
+        self._sock.connect((self.host, self.port))
+        logger.info("VTP: connected to %s:%d", self.host, self.port)
+
+    def forward(self, hidden_states: "torch.Tensor",
+                seq_len: int = 0) -> "torch.Tensor":
+        """Send tensor, receive processed tensor back via VTP.
+
+        Prefers the Rust GpuNetBridge path (GPU-direct DMA, GIL released)
+        when available, with automatic fallback to the Python path.
+        """
+        # ── Rust bridge fast path ─────────────────────────────────
+        if self._bridge is not None:
+            try:
+                return self._forward_bridge(hidden_states, seq_len)
+            except Exception as exc:
+                logger.warning("VTP: Rust bridge error, falling back to Python: %s", exc)
+                self._bridge = None
+
+        # ── Python fallback path ──────────────────────────────────
+        self._ensure_connected()
+
+        raw, dtype_code, shape, payload_len = tensor_to_raw(hidden_states)
+        ndim = len(shape)
+
+        # Build and send request
+        req = VTP_MAGIC
+        req += struct.pack("!HHIBB", self.start_layer, self.end_layer,
+                           seq_len, ndim, dtype_code)
+        req += struct.pack(f"!{ndim}I", *shape)
+        req += struct.pack("!I", payload_len)
+        _send_all(self._sock, req)
+        _send_all(self._sock, raw)
+
+        # Read response
+        resp_magic = _recv_exact(self._sock, 4)
+        if resp_magic != VTP_MAGIC:
+            raise ConnectionError(f"Bad VTP response magic: {resp_magic}")
+
+        resp_hdr = _recv_exact(self._sock, 2)
+        out_ndim, out_dtype = struct.unpack("!BB", resp_hdr)
+
+        out_shape_data = _recv_exact(self._sock, out_ndim * 4)
+        out_shape = struct.unpack(f"!{out_ndim}I", out_shape_data)
+
+        out_len_data = _recv_exact(self._sock, 4)
+        out_len = struct.unpack("!I", out_len_data)[0]
+
+        out_raw = _recv_exact(self._sock, out_len)
+        return raw_to_tensor(out_raw, out_dtype, out_shape)
+
+    def _forward_bridge(self, hidden_states: "torch.Tensor",
+                        seq_len: int) -> "torch.Tensor":
+        """Forward via Rust GpuNetBridge — GPU-direct, GIL released."""
+        h = hidden_states.contiguous()
+        if not h.is_cuda:
+            h = h.cuda()
+
+        dtype_code = _DTYPE_TO_CODE.get(h.dtype, 0)
+        shape = list(h.shape)
+        in_bytes = h.nelement() * h.element_size()
+        in_ptr = h.data_ptr()
+
+        # Allocate output buffer on same device (overwritten by bridge HtoD)
+        out_buf = torch.empty_like(h)
+        out_ptr = out_buf.data_ptr()
+
+        # Entire GPU→pinned→TCP→pinned→GPU in Rust, GIL released
+        out_dtype, out_shape, out_bytes = self._bridge.forward(
+            in_ptr, in_bytes, out_ptr,
+            dtype_code, shape,
+            self.start_layer, self.end_layer, seq_len)
+
+        # Reshape output if shape changed (unlikely for hidden states)
+        out_torch_dtype = _CODE_TO_DTYPE.get(out_dtype, h.dtype)
+        if tuple(out_shape) != tuple(shape) or out_torch_dtype != h.dtype:
+            out_buf = out_buf.view(-1)[:out_bytes // h.element_size()]
+            out_buf = out_buf.view(out_torch_dtype).reshape(out_shape)
+
+        return out_buf
+
+    def close(self):
+        if self._bridge is not None:
+            try:
+                self._bridge.close()
+            except Exception:
+                pass
+            self._bridge = None
+        if self._sock is not None:
+            try:
+                self._sock.close()
+            except Exception:
+                pass
+            self._sock = None
 
 
 # ─── Model architecture helpers ──────────────────────────────────
@@ -144,21 +606,18 @@ def load_partial_model(model_name: str, start_layer: int, end_layer: int,
 
 # ─── Worker-side: run a range of layers ──────────────────────────
 
-def worker_forward(model, hidden_bytes: bytes, start_layer: int, end_layer: int,
-                   seq_len: int = 0) -> bytes:
-    """Execute layers [start_layer, end_layer) on *hidden_bytes*.
+def _worker_forward_tensor(model, hidden: "torch.Tensor",
+                           start_layer: int, end_layer: int,
+                           seq_len: int = 0) -> "torch.Tensor":
+    """Execute layers [start_layer, end_layer) directly on a tensor.
 
-    Called on the worker node.  Computes position_ids & rotary embeddings
-    internally when needed (Llama/Qwen).  Handles multi-device models
-    (partial-load or multi-GPU).
+    Fast path used by VTP server — avoids pickle serialization.
     """
     layers = get_model_layers(model)
-    # Device of the first layer we'll actually run
     device = str(next(layers[start_layer].parameters()).device)
-    hidden = bytes_to_tensor(hidden_bytes, device)
+    hidden = hidden.to(device)
     gpt2 = _is_gpt2(model)
 
-    # Position IDs & rotary (Llama / Qwen only)
     position_ids = None
     position_embeddings = None
     if not gpt2 and seq_len > 0:
@@ -187,11 +646,22 @@ def worker_forward(model, hidden_bytes: bytes, start_layer: int, end_layer: int,
             try:
                 out = layers[i](hidden, **kwargs)
             except TypeError:
-                # Fallback: architecture does not accept these kwargs
                 out = layers[i](hidden)
             hidden = out[0] if isinstance(out, tuple) else out
 
-    return tensor_to_bytes(hidden)
+    return hidden
+
+
+def worker_forward(model, hidden_bytes: bytes, start_layer: int, end_layer: int,
+                   seq_len: int = 0) -> bytes:
+    """Execute layers [start_layer, end_layer) on *hidden_bytes*.
+
+    Called on the worker node.  HTTP fallback path — uses pickle serialization.
+    For VTP path, use _worker_forward_tensor() instead (no pickle overhead).
+    """
+    hidden = bytes_to_tensor(hidden_bytes)
+    result = _worker_forward_tensor(model, hidden, start_layer, end_layer, seq_len)
+    return tensor_to_bytes(result)
 
 
 # ─── Master-side: proxy to a remote worker ────────────────────────

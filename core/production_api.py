@@ -274,6 +274,13 @@ def create_app(model_name: Optional[str] = None,
         except Exception as e:
             logger.error("Failed to pre-load model: %s", e)
 
+    # Start VTP worker server for distributed inference
+    try:
+        from core.cross_node import start_vtp_server
+        start_vtp_server()
+    except Exception as exc:
+        logger.warning("VTP server failed to start: %s", exc)
+
     return application
 
 
@@ -1226,7 +1233,8 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
             }
         """
         try:
-            from core.cross_node import distributed_generate, RemoteWorker
+            from core.cross_node import (distributed_generate, RemoteWorker,
+                                         VTPRemoteWorker)
         except ImportError as e:
             return jsonify({'error': f'cross_node import failed: {e}'}), 500
 
@@ -1242,6 +1250,7 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
         temperature = float(data.get('temperature', 0.7))
         top_k = int(data.get('top_k', 50))
         top_p = float(data.get('top_p', 0.9))
+        use_vtp = data.get('vtp', True)  # VTP by default
 
         remote_defs = data.get('remote_workers', [])
         local_layers = data.get('local_layers', [0, 0])
@@ -1250,12 +1259,26 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
 
         token = os.environ.get('VRM_API_TOKEN', '')
         workers = []
+        transport_mode = "http"
         for rd in remote_defs:
             url = rd.get('url', '')
             sl = int(rd.get('start_layer', 0))
             el = int(rd.get('end_layer', 0))
             if not url or el <= sl:
                 return jsonify({'error': f'Invalid worker def: {rd}'}), 400
+            # Try VTP first (extract host from URL)
+            if use_vtp:
+                try:
+                    from urllib.parse import urlparse
+                    vtp_port = int(rd.get('vtp_port', 18951))
+                    parsed = urlparse(url)
+                    host = parsed.hostname
+                    w = VTPRemoteWorker(host, vtp_port, sl, el)
+                    workers.append(w)
+                    transport_mode = "vtp"
+                    continue
+                except Exception:
+                    pass  # Fallback to HTTP
             workers.append(RemoteWorker(url, token, sl, el))
 
         try:
@@ -1268,6 +1291,10 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
                 top_k=top_k,
                 top_p=top_p,
             )
+            # Close VTP connections
+            for w in workers:
+                if hasattr(w, 'close'):
+                    w.close()
             return jsonify({
                 'object': 'text_completion',
                 'model': getattr(_registry._pipeline, 'model_name', ''),
@@ -1279,6 +1306,7 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
                     'tokens_per_second': result['tokens_per_second'],
                 },
                 'distributed': {
+                    'transport': transport_mode,
                     'local_layers': local_layers,
                     'remote_workers': [
                         {'url': rd.get('url'), 'layers': [rd.get('start_layer'), rd.get('end_layer')]}
@@ -1330,6 +1358,12 @@ def main():
 
     def _cleanup():
         logger.info("Shutting down gracefully...")
+        # Stop VTP server
+        try:
+            from core.cross_node import stop_vtp_server
+            stop_vtp_server()
+        except Exception:
+            pass
         # Drain inference executor
         try:
             if hasattr(app, 'vrm_executor') and app.vrm_executor:
@@ -1358,6 +1392,16 @@ def main():
     signal.signal(signal.SIGTERM, _signal_handler)
     signal.signal(signal.SIGINT, _signal_handler)
 
+    # Start VTP worker server for distributed inference
+    try:
+        from core.cross_node import start_vtp_server, stop_vtp_server
+        start_vtp_server()
+        # Register VTP shutdown
+        import atexit as _atexit2
+        _atexit2.register(stop_vtp_server)
+    except Exception as exc:
+        logger.warning("VTP server failed to start: %s", exc)
+
     # Pre-load model if specified via CLI
     if args.model:
         try:
@@ -1380,6 +1424,8 @@ def main():
     logger.info("  GET  /health          — Health check")
     logger.info("  GET  /api/gpu         — GPU info")
     logger.info("  GET  /api/nodes       — Cluster nodes")
+    logger.info("  VTP  :%d              — Binary tensor transport",
+                int(os.environ.get('VRM_VTP_WORKER_PORT', '18951')))
     logger.info("=" * 60)
 
     # Production: use gunicorn if available, fallback to Werkzeug

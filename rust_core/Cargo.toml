@@ -31,6 +31,10 @@ libloading = { version = "0.8", optional = true }
 # Lazy static pour le vocabulaire du tokenizer
 once_cell = "1.19"
 
+# Socket options (SO_RCVBUF/SO_SNDBUF) on Linux
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
 [features]
 default = []
 cuda = ["cudarc", "libloading"]
