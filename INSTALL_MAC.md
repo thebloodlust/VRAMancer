@@ -1,15 +1,43 @@
 # Installation VRAMancer MLX Worker — MacBook M4
 
-## Étape 1 : Créer un venv et installer les dépendances
+## Étape 1 : Créer un venv arm64 et installer les dépendances
 
-**IMPORTANT** : Il faut un Python arm64 natif (pas Rosetta/x86).
-Vérifier avec : `python3 -c "import platform; print(platform.machine())"` → doit afficher `arm64`.
+**IMPORTANT** : MLX nécessite un Python **arm64 natif** (pas Rosetta/x86).
 
-Si ça affiche `x86_64`, utiliser `/opt/homebrew/bin/python3` à la place, ou installer Python depuis [python.org](https://www.python.org/downloads/macos/) (version Universal2 ou arm64).
+Même si tu installes Python 3.14 arm64 depuis python.org, le `python3` dans le PATH peut encore pointer vers une version x86 (Homebrew x86, ancienne install, etc.).
 
+**Vérifier l'architecture :**
 ```bash
-/opt/homebrew/bin/python3 -m venv ~/venv_vrm
+python3 -c "import platform; print(platform.machine())"
+```
+→ Doit afficher `arm64`. Si ça affiche `x86_64`, il faut utiliser le **chemin complet** du Python arm64.
+
+**Trouver le bon Python arm64 :**
+```bash
+# Python installé depuis python.org (3.14)
+/Library/Frameworks/Python.framework/Versions/3.14/bin/python3.14 -c "import platform; print(platform.machine())"
+
+# Python Homebrew arm64 (si installé via /opt/homebrew)
+/opt/homebrew/bin/python3 -c "import platform; print(platform.machine())"
+
+# Chercher tous les Python disponibles
+find /Library/Frameworks /opt/homebrew/bin /usr/local/bin -name "python3*" 2>/dev/null
+```
+
+**Créer le venv avec le bon Python (celui qui affiche arm64) :**
+```bash
+# Exemple avec Python 3.14 installé depuis python.org :
+/Library/Frameworks/Python.framework/Versions/3.14/bin/python3.14 -m venv ~/venv_vrm
+
+# OU avec Homebrew arm64 :
+# /opt/homebrew/bin/python3 -m venv ~/venv_vrm
+
+# Activer et vérifier que c'est bien arm64
 source ~/venv_vrm/bin/activate
+python3 -c "import platform; print(platform.machine())"
+# → DOIT afficher arm64
+
+# Installer les dépendances
 pip install mlx mlx-lm numpy
 ```
 
