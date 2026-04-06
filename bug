@@ -28,3 +28,8 @@ python -c "import sys; sys.path.insert(0,'.'); from core.cross_node import VTPWo
 
 6) Ca doit afficher "Worker VTP ready on port 18951, press Enter to stop..."
    Confirme dans le chat quand c'est bon.
+
+=== UPDATE: j'ai corrigé un bug, le serveur renvoyait rien ===
+Ferme le worker (Entrée), puis:
+   git pull
+Puis relance la commande de l'étape 5 ci-dessus.
