@@ -1,0 +1,77 @@
+name: GPU Tests (Self-hosted)
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'core/**'
+      - 'csrc/**'
+      - 'rust_core/**'
+      - 'tests/**'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'core/**'
+      - 'csrc/**'
+      - 'rust_core/**'
+      - 'tests/**'
+  workflow_dispatch:  # Manual trigger
+
+jobs:
+  gpu-test:
+    name: GPU Tests (CUDA)
+    runs-on: [self-hosted, gpu, linux]
+    timeout-minutes: 30
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Check GPU availability
+      run: |
+        nvidia-smi
+        python3 -c "import torch; print(f'CUDA: {torch.cuda.is_available()}, GPUs: {torch.cuda.device_count()}')"
+
+    - name: Install dependencies
+      run: |
+        python3 -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest pytest-cov
+
+    - name: Build Rust core (if CUDA available)
+      run: |
+        if command -v cargo &> /dev/null; then
+          cd rust_core && cargo build --release --features cuda
+          cp target/release/libvramancer_rust.so ../
+        fi
+      continue-on-error: true
+
+    - name: Run GPU tests (@pytest.mark.slow)
+      env:
+        VRM_TEST_MODE: "1"
+        VRM_DISABLE_RATE_LIMIT: "1"
+      run: |
+        python3 -m pytest tests/ -m "slow" --no-cov -v --tb=short 2>&1 | tee gpu-test-results.txt
+
+    - name: Run integration tests
+      env:
+        VRM_TEST_MODE: "1"
+        VRM_DISABLE_RATE_LIMIT: "1"
+      run: |
+        python3 -m pytest tests/ -m "integration" --no-cov -v --tb=short 2>&1 | tee -a gpu-test-results.txt
+      continue-on-error: true
+
+    - name: Run full suite WITHOUT stubs
+      env:
+        VRM_DISABLE_RATE_LIMIT: "1"
+        VRM_TEST_MODE: "1"
+      run: |
+        python3 -m pytest tests/ -m "not chaos" --no-cov -q --tb=short \
+          --deselect tests/test_chaos_concurrency.py::test_pipeline_concurrent_load
+
+    - name: Upload test results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: gpu-test-results
+        path: gpu-test-results.txt
+        retention-days: 30

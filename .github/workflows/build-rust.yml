@@ -12,8 +12,31 @@ on:
       - 'rust_core/**'
 
 jobs:
+  lint:
+    name: Lint Rust
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Check formatting
+        run: cd rust_core && cargo fmt -- --check
+      - name: Clippy
+        run: cd rust_core && cargo clippy -- -D warnings
+
+  test:
+    name: Test Rust
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run tests
+        run: cd rust_core && cargo test
+
   build-wheels:
     name: Build wheels on ${{ matrix.os }}
+    needs: [lint, test]
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -21,6 +44,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -41,6 +66,12 @@ jobs:
         run: |
           cd rust_core
           maturin build --release
+
+      - name: Verify Python import
+        if: runner.os == 'Linux'
+        run: |
+          pip install rust_core/target/wheels/*.whl
+          python -c "import vramancer_rust; print(vramancer_rust.__doc__)"
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
