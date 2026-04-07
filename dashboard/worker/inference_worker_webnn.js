@@ -459,6 +459,9 @@ async function forwardDecodeStep(embed) {
         // 8. Residual connection 2
         currentHidden = new Float32Array(H);
         for (let i = 0; i < H; i++) currentHidden[i] = residual[i] + mlpOut[i];
+
+        // Yield every 4 layers to prevent Chrome tab kill on mobile
+        if (l % 4 === 3) await new Promise(r => setTimeout(r, 0));
     }
 
     lastHiddenState = currentHidden;
@@ -550,6 +553,9 @@ async function generate(ws, promptIds, maxTokens) {
         if (!generating) break;
         const stepStart = performance.now();
 
+        // Yield to browser event loop — prevents Chrome tab crash on mobile
+        await new Promise(r => setTimeout(r, 0));
+
         // 1. Embed token
         const embed = new Float32Array(H);
         for (let i = 0; i < H; i++) {
@@ -557,7 +563,13 @@ async function generate(ws, promptIds, maxTokens) {
         }
 
         // 2. Full forward pass (WebNN NPU)
-        await forwardDecodeStep(embed);
+        try {
+            await forwardDecodeStep(embed);
+        } catch (e) {
+            postStatus("error", `Decode step ${step} failed: ${e.message}`);
+            console.error("forwardDecodeStep error:", e);
+            break;
+        }
 
         // 3. LM head + argmax
         nextToken = await lmHeadArgmax(lastHiddenState);

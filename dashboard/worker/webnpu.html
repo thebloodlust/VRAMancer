@@ -230,10 +230,10 @@
             document.head.appendChild(script);
         })();
 
-        // ====== Auto-detect WSS URL ======
+        // ====== Auto-detect WS URL — match page protocol ======
         (function() {
-            const proto = location.protocol === "https:" ? "wss" : "ws";
             const host = location.host;
+            const proto = location.protocol === "https:" ? "wss" : "ws";
             document.getElementById("wsUrl").value = `${proto}://${host}`;
         })();
 

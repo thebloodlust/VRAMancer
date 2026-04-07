@@ -244,10 +244,14 @@ class WebGPUBackend(BaseLLMBackend):
             return
 
         # Build shared SSL context for WSS + HTTPS
-        cert_path, key_path = self._ensure_self_signed_cert()
-        if cert_path:
-            self._ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-            self._ssl_context.load_cert_chain(cert_path, key_path)
+        # VRM_WEBGPU_NO_SSL=1 bypasses SSL (use chrome://flags insecure-origin)
+        if not os.environ.get("VRM_WEBGPU_NO_SSL"):
+            cert_path, key_path = self._ensure_self_signed_cert()
+            if cert_path:
+                self._ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+                self._ssl_context.load_cert_chain(cert_path, key_path)
+        else:
+            self.log.info("SSL disabled (VRM_WEBGPU_NO_SSL=1)")
 
         # Single port: WSS + static files on ws_port (avoids cert-per-port issues)
         self._start_ws_server()
