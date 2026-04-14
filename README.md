@@ -15,22 +15,41 @@ vramancer run Qwen/Qwen2.5-7B-Instruct -p "Explain gradient descent in 3 sentenc
 
 VRAMancer auto-detects all GPUs, splits the model proportionally to available VRAM, and runs inference block-by-block with CPU-staged transfers between GPUs. No config files, no YAML, no manual device maps.
 
-## Proven: What it actually does
+## Benchmarks
 
-**Heterogeneous multi-GPU inference** — the core feature, benchmarked:
+### Multi-GPU inference — heterogeneous split (RTX 3090 + RTX 5070 Ti)
 
-| Model | Setup | Result |
-|-------|-------|--------|
-| Qwen2.5-14B (28 GB bf16) | Single RTX 3090 (24 GB) | **OOM** |
-| Qwen2.5-14B (28 GB bf16) | Single RTX 5070 Ti (16 GB) | **OOM** |
-| Qwen2.5-14B (28 GB bf16) | VRAMancer 2-GPU (3090 + 5070 Ti) | **6.0 tok/s** ✓ |
-| Qwen2.5-14B NF4 | Single GPU | **10.5 tok/s** (75% faster, 10.8 GB) |
-| Qwen2.5-7B GGUF Q4_K_M | llama.cpp backend | **106.8 tok/s** (3.0 GB) |
+| Model | Params | VRAM | tok/s | Notes |
+|-------|--------|------|-------|-------|
+| Qwen2.5-14B BF16 | 14B | 28 GB | **6.0** | 2-GPU pipeline-parallel |
+| Qwen2.5-14B NF4 | 14B | 10.8 GB | **10.5** | 1 GPU, bitsandbytes |
+| **Qwen3-Coder-Next Q3** | **80B (3B active)** | **38 GB** | **~60** | GGUF Q3_K_XL, 2-GPU tensor split, MoE |
+| Qwen2.5-7B GGUF Q4_K_M | 7B | 4.5 GB | **106.8** | llama.cpp, 1 GPU |
 
-_Hardware: RTX 3090 + RTX 5070 Ti, Proxmox VM, PCIe passthrough, CPU-staged transfers ~11 GB/s._
-_Bare-metal expected +10-30% with P2P/NVLink._
+> Qwen3-Coder-Next: 80B MoE model (3B active params per token), GGUF Q3_K_XL split across RTX 3090 (23.4 GB) + RTX 5070 Ti (15 GB). First token: 66–92 ms. Faster than a 14B dense model despite 6× more total parameters — MoE sparsity wins.
 
-**Single-GPU performance** — near-zero overhead:
+### GPU-to-GPU transfer bandwidth (Proxmox PCIe P2P)
+
+`nvidia-smi topo -p2p r` shows P2P OK between GPUs. `torch.cuda.can_device_access_peer()` returns False (CUDA API lies in VM) — VRAMancer probes nvidia-smi as ground truth.
+
+| Method | Bandwidth | Notes |
+|--------|-----------|-------|
+| Rust `cuMemcpyPeerAsync` | **~25 GB/s** | True PCIe P2P DMA |
+| PyTorch `.to()` | ~12 GB/s | CPU-staged fallback |
+| Python pinned CPU | ~10 GB/s | 2-hop: GPU→CPU→GPU |
+
+### KV cache migration (VRAM Lending Pool preemption)
+
+Simulates evicting KV pages from GPU 1 → GPU 0 when a lending GPU reclaims its VRAM.
+Page size: 3 MB (Qwen2.5-14B: 48L × 8kv × 16tok × 128dim × bf16).
+
+| Scenario | CPU-staged | Rust P2P | Speedup |
+|----------|-----------|----------|---------|
+| 10 pages (30 MB) | ~8 ms | ~4 ms | +47% |
+| 100 pages (300 MB) | ~28 ms | ~15 ms | +46% |
+| 500 pages (1.5 GB) | ~116 ms | ~61 ms | **+47%** |
+
+### Single-GPU overhead — near-zero
 
 | Model | HuggingFace native | VRAMancer | Delta |
 |-------|-------------------|-----------|-------|
@@ -38,7 +57,16 @@ _Bare-metal expected +10-30% with P2P/NVLink._
 | TinyLlama-1.1B | 53.0 tok/s | 56.5 tok/s | **+6.6%** |
 | Mistral-7B-v0.1 | 35.1 tok/s | 34.9 tok/s | -0.6% |
 
-Full benchmark details: [benchmarks/BENCHMARK_RESULTS.md](benchmarks/BENCHMARK_RESULTS.md)
+### WebNPU (browser inference via WebNN)
+
+| Device | Backend | tok/s |
+|--------|---------|-------|
+| Samsung S25 Ultra (Hexagon NPU) | WebNN via WebNPU | **67.4** |
+| MacBook M4 | WebGPU | ~45 |
+
+_Hardware: RTX 3090 (24 GB, PCIe 4.0) + RTX 5070 Ti (16 GB, PCIe 5.0), Proxmox VM, VFIO passthrough._
+
+Full benchmark scripts: [benchmarks/](benchmarks/)
 
 ## Install
 
