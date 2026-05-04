@@ -145,7 +145,7 @@ def _cmd_version():
         from core import __version__
         print(f"VRAMancer v{__version__}")
     except Exception:
-        print("VRAMancer v0.2.4")
+        print("VRAMancer vunknown")
 
 
 def _cmd_status():
