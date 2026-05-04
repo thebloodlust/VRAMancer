@@ -33,6 +33,11 @@ import threading
 from typing import Any, Dict, List, Optional
 from contextlib import contextmanager
 
+try:
+    from core.env_flags import flags as _flags
+except ImportError:
+    _flags = None  # facade unavailable — fall back to os.environ
+
 _logger = logging.getLogger("vramancer.pipeline")
 _MINIMAL = os.environ.get("VRM_MINIMAL_TEST", "")
 
