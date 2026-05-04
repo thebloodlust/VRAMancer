@@ -24,14 +24,17 @@ class PipelineRegistry:
         self._lock = threading.RLock()
         self._pipeline = None
         self.discovery = None
-        
-        # Start global cluster discovery immediately so node is discoverable
-        try:
-            from core.network.cluster_discovery import ClusterDiscovery
-            self.discovery = ClusterDiscovery(heartbeat_interval=5)
-            self.discovery.start()
-        except ImportError:
-            pass
+
+        # Cluster discovery is opt-in: starting it broadcasts UDP packets and
+        # spawns background threads, which is undesirable in tests / CLI tools.
+        # Enable explicitly with VRM_CLUSTER_AUTO_DISCOVER=1.
+        if os.environ.get("VRM_CLUSTER_AUTO_DISCOVER", "").lower() in ("1", "true", "yes"):
+            try:
+                from core.network.cluster_discovery import ClusterDiscovery
+                self.discovery = ClusterDiscovery(heartbeat_interval=5)
+                self.discovery.start()
+            except ImportError:
+                pass
 
     # ------------------------------------------------------------------
     # Core lifecycle
