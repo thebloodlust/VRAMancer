@@ -232,8 +232,8 @@ class PlacementEngine:
                     if dev["backend"] in ("cuda", "rocm", "mps"):
                         free = self.monitor.get_free_memory(dev["index"])
                         
-                        # -> THE NEUROPLASTICITY HEURISTIC
-                        # We discount the free VRAM based on the strength of the neural connection.
+                        # -> Adaptive scoring heuristic
+                        # We discount the free VRAM based on the strength of the connection.
                         # Meaning a GPU with lots of VRAM but a terrible connection will look "full".
                         effective_free = self._apply_neuroplasticity_score(free, dev["index"])
                         
@@ -243,12 +243,12 @@ class PlacementEngine:
             except Exception:
                 pass
 
-        # Since max_free is degraded by plasticity, if the network is terrible, we fall to L3 instead of L1.
+        # Since max_free is degraded by adaptive scoring, if the network is terrible, we fall to L3 instead of L1.
         level = "L1" if max_free >= size_mb * 1024 * 1024 else "L3"
         return {
             "level": level,
             "gpu_id": gpu_id,
-            "strategy": "vram_neuroplastic",
+            "strategy": "vram_adaptive",
         }
 
     def _strategy_balanced(self, block: Dict[str, Any]) -> Dict[str, Any]:
