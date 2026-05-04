@@ -174,22 +174,17 @@ def detect_platform_type() -> str:
 
 
 def _get_local_ip() -> str:
-    """Get local IP address reliably (prefers IPv6 if available)."""
-    # Try IPv6 first (global unicast)
-    for af, target in ((socket.AF_INET6, ("2001:4860:4860::8888", 80)),
-                        (socket.AF_INET, ("8.8.8.8", 80))):
-        try:
-            s = socket.socket(af, socket.SOCK_DGRAM)
-            s.settimeout(1)
-            s.connect(target)
-            ip = s.getsockname()[0]
-            s.close()
-            # Skip link-local IPv6 (fe80::) — not routable
-            if af == socket.AF_INET6 and ip.startswith("fe80"):
-                continue
-            return ip
-        except Exception:
-            continue
+    """Get local LAN IPv4 address (preferred for cross-device connectivity)."""
+    # Always prefer IPv4 for LAN discovery — IPv6 not routable on most home networks
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(1)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        pass
     try:
         return socket.gethostbyname(socket.gethostname())
     except Exception:

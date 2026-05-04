@@ -458,6 +458,23 @@ class TransferManager:
 
         return result
 
+    def send_tensor(
+        self,
+        source_gpu: int,
+        target_gpu: int,
+        tensor: Any,
+        stream: Optional[Any] = None,
+    ) -> Any:
+        """Transfer tensor and return the result tensor on target_gpu.
+
+        Like send_activation() but returns the output tensor directly,
+        suitable for use in accelerate hooks and forward-pass interception.
+        """
+        if source_gpu == target_gpu:
+            return tensor
+        _, dst_tensor = self._execute_transfer(source_gpu, target_gpu, tensor, stream)
+        return dst_tensor
+
     def _execute_transfer(
         self,
         source_gpu: int,

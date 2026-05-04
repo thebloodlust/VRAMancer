@@ -27,6 +27,9 @@ AITP_HEADER_FORMAT = "!2sBBQI"
 AITP_MAGIC = b"VT"
 AITP_VERSION = 1
 
+# ── Standard AITP port (configurable via VRM_AITP_PORT) ────────────────
+AITP_PORT = int(os.environ.get("VRM_AITP_PORT", "55555"))
+
 # Flag bits
 FLAG_FEC = 0x01
 FLAG_COMPRESSED = 0x02
@@ -81,7 +84,7 @@ def _get_cluster_secret() -> bytes:
 class AITPProtocol:
     """UDP-based tensor transport with HMAC authentication and optional FEC."""
 
-    def __init__(self, port=9109, anycast_ipv6="ff02::1:ff00:1"):
+    def __init__(self, port=AITP_PORT, anycast_ipv6="ff02::1:ff00:1"):
         self.port = port
         self.anycast_ipv6 = anycast_ipv6
         self._fec = None
