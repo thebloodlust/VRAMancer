@@ -28,8 +28,11 @@ pub enum TransportTier {
 /// Détecte le meilleur tier réseau disponible sur ce nœud host
 #[pyfunction]
 fn detect_best_transport() -> TransportTier {
-    // Plus tard, nous ajouterons ici la détection de "nvidia_peermem" / "ibverbs".
-    // Pour l'instant, on active notre nouveau "Niveau 2" par défaut (ZeroCopy TCP) !
+    // Probe RDMA verbs availability at runtime via libibverbs
+    let has_rdma = unsafe { libloading::Library::new("libibverbs.so.1").is_ok() };
+    if has_rdma {
+        return TransportTier::DirectRdma;
+    }
     TransportTier::ZeroCopyTcp
 }
 
