@@ -110,4 +110,11 @@ Démarrage : 2026-04-08
 
 ## [SUMMARY]
 
-_À remplir après validation finale._
+- Tâches DONE : 14/14 (T0.1–T0.5, T1.1–T1.3, T2.1–T2.3, T3.1–T3.2)
+- Tâches BLOCKED : 0
+- Tâches SKIPPED : 0
+- Tests ajoutés : +15 (config_manager ×5, batcher_race ×1, paged_offload ×3, fastapi_e2e ×3, security_boundary ×3)
+- Baseline : 999 passed, 1 failed (pre-existing), 39 skipped
+- Final : **1014 passed, 1 failed (pre-existing), 39 skipped** — aucune régression introduite
+- Commits : 13 commits sur `chore/sonnet-plan-exec`
+
