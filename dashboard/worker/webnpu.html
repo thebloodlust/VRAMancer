@@ -120,9 +120,11 @@
     </div>
 
     <div class="controls">
-        <input type="text" id="wsUrl" value="wss://localhost:8765" placeholder="WebSocket URL">
+        <input type="text" id="wsUrl" placeholder="WebSocket URL">
         <button id="btnConnect" onclick="doConnect()">Connect</button>
         <button id="btnStop" class="stop" onclick="doStop()" disabled>Stop</button>
+        <button id="btnScan" onclick="doScan()" style="background:#1f6feb">Scan LAN</button>
+        <span id="discoverStatus" style="font-size:11px;color:#8b949e;margin-left:8px"></span>
     </div>
 
     <div class="status-bar">
@@ -147,6 +149,13 @@
     </div>
 
     <script>
+        // Auto-fill WebSocket URL from current page host
+        (function() {
+            const host = window.location.hostname || 'localhost';
+            const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
+            document.getElementById('wsUrl').value = `${proto}://${host}:8765`;
+        })();
+
         // ====== Detect best backend and load appropriate worker ======
         let workerType = "none";
 
@@ -230,12 +239,120 @@
             document.head.appendChild(script);
         })();
 
-        // ====== Auto-detect WS URL — match page protocol ======
-        (function() {
-            const host = location.host;
-            const proto = location.protocol === "https:" ? "wss" : "ws";
-            document.getElementById("wsUrl").value = `${proto}://${host}`;
+        // ====== Swarm Auto-Discovery ======
+        const _DISCOVER_TIMEOUT = 3000;
+        let _discoveredServers = [];
+
+        async function probeServer(baseUrl) {
+            try {
+                const resp = await fetch(`${baseUrl}/api/discover`, {
+                    signal: AbortSignal.timeout(_DISCOVER_TIMEOUT),
+                });
+                if (!resp.ok) return null;
+                const info = await resp.json();
+                if (info.server !== "vramancer") return null;
+                info._baseUrl = baseUrl;
+                return info;
+            } catch { return null; }
+        }
+
+        function buildWsUrl(info, host) {
+            return `${info.ws_proto}://${host}:${info.ws_port}`;
+        }
+
+        function showDiscoverStatus(msg) {
+            document.getElementById("discoverStatus").textContent = msg;
+        }
+
+        // Try same-origin first, then probed candidates
+        (async function autoDiscover() {
+            showDiscoverStatus("Discovering...");
+
+            // 1. Same-origin (page is served by VRAMancer)
+            const proto = location.protocol === "https:" ? "https" : "http";
+            const sameOrigin = `${proto}://${location.host}`;
+            const info = await probeServer(sameOrigin);
+            if (info) {
+                const wsUrl = buildWsUrl(info, location.hostname);
+                document.getElementById("wsUrl").value = wsUrl;
+                const model = info.model || "none";
+                log("init", `Auto-discovered server: model=${model}, workers=${info.workers}`);
+                showDiscoverStatus(`Found (${location.hostname})`);
+                _discoveredServers.push({ info, host: location.hostname });
+                // Auto-connect after backend detection settles
+                setTimeout(() => {
+                    if (!worker) doConnect();
+                }, 800);
+                return;
+            }
+
+            // 2. Fallback: set URL from location.host (no discovery endpoint)
+            const wsFallback = (location.protocol === "https:" ? "wss" : "ws")
+                             + "://" + location.host;
+            document.getElementById("wsUrl").value = wsFallback;
+            showDiscoverStatus("No discovery — manual");
+            log("init", "Discovery endpoint not found, using page origin");
         })();
+
+        async function doScan() {
+            const btn = document.getElementById("btnScan");
+            btn.disabled = true;
+            btn.textContent = "Scanning...";
+            showDiscoverStatus("Scanning LAN...");
+            _discoveredServers = [];
+
+            // Build candidate list: common LAN subnets
+            const candidates = new Set();
+            // Extract subnet from current page host
+            const pageIP = location.hostname;
+            const m = pageIP.match(/^(\d+\.\d+\.\d+)\.\d+$/);
+            if (m) {
+                // Scan .1 (gateway) and .2-.50 (common server range)
+                for (let i = 1; i <= 50; i++) {
+                    candidates.add(`${m[1]}.${i}`);
+                }
+            }
+            // Always try common defaults
+            for (const base of ["192.168.1", "192.168.0", "10.0.0"]) {
+                for (const last of [1, 2, 10, 20, 21, 100]) {
+                    candidates.add(`${base}.${last}`);
+                }
+            }
+            // Remove current host (already tried)
+            candidates.delete(pageIP);
+
+            const proto = location.protocol === "https:" ? "https" : "http";
+            const port = location.port || (location.protocol === "https:" ? "443" : "80");
+
+            // Probe in parallel batches of 10
+            const all = [...candidates];
+            for (let i = 0; i < all.length; i += 10) {
+                const batch = all.slice(i, i + 10);
+                const results = await Promise.all(
+                    batch.map(ip => probeServer(`${proto}://${ip}:${port}`))
+                );
+                results.forEach((info, idx) => {
+                    if (info) {
+                        const host = batch[idx];
+                        _discoveredServers.push({ info, host });
+                        log("init", `Found VRAMancer @ ${host} (workers=${info.workers}, model=${info.model || "none"})`);
+                    }
+                });
+            }
+
+            if (_discoveredServers.length > 0) {
+                const best = _discoveredServers[0];
+                const wsUrl = buildWsUrl(best.info, best.host);
+                document.getElementById("wsUrl").value = wsUrl;
+                showDiscoverStatus(`Found ${_discoveredServers.length} server(s)`);
+            } else {
+                showDiscoverStatus("No servers found");
+                log("init", "LAN scan: no VRAMancer servers found");
+            }
+
+            btn.disabled = false;
+            btn.textContent = "Scan LAN";
+        }
 
         // ====== UI Logic (same as inference.html) ======
         let worker = null;
