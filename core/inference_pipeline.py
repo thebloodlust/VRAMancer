@@ -223,7 +223,11 @@ class InferencePipeline:
             if hasattr(self.backend, 'transfer_manager'):
                 self.backend.transfer_manager = self.transfer_manager
 
-            # 6b. Tensor Parallel mode (VRM_PARALLEL_MODE=tp)
+            # 6b. Patch accelerate send_to_device → Rust P2P for CUDA→CUDA transfers
+            if self.transfer_manager is not None and self.num_gpus > 1:
+                self._patch_accelerate_p2p(self.transfer_manager)
+
+            # 6c. Tensor Parallel mode (VRM_PARALLEL_MODE=tp)
             # When selected, wraps the loaded model with apply_tensor_parallel()
             # which shards weights across GPUs and uses NCCL all-reduce.
             # Default: "pp" (pipeline parallelism via model_splitter).
@@ -318,6 +322,62 @@ class InferencePipeline:
             self._init_cuda_graph_runner()
 
         return self
+
+    # ------------------------------------------------------------------
+    # P2P hook
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _patch_accelerate_p2p(transfer_manager: Any) -> None:
+        """Monkey-patch accelerate's send_to_device to use Rust P2P DMA.
+
+        Accelerate's AlignDevicesHook moves tensors between GPUs using PyTorch
+        .to() which maxes out at ~12 GB/s (CPU-staged). Our Rust cuMemcpyPeer
+        path reaches ~25 GB/s with Proxmox PCIe P2P. We patch the module-level
+        send_to_device used by all hooks so large inter-GPU tensors go via P2P.
+
+        Threshold: 512 KB. Below that the overhead vs .to() is negligible.
+        """
+        _P2P_THRESHOLD = 512 * 1024  # bytes
+
+        try:
+            import accelerate.utils.operations as _ops
+            import torch as _torch
+
+            _orig_send = _ops.send_to_device
+
+            def _p2p_send(tensor, device, non_blocking=False, skip_keys=None):
+                if (isinstance(tensor, _torch.Tensor)
+                        and tensor.device.type == "cuda"):
+                    dst = _torch.device(device)
+                    if dst.type == "cuda":
+                        src_idx = tensor.device.index if tensor.device.index is not None else 0
+                        dst_idx = dst.index if dst.index is not None else 0
+                        if src_idx != dst_idx:
+                            nbytes = tensor.nelement() * tensor.element_size()
+                            if nbytes >= _P2P_THRESHOLD:
+                                try:
+                                    return transfer_manager.send_tensor(
+                                        src_idx, dst_idx, tensor
+                                    )
+                                except Exception:
+                                    pass  # fall through to .to()
+                return _orig_send(tensor, device,
+                                  non_blocking=non_blocking, skip_keys=skip_keys)
+
+            _ops.send_to_device = _p2p_send
+            # Also patch the reference cached in accelerate.hooks
+            try:
+                import accelerate.hooks as _hooks
+                _hooks.send_to_device = _p2p_send
+            except Exception:
+                pass
+            _logger.info(
+                "Accelerate send_to_device patched → Rust P2P (threshold=%d KB)",
+                _P2P_THRESHOLD // 1024,
+            )
+        except Exception as e:
+            _logger.debug("Could not patch accelerate P2P: %s", e)
 
     # ------------------------------------------------------------------
     # Inference
@@ -480,6 +540,24 @@ class InferencePipeline:
             except NotImplementedError:
                 # Backend doesn't support generate() — fall back to infer()
                 return self._generate_fallback(prompt, max_new_tokens)
+            except RuntimeError as e:
+                # OOM recovery: clear cache and retry with reduced tokens
+                if _TORCH and "out of memory" in str(e).lower():
+                    _logger.warning(
+                        "CUDA OOM during generate — attempting recovery "
+                        "(clearing cache, halving max_new_tokens)"
+                    )
+                    recovered = self._oom_recover(prompt, gen_kwargs, max_new_tokens)
+                    if recovered is not None:
+                        return recovered
+                # Not OOM or recovery failed — fall through to generic handler
+                if _METRICS:
+                    INFER_ERRORS.inc()
+                if span:
+                    span.set_attribute("error", True)
+                    span.set_attribute("error.message", str(e))
+                _logger.error("Generation failed: %s", e, exc_info=True)
+                raise
             except Exception as e:
                 if _METRICS:
                     INFER_ERRORS.inc()
@@ -863,6 +941,48 @@ class InferencePipeline:
             return result
         return str(result)
 
+    def _oom_recover(self, prompt: str, gen_kwargs: dict, original_max_tokens: int) -> Optional[str]:
+        """Attempt to recover from a CUDA OOM error.
+
+        Strategy:
+          1. Empty CUDA cache on all devices
+          2. Evict borrowed KV pages (lending pool)
+          3. Retry with halved max_new_tokens (minimum 16)
+
+        Returns generated text on success, None on failure.
+        """
+        if not _TORCH or not torch.cuda.is_available():
+            return None
+
+        # Step 1: flush CUDA cache
+        for i in range(torch.cuda.device_count()):
+            try:
+                with torch.cuda.device(i):
+                    torch.cuda.empty_cache()
+            except Exception:
+                pass
+        _logger.info("OOM recovery: CUDA caches cleared on %d devices",
+                     torch.cuda.device_count())
+
+        # Step 2: reclaim lending leases if pool is active
+        if self.lending_pool and hasattr(self.lending_pool, 'reclaim_all'):
+            try:
+                self.lending_pool.reclaim_all()
+                _logger.info("OOM recovery: reclaimed VRAM lending leases")
+            except Exception as e:
+                _logger.debug("OOM recovery: lending reclaim failed: %s", e)
+
+        # Step 3: retry with reduced tokens
+        reduced = max(16, original_max_tokens // 2)
+        retry_kwargs = {**gen_kwargs, "max_new_tokens": reduced}
+        _logger.info("OOM recovery: retrying with max_new_tokens=%d (was %d)",
+                     reduced, original_max_tokens)
+        try:
+            return self._protected_generate(prompt, retry_kwargs)
+        except RuntimeError:
+            _logger.error("OOM recovery failed — model may be too large for available VRAM")
+            return None
+
     # ------------------------------------------------------------------
     # Status / info
     # ------------------------------------------------------------------
@@ -923,17 +1043,18 @@ class InferencePipeline:
             return None
 
         config = None
+        _trc = os.environ.get("VRM_TRUST_REMOTE_CODE") == "1"
         # Try local cache first (no network = fast)
         try:
             config = AutoConfig.from_pretrained(
-                model_name, trust_remote_code=True, local_files_only=True,
+                model_name, trust_remote_code=_trc, local_files_only=True,
             )
         except Exception:
             pass
         # Fallback: quick network fetch (only config.json, small file)
         if config is None:
             try:
-                config = AutoConfig.from_pretrained(model_name, trust_remote_code=True)
+                config = AutoConfig.from_pretrained(model_name, trust_remote_code=_trc)
             except Exception:
                 return None
 
