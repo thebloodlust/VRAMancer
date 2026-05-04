@@ -1,4 +1,6 @@
-"""WebGPU Distributed Backend for VRAMancer.
+"""**Status: experimental — POC, not production-ready.**
+
+WebGPU Distributed Backend for VRAMancer.
 
 Dispatches matmul operations to browser WebGPU workers via WebSocket.
 Browser runs a WGSL tiled matmul shader (dashboard/worker/).
@@ -281,12 +283,52 @@ class WebGPUBackend(BaseLLMBackend):
         self._loop.run_until_complete(self._serve())
 
     async def _http_process_request(self, path, request_headers):
-        """Serve static files for non-WebSocket HTTP requests.
+        """Serve static files and discovery API for non-WebSocket HTTP requests.
         Return (status, headers, body) to send HTTP response.
         Return None to proceed with WebSocket upgrade."""
         # WebSocket upgrades pass through
         if request_headers.get("Upgrade", "").lower() == "websocket":
             return None
+
+        _cors = {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type",
+        }
+
+        # CORS preflight for /api/ paths
+        if path.startswith("/api/") and \
+                request_headers.get("Access-Control-Request-Method"):
+            return (204, _cors, b"")
+
+        # ---- Swarm auto-discovery endpoint ----
+        if path == "/api/discover":
+            import json as _json
+            ws_proto = "wss" if self._ssl_context else "ws"
+            with self._workers_lock:
+                num_workers = len(self._workers)
+                worker_list = [
+                    {
+                        "addr": f"{w.addr[0]}:{w.addr[1]}",
+                        "ops": w.ops_done,
+                        "gflops": round(w.total_gflops, 1),
+                        "uptime_s": round(time.monotonic() - w.connected_at),
+                    }
+                    for w in self._workers
+                ]
+            info = {
+                "server": "vramancer",
+                "version": "1.5.0",
+                "ws_proto": ws_proto,
+                "ws_port": self._ws_port,
+                "ssl": self._ssl_context is not None,
+                "model": self.model_name,
+                "workers": num_workers,
+                "worker_details": worker_list,
+            }
+            body = _json.dumps(info).encode()
+            headers = {**_cors, "Content-Type": "application/json"}
+            return (200, headers, body)
 
         if path == "/" or path == "":
             path = "/inference.html"
@@ -317,18 +359,37 @@ class WebGPUBackend(BaseLLMBackend):
         async def handler(ws):
             addr = ws.remote_address
             worker = _WorkerConnection(ws, addr)
+            device_id = f"browser_{addr[0]}_{addr[1]}"
             with self._workers_lock:
                 self._workers.append(worker)
             self.log.info(
                 f"WebGPU worker connected: {addr} "
                 f"(total: {len(self._workers)})"
             )
+            # Register in edge swarm for cluster visibility
+            try:
+                from core.network.edge_api import register_edge_device
+                register_edge_device(device_id, {
+                    "device_type": "browser",
+                    "transport": "websocket",
+                    "address": f"{addr[0]}:{addr[1]}",
+                    "gpu": "webgpu",
+                })
+            except Exception:
+                pass
             try:
                 await ws.wait_closed()
             finally:
                 with self._workers_lock:
                     if worker in self._workers:
                         self._workers.remove(worker)
+                # Remove from edge registry
+                try:
+                    from core.network.edge_api import _edge_registry, _lock as _edge_lock
+                    with _edge_lock:
+                        _edge_registry.pop(device_id, None)
+                except Exception:
+                    pass
                 self.log.info(
                     f"WebGPU worker disconnected: {addr} "
                     f"(ops={worker.ops_done}, "
@@ -387,6 +448,13 @@ class WebGPUBackend(BaseLLMBackend):
                     san_entries.append(entry)
             except Exception:
                 pass
+            # DDNS hostname for WAN access (e.g. jeje1.synology.me)
+            ddns_host = os.environ.get("VRM_DDNS_HOST", "")
+            if ddns_host:
+                for h in ddns_host.split(","):
+                    h = h.strip()
+                    if h:
+                        san_entries.append(f"DNS:{h}")
             san_str = ",".join(san_entries)
             # Write OpenSSL config file for SAN
             ext_path.write_text(

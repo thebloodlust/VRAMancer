@@ -1,3 +1,4 @@
+"""**Status: demo / local monitoring — not for production deployment.**"""
 import os, sys
 # Auto-activation du mode minimal APRÈS import os
 if os.environ.get('VRM_DASHBOARD_MINIMAL','0') == '0':
