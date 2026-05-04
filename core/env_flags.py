@@ -239,6 +239,11 @@ class _Flags:
         return _str("VRM_METRICS_BIND", "127.0.0.1")
 
     @property
+    def CLUSTER_AUTO_DISCOVER(self) -> bool:
+        """Auto-start cluster discovery (UDP broadcast) at PipelineRegistry init."""
+        return _bool("VRM_CLUSTER_AUTO_DISCOVER")
+
+    @property
     def NODE_ID(self) -> str:
         return _str("VRM_NODE_ID", "local")
 
@@ -255,6 +260,11 @@ class _Flags:
         return _str("VRM_SAME_RACK_NODES", "")
 
     # ── AITP / VTP ─────────────────────────────────────────────────────
+    @property
+    def FEATURE_AITP(self) -> bool:
+        """Opt-in AITP/VTP network stack (opens listening sockets at start_vtp_server)."""
+        return _bool("VRM_FEATURE_AITP")
+
     @property
     def AITP_PORT(self) -> int:
         return _int("VRM_AITP_PORT", 55555)
