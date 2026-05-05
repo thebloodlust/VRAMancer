@@ -307,6 +307,11 @@ vramancer run model
 
 Detailed architecture: [docs/architecture.md](docs/architecture.md)
 
+## Known limitations & technical debt
+
+See [docs/reports/TECHNICAL_DEBT.md](docs/reports/TECHNICAL_DEBT.md) for documented stubs,
+known limitations (BnB multi-GPU upstream bug, CUDA Graph single-GPU only, etc.) and V4 plan outcomes.
+
 ## License
 
 MIT

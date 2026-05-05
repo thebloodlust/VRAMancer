@@ -1,5 +1,25 @@
 ## Changelog
 
+## [Unreleased] — V4 plan (sera 1.5.1 ou 1.6.0)
+
+### Added
+- `VRM_TRANSFER_OVERLAP` flag: CUDA stream overlap for inter-GPU transfers (P2)
+- `VRM_DEBUG_SAMPLING` flag: sampling diagnostics (P3)
+- `benchmarks/bench_stress_concurrent_v4.py`: concurrent load stress benchmark (P4)
+- `/api/dashboard/gpus` endpoint alias for dashboard GPU monitoring (P10)
+- `tests/test_transfer_manager_basic.py`, `tests/test_triton_sampling_paths.py` coverage (P8)
+
+### Fixed
+- Honest documentation of P1 attribution and methodology corrections
+- Stubs formalized with explicit STUB labels: VTP_L3, DMA-BUF, NAT hole-punch (P6)
+- WebGPU dead code annotated in `backends.py` (P7.3)
+
+### Changed
+- `TECHNICAL_DEBT.md` refreshed with V4 outcomes (P15)
+- `.github/copilot-instructions.md` updated with V4 environment vars
+- Pre-commit hooks added: trailing whitespace, YAML check, large files (P9.2)
+- CI lint job for core/: flake8 with --max-line-length=120 (P9.1)
+
 ### 1.5.0 (2026-03-23) - Honest Engineering Release
 
 **Benchmarks & Performance (NEW):**
