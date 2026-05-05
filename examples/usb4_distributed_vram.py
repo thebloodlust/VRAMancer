@@ -1,3 +1,6 @@
+# Requires: USB4/Thunderbolt hardware, VTP network stack
+# Note: core.network.packets moved to _deprecated/ — this example is partially broken.
+# See _deprecated/packets.py for legacy packet format.
 from core.network.transmission import send_block
 import torch
 
