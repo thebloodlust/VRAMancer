@@ -95,6 +95,11 @@ if (target_tier == L3_VRAM_REMOTE_RDMA) {
 
 ## [V2.1] — ReBAR detection via nvidia-smi
 
+> **Note ordering GPU (ajoutée V4 P1.1) :**
+> - `nvidia-smi` → ordre `PCI_BUS_ID` : GPU0=RTX 5070 Ti (Blackwell, 16GB), GPU1=RTX 3090 (Ampere, 24GB)
+> - `torch.cuda` → ordre `FAST_FIRST` (par défaut) : GPU0=RTX 3090 (24GB), GPU1=RTX 5070 Ti (16GB)
+> Les sections benchmarks suivantes (V2.2+) utilisent l'ordre `torch.cuda`.
+
 ```
 nvidia-smi -q | grep -A 4 "BAR1 Memory Usage"
 ```
