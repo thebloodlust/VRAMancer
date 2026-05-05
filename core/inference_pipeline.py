@@ -119,6 +119,7 @@ class InferencePipeline:
         self.gpu_hotplug = None
         self.continuous_batcher = None
         self.paged_kv = None
+        self.kv_offloader = None  # PagedAttentionOffloader (VRM_KV_OFFLOAD_ENGRAM=1)
         self.lending_pool = None
         self.hierarchical_memory = None
         self.fault_manager: Optional[Any] = None
@@ -1379,6 +1380,38 @@ class InferencePipeline:
                         "(%.1fx reduction on eviction)",
                         self.paged_kv.compression_ratio,
                     )
+
+            # VRM_KV_OFFLOAD_ENGRAM=1 — wire PagedAttentionOffloader for DRAM spill
+            if os.environ.get("VRM_KV_OFFLOAD_ENGRAM", "0") == "1":
+                try:
+                    from core.paged_attention_offload import PagedAttentionOffloader
+
+                    _dram_limit_gb = int(os.environ.get("VRM_KV_DRAM_LIMIT_GB", "200"))
+
+                    class _DramDict:
+                        """Simple dict-backed DRAM store matching PagedAttentionOffloader API."""
+                        def __init__(self, max_gb: int):
+                            self._store: dict = {}
+                            self._max_bytes = max_gb * 1024 ** 3
+
+                        def put(self, key: str, tensor) -> None:  # type: ignore[override]
+                            self._store[key] = tensor
+
+                        def get(self, key: str):  # type: ignore[override]
+                            return self._store.get(key)
+
+                    self.kv_offloader = PagedAttentionOffloader(
+                        self.paged_kv, _DramDict(_dram_limit_gb)
+                    )
+                    _logger.info(
+                        "KV engram offload enabled: DRAM cap=%d GB, "
+                        "parity protection via paged_attention.py",
+                        _dram_limit_gb,
+                    )
+                except Exception as _exc:
+                    _logger.debug("KV engram offload init skipped: %s", _exc)
+                    self.kv_offloader = None
+
         except Exception as e:
             _logger.debug("PagedKV init skipped: %s", e)
             self.paged_kv = None
