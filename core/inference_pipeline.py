@@ -130,7 +130,7 @@ class InferencePipeline:
         # Dynamic rebalancing
         self._rebalance_thread: Optional[threading.Thread] = None
         self._rebalancing = False
-        self._rebalance_interval = float(os.environ.get("VRM_REBALANCE_INTERVAL", "5.0"))
+        self._rebalance_interval = (_flags.REBALANCE_INTERVAL if _flags else float(os.environ.get("VRM_REBALANCE_INTERVAL", "5.0")))
 
         # Model info
         self.model_name: Optional[str] = None
@@ -236,7 +236,7 @@ class InferencePipeline:
             # When selected, wraps the loaded model with apply_tensor_parallel()
             # which shards weights across GPUs and uses NCCL all-reduce.
             # Default: "pp" (pipeline parallelism via model_splitter).
-            _parallel_mode = os.environ.get("VRM_PARALLEL_MODE", "pp").lower()
+            _parallel_mode = (_flags.PARALLEL_MODE if _flags else os.environ.get("VRM_PARALLEL_MODE", "pp").lower())
             if self.num_gpus > 1 and _parallel_mode == "tp":
                 try:
                     from core.tensor_parallel import apply_tensor_parallel
@@ -310,7 +310,7 @@ class InferencePipeline:
             # 13. Init VRAM Lending Pool (cooperative GPU memory)
             # Skip when vLLM/llama.cpp manage their own VRAM
             # Controlled by VRM_VRAM_LENDING env var (default: enabled for multi-GPU)
-            _lending_enabled = os.environ.get("VRM_VRAM_LENDING", "1").lower() not in ("0", "false", "no")
+            _lending_enabled = (_flags.VRAM_LENDING if _flags else os.environ.get("VRM_VRAM_LENDING", "1").lower() not in ("0", "false", "no"))
             if self.num_gpus > 1 and _backend_type not in ('vllm', 'llamacpp') and _lending_enabled:
                 self._init_lending_pool()
 
@@ -483,7 +483,7 @@ class InferencePipeline:
                     # Auto-create draft callable from backend if not provided
                     _draft = draft_model_callable
                     if _draft is None:
-                        draft_name = os.environ.get("VRM_DRAFT_MODEL")
+                        draft_name = (_flags.DRAFT_MODEL if _flags else os.environ.get("VRM_DRAFT_MODEL"))
                         _draft = create_draft_callable(
                             self.backend,
                             draft_model_name=draft_name,
@@ -493,9 +493,9 @@ class InferencePipeline:
                         decoder = SwarmSpeculativeDecoder(
                             draft_model_callable=_draft,
                             swarm_verify_callable=self.infer,
-                            gamma=int(os.environ.get("VRM_SPEC_GAMMA", "5")),
+                            gamma=(_flags.SPEC_GAMMA if _flags else int(os.environ.get("VRM_SPEC_GAMMA", "5"))),
                             temperature=temperature,
-                            adaptive=os.environ.get("VRM_SPEC_ADAPTIVE", "1") != "0",
+                            adaptive=(_flags.SPEC_ADAPTIVE if _flags else os.environ.get("VRM_SPEC_ADAPTIVE", "1") != "0"),
                         )
                         input_ids = self.backend.tokenizer.encode(
                             prompt, return_tensors="pt",
@@ -525,7 +525,7 @@ class InferencePipeline:
                         top_p=gen_kwargs.get("top_p", top_p),
                     )
                     result = future.result(
-                        timeout=float(os.environ.get("VRM_GENERATE_TIMEOUT", "300"))
+                        timeout=(_flags.GENERATE_TIMEOUT if _flags else float(os.environ.get("VRM_GENERATE_TIMEOUT", "300")))
                     )
                 else:
                     # Execute with fault tolerance protection
@@ -790,7 +790,7 @@ class InferencePipeline:
         Uses torch.compile with Inductor kernel fusion on the model body.
         Skipped for vLLM/Ollama backends (they have own optimized runtimes).
         """
-        if os.environ.get("VRM_MINIMAL_TEST") or os.environ.get("VRM_DISABLE_TURBO"):
+        if os.environ.get("VRM_MINIMAL_TEST") or (_flags.DISABLE_TURBO if _flags else os.environ.get("VRM_DISABLE_TURBO")):
             return
         if sys.platform == 'win32':
             _logger.info("TurboEngine skipped on Windows (Triton not available)")
@@ -832,7 +832,7 @@ class InferencePipeline:
         eliminating CPU dispatch overhead on repeated decode steps.
         Requires VRM_CUDA_GRAPH=1 (opt-in — fragile with dynamic shapes).
         """
-        if not os.environ.get("VRM_CUDA_GRAPH"):
+        if not (_flags.CUDA_GRAPH if _flags else os.environ.get("VRM_CUDA_GRAPH")):
             return
         if os.environ.get("VRM_MINIMAL_TEST"):
             return
@@ -849,8 +849,8 @@ class InferencePipeline:
             from core.cuda_graph_decode import CUDAGraphRunner
             self.cuda_graph_runner = CUDAGraphRunner(
                 model=model,
-                max_cache_entries=int(os.environ.get("VRM_CUDA_GRAPH_CACHE", "4")),
-                warmup_steps=int(os.environ.get("VRM_CUDA_GRAPH_WARMUP", "3")),
+                max_cache_entries=(_flags.CUDA_GRAPH_CACHE if _flags else int(os.environ.get("VRM_CUDA_GRAPH_CACHE", "4"))),
+                warmup_steps=(_flags.CUDA_GRAPH_WARMUP if _flags else int(os.environ.get("VRM_CUDA_GRAPH_WARMUP", "3"))),
             )
             _logger.info("CUDA Graph runner initialized (opt-in, %d cache slots)",
                          self.cuda_graph_runner.max_cache_entries)
@@ -1101,7 +1101,7 @@ class InferencePipeline:
             return None
 
         # Bytes per parameter depends on quantization
-        quant = os.environ.get("VRM_QUANTIZATION", "").lower()
+        quant = (_flags.QUANTIZATION if _flags else os.environ.get("VRM_QUANTIZATION", "").lower())
         name_lower = model_name.lower()
         if quant in ("nvfp4", "nf4") or "nvfp4" in name_lower:
             # NF4: final weights are ~0.56 B/param.  With device_map={"":gpu}
@@ -1143,7 +1143,7 @@ class InferencePipeline:
         Cross-GPU transfers add latency (~10-15 GB/s in VM environments).
         Avoiding them gives a significant speedup for models that fit.
         """
-        if os.environ.get("VRM_FORCE_MULTI_GPU") == "1":
+        if (_flags.FORCE_MULTI_GPU if _flags else os.environ.get("VRM_FORCE_MULTI_GPU") == "1"):
             _logger.info("VRM_FORCE_MULTI_GPU=1, keeping %d GPUs", num_gpus)
             return num_gpus
 
@@ -1295,7 +1295,7 @@ class InferencePipeline:
         cache so HF's generate() compresses KV states in-flight via
         PolarQuant+QJL (~4.6x VRAM reduction on the KV cache).
         """
-        kv_comp = os.environ.get("VRM_KV_COMPRESSION", "").lower()
+        kv_comp = (_flags.KV_COMPRESSION if _flags else os.environ.get("VRM_KV_COMPRESSION", "").lower())
         if kv_comp != "turboquant":
             return
 
@@ -1312,8 +1312,8 @@ class InferencePipeline:
                 return
 
             device = self._detect_device()
-            bits = int(os.environ.get("VRM_KV_COMPRESSION_BITS", "3"))
-            residual = int(os.environ.get("VRM_KV_CACHE_RESIDUAL", "128"))
+            bits = (_flags.KV_COMPRESSION_BITS if _flags else int(os.environ.get("VRM_KV_COMPRESSION_BITS", "3")))
+            residual = (_flags.KV_CACHE_RESIDUAL if _flags else int(os.environ.get("VRM_KV_CACHE_RESIDUAL", "128")))
 
             # Factory: each generate() call gets a fresh cache
             def _make_cache():
@@ -1380,7 +1380,7 @@ class InferencePipeline:
             self.continuous_batcher = ContinuousBatcher(
                 model=model,
                 tokenizer=tokenizer,
-                max_batch_size=int(os.environ.get("VRM_MAX_BATCH_SIZE", "32")),
+                max_batch_size=(_flags.MAX_BATCH_SIZE if _flags else int(os.environ.get("VRM_MAX_BATCH_SIZE", "32"))),
                 device=self._detect_device(),
                 paged_kv_manager=self.paged_kv,
             )
@@ -1484,8 +1484,8 @@ class InferencePipeline:
             from core.vram_lending import get_lending_pool, LendingPolicy
 
             policy = LendingPolicy(
-                max_lend_ratio=float(os.environ.get("VRM_LEND_RATIO", "0.70")),
-                reclaim_threshold=float(os.environ.get("VRM_RECLAIM_THRESHOLD", "0.80")),
+                max_lend_ratio=(_flags.LEND_RATIO if _flags else float(os.environ.get("VRM_LEND_RATIO", "0.70"))),
+                reclaim_threshold=(_flags.RECLAIM_THRESHOLD if _flags else float(os.environ.get("VRM_RECLAIM_THRESHOLD", "0.80"))),
             )
             self.lending_pool = get_lending_pool(
                 policy=policy,
@@ -1516,7 +1516,7 @@ class InferencePipeline:
 
             # Start background monitoring for auto-reclaim
             self.lending_pool.start_monitoring(
-                interval=float(os.environ.get("VRM_LENDING_INTERVAL", "2.0"))
+                interval=(_flags.LENDING_INTERVAL if _flags else float(os.environ.get("VRM_LENDING_INTERVAL", "2.0")))
             )
             _logger.info("VRAM Lending Pool active: %s", self.lending_pool)
 
