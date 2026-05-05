@@ -26,6 +26,7 @@
 | aitp_receiver XDP requiert CAP_NET_ADMIN | Fallback UDP gracieux — pas un bug |
 | TransferManager P2P topology cached forever | Pas de hotplug GPU supporté en cours de session |
 | `_get_method_for()` retourne `CPU_STAGED` alors que `send_activation()` utilise le bypass Rust P2P (172-190 Gbps) | Label cosmétique uniquement — les performances sont réelles via le patch accelerate `send_to_device`. Voir `docs/reports/REBAR_PROXMOX_BENCHMARK.md`. Résoudre = renommer le label dans logs (faible priorité). |
+| **CONTINUOUS_BATCHER_GENERATE_BYPASS** `(V4 P4)` — `VRM_CONTINUOUS_BATCHING=1` crée le batcher mais ne le démarre pas. `generate()` vérifie `_running` (False) → route vers `_protected_generate`. Seul `pipeline.submit()` démarre et route réellement via le batcher. Avec `generate()`, N=4 concurrent requests donne ~14 tok/s total (vs 27 seq) sur Qwen-7B — pas d'amélioration. | Utiliser `pipeline.submit()` au lieu de `pipeline.generate()` pour avoir le vrai batching. Fix potentiel : auto-start le batcher dans `generate()` si `VRM_CONTINUOUS_BATCHING=1`. |
 
 ## Stubs résolus depuis l'audit 2026-03 (pour traçabilité)
 

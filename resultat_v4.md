@@ -46,6 +46,25 @@ GPT-2 sur 1 GPU = Path 1 → `fused_sample` jamais appelé.
 
 ## [P4] — Diagnostic batcher
 
+**P4.1 submit() non-bloquant :** ✅ Vérifié — `submit()` enqueue dans `_waiting` + retourne `Future`. Lock ne couvre que la mutation de queue (brief). Phase 2 (forward GPU) hors lock. Batched prefill + batched decode implémentés dans `_iteration_step_on`.
+
+**MAIS :** `VRM_CONTINUOUS_BATCHING=1` crée le batcher (`ContinuousBatcher`) mais **ne le démarre pas**. `generate()` vérifie `_running` (False) → route vers `_protected_generate`. Seul `pipeline.submit()` démarre effectivement le batcher.
+
+**P4.2 Bench résultats :**
+
+| Mode | Sequential | N=1 | N=4 (tok/s) | N=8 (tok/s) |
+|------|-----------|-----|------------|------------|
+| Batcher OFF | 27.24 tok/s | 27.14 tok/s | 14.21 | 9.43 |
+| Batcher "ON" | 26.75 tok/s | 26.92 tok/s | 14.74 | 9.63 |
+
+Résultats identiques → batcher non actif dans les deux cas (même path `_protected_generate`).
+
+**P4.3 Verdict : (B) Le batcher ne batche pas via `generate()` même avec `VRM_CONTINUOUS_BATCHING=1`.**
+
+Root cause : `_running=False` car `batcher.start()` n'est appelé que dans `pipeline.submit()`. `generate()` check `_running` → False → pas de route batcher.
+
+Documenter dans TECHNICAL_DEBT.md : `CONTINUOUS_BATCHER_GENERATE_BYPASS`.
+
 ## [P5] — vLLM benchmark
 
 ## [P6] — Stubs formalisés
