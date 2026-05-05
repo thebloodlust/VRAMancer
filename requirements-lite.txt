@@ -1,4 +1,7 @@
 # Dépendances minimales pour VRAMancer Lite (CLI only)
+# Pour le serveur complet → requirements.txt
+# Pour tout (vLLM, llama-cpp, monitoring, dashboard) → requirements-full.txt
+# Pour Windows → requirements-windows.txt
 click
 requests
 numpy

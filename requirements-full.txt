@@ -22,6 +22,9 @@ optimum>=1.17.0
 # GGUF inference (llama.cpp)
 # Build with CUDA: CMAKE_ARGS="-DGGML_CUDA=on" pip install llama-cpp-python
 llama-cpp-python>=0.3.0
+# vLLM (high-throughput inference engine — Linux/CUDA only)
+# Tested: vLLM 0.20.1 + torch 2.11.0+cu130
+# vllm>=0.20.1
 # Tracing
 opentelemetry-api==1.25.0
 opentelemetry-sdk==1.25.0
