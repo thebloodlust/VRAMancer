@@ -1,7 +1,15 @@
 # Technical Debt — VRAMancer
 
-> Dernière mise à jour : 2026-05  
+> Dernière mise à jour : 2026-05 (V4 plan execution)
 > Maintenu manuellement à chaque PR qui ajoute ou résout un stub.
+
+## Nouveaux stubs documentés en V4 (skip tests propres ajoutés)
+
+| ID | Fichier | Test de skip | Statut |
+|----|---------|--------------|--------|
+| VTP_L3 | csrc/vtp_core.cpp L54-62 | `tests/test_vtp_l3_stub.py` | Documenté P6.1 |
+| DMABUF_WRITE | csrc/dmabuf_bridge.c | header STUB explicite | Documenté P6.2 |
+| NAT_HOLE_PUNCH | core/network/nat_traversal.py | `tests/test_nat_traversal_stub.py` | Documenté P6.3 |
 
 ## Stubs réels (code en place mais incomplet)
 
