@@ -33,14 +33,15 @@
 | CUDA Graph decode single-device seulement | NCCL inter-device non capturable — limitation PyTorch fondamentale |
 | aitp_receiver XDP requiert CAP_NET_ADMIN | Fallback UDP gracieux — pas un bug |
 | TransferManager P2P topology cached forever | Pas de hotplug GPU supporté en cours de session |
-| `_get_method_for()` retourne `CPU_STAGED` alors que `send_activation()` utilise le bypass Rust P2P (172-190 Gbps) | Label cosmétique uniquement — les performances sont réelles via le patch accelerate `send_to_device`. Voir `docs/reports/REBAR_PROXMOX_BENCHMARK.md`. Résoudre = renommer le label dans logs (faible priorité). |
-| **CONTINUOUS_BATCHER_GENERATE_BYPASS** `(V4 P4)` — `VRM_CONTINUOUS_BATCHING=1` crée le batcher mais ne le démarre pas. `generate()` vérifie `_running` (False) → route vers `_protected_generate`. Seul `pipeline.submit()` démarre et route réellement via le batcher. Avec `generate()`, N=4 concurrent requests donne ~14 tok/s total (vs 27 seq) sur Qwen-7B — pas d'amélioration. | Utiliser `pipeline.submit()` au lieu de `pipeline.generate()` pour avoir le vrai batching. Fix potentiel : auto-start le batcher dans `generate()` si `VRM_CONTINUOUS_BATCHING=1`. |
+| ~~`_get_method_for()` retourne `CPU_STAGED` alors que `send_activation()` utilise le bypass Rust P2P (172-190 Gbps)~~ ✅ **Résolu V5 P2** — `TransportMethod.RUST_P2P` ajouté, `_get_method_for()` retourne `"RUST_P2P"` quand `_gpu_pipelines` cache la paire (src,dst), et les deux return statements Rust dans `_execute_transfer` utilisent désormais `RUST_P2P`. | — |
+| ~~**CONTINUOUS_BATCHER_GENERATE_BYPASS**~~ ✅ **Résolu V5 P1** — Auto-start du batcher au premier appel `generate()` quand `VRM_CONTINUOUS_BATCHING=1`. Fix également `_unbatch_kv_cache` pour DynamicCache transformers 5.x et tuples de longueur > 2. | — |
 
 ## Stubs résolus depuis l'audit 2026-03 (pour traçabilité)
 
 - ✅ `software_cxl.cpp` → `csrc/file_offload.cpp` (nom honnête, header explicite)
 - ✅ `supervision_api.NODES` → désormais dynamique (peuplé par heartbeat)
-- ✅ `transfer_manager` Strategy 1.5 → `direct_vram_copy()` réel via PyO3. Testé RTX 3090 + 5070 Ti.
+- ✅ `_get_method_for()` label → `RUST_P2P` ajouté (V5 P2) — label honnête pour le bypass Rust GpuPipeline
+- ✅ `CONTINUOUS_BATCHER_GENERATE_BYPASS` → auto-start dans `generate()` + fix `_unbatch_kv_cache` DynamicCache (V5 P1)
 - ✅ `vram_lending` → testé réel RTX 3090 + 5070 Ti (register/borrow/reclaim/re-borrow OK)
 - ✅ `hierarchical_memory` eviction/spill → réel (Rust `cxl_direct_memory_dump`)
 - ✅ `block_router.RemoteExecutor` docstring → corrigée (n'est PAS zero-copy — safetensors round-trip)

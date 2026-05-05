@@ -69,7 +69,8 @@ log = LoggerAdapter("transfer")
 class TransportMethod(Enum):
     """How a tensor transfer was performed."""
     NCCL = auto()        # torch.distributed NCCL backend
-    CUDA_P2P = auto()    # Direct cudaMemcpyPeer
+    CUDA_P2P = auto()    # Direct cudaMemcpyPeer (PyTorch-level)
+    RUST_P2P = auto()    # Rust GpuPipeline (direct_vram_copy / GpuPipeline.transfer)
     REBAR_PIPELINE = auto()  # ReBAR full-window (> 4 GB) with BAR-optimal chunks
     CPU_STAGED = auto()  # GPU -> CPU -> GPU (no P2P, no NCCL)
     CPU_ONLY = auto()    # Pure CPU (no GPU)
@@ -566,7 +567,7 @@ class TransferManager:
                             f"Rust DtoD GPU {source_gpu} → GPU {target_gpu}: "
                             f"{nbytes / 1e6:.1f} MB"
                         )
-                        return TransportMethod.CUDA_P2P, dst_tensor
+                        return TransportMethod.RUST_P2P, dst_tensor
                     except Exception:
                         pass  # DtoD failed (P2P blocked), fall through to pipeline
 
@@ -583,7 +584,7 @@ class TransferManager:
                     f"Rust {method_name} GPU {source_gpu} → GPU {target_gpu}: "
                     f"{nbytes / 1e6:.1f} MB"
                 )
-                return TransportMethod.CUDA_P2P, dst_tensor
+                return TransportMethod.RUST_P2P, dst_tensor
         except Exception as e:
             log.debug(f"Rust GPU transfer failed: {e}")
 
@@ -959,6 +960,9 @@ class TransferManager:
                 and self._xvendor_bridge.is_cross_vendor_pair(src, dst)):
             method = self._xvendor_bridge.get_method(src, dst)
             return f"CROSS_VENDOR:{method.name}"
+        # Rust GpuPipeline cached for this pair — real transfers go through Rust
+        if (src, dst) in self._gpu_pipelines:
+            return "RUST_P2P"
         if self._can_p2p(src, dst):
             return "CUDA_P2P"
         if self._nccl_initialized:
