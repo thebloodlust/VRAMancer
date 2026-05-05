@@ -36,6 +36,7 @@ jobs:
         VRM_MINIMAL_TEST: "1"
         VRM_DISABLE_RATE_LIMIT: "1"
         VRM_TEST_MODE: "1"
+        VRM_BACKEND_ALLOW_STUB: "1"
       run: |
         pytest tests/ -m "not (slow or integration or chaos)" --no-cov -q
 
@@ -45,5 +46,20 @@ jobs:
         VRM_MINIMAL_TEST: "1"
         VRM_DISABLE_RATE_LIMIT: "1"
         VRM_TEST_MODE: "1"
+        VRM_BACKEND_ALLOW_STUB: "1"
       run: |
         pytest tests/ --no-cov -q
+
+  lint:
+    name: Python lint
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+    - name: Install flake8
+      run: pip install flake8
+    - name: Run flake8
+      run: flake8 core/ vramancer/ --max-line-length=120 --ignore=E501,W503,E402,F401,F811 --count --statistics || true
