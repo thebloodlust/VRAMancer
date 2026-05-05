@@ -428,8 +428,8 @@ class HierarchicalMemoryManager:
                 while True:
                     try:
                         self.save_state()
-                    except Exception:
-                        pass
+                    except Exception as _autosave_err:
+                        self.log.debug("Autosave failed: %s", _autosave_err)
                     time.sleep(int(os.environ.get('VRM_AUTOSAVE_INTERVAL','30')))
             _thr.Thread(target=_autosave, daemon=True, name="HMM_Autosave").start()
 
@@ -645,10 +645,8 @@ class HierarchicalMemoryManager:
                 lease = self._lease_registry.pop(block.id)
                 self._lending_pool.release(lease.lease_id)
                 self.log.debug(f"L2→L1: released lease {lease.lease_id}")
-            except Exception:
-                pass
-
-        # Fallback: TransferManager direct transfer
+            except Exception as _lease_release_err:
+                self.log.debug("L2→L1 lease release failed: %s", _lease_release_err)
         try:
             from core.transfer_manager import TransferManager
             if not hasattr(self, '_transfer_mgr'):
@@ -671,8 +669,8 @@ class HierarchicalMemoryManager:
             import torch
             if hasattr(tensor, 'cpu'):
                 return tensor.cpu().pin_memory()  # Pinned for fast re-upload
-        except Exception:
-            pass
+        except Exception as _gpu_cpu_err:
+            self.log.debug("_move_gpu_to_cpu failed, returning tensor as-is: %s", _gpu_cpu_err)
         return tensor
 
     def _move_cpu_to_gpu(self, tensor: Any, gpu_id: int) -> Any:
@@ -681,8 +679,8 @@ class HierarchicalMemoryManager:
             import torch
             if hasattr(tensor, 'cuda'):
                 return tensor.cuda(gpu_id)
-        except Exception:
-            pass
+        except Exception as _cpu_gpu_err:
+            self.log.debug("_move_cpu_to_gpu failed, returning tensor as-is: %s", _cpu_gpu_err)
         return tensor
 
     def _move_network(self, tensor: Any, block: MemoryBlock, prev: Tier, target: Tier) -> Any:
@@ -738,8 +736,8 @@ class HierarchicalMemoryManager:
             try:
                 from core.metrics import BLOCK_HOTNESS
                 BLOCK_HOTNESS.labels(block.id[:8], self.registry[block.id]["tier"]).set(score)
-            except Exception:
-                pass
+            except Exception as _hotness_metric_err:
+                self.log.debug("BLOCK_HOTNESS metric update failed: %s", _hotness_metric_err)
 
     def promote_policy(self, block: MemoryBlock):
         meta = self.registry.get(block.id)
@@ -955,9 +953,8 @@ class HierarchicalMemoryManager:
         if self._lending_pool is not None:
             try:
                 result["lending"] = self._lending_pool.pool_capacity()
-            except Exception:
-                pass
-        # Include active leases count
+            except Exception as _lending_stats_err:
+                self.log.debug("lending pool_capacity() failed: %s", _lending_stats_err)
         result["active_leases"] = len(self._lease_registry)
         return result
 

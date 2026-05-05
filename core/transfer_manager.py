@@ -196,8 +196,8 @@ class TransferManager:
                             break
                 except OSError:
                     continue
-        except Exception:
-            pass
+        except Exception as _vm_detect_err:
+            log.debug("VM detection probe failed: %s", _vm_detect_err, exc_info=True)
         if self._is_vm:
             log.info(
                 "VM environment detected — VFIO-passthrough adds ~10-15%% PCIe overhead. "
@@ -578,8 +578,9 @@ class TransferManager:
                                 f"{nbytes / 1e6:.1f} MB"
                             )
                         return TransportMethod.RUST_P2P, dst_tensor
-                    except Exception:
-                        pass  # DtoD failed (P2P blocked), fall through to pipeline
+                    except Exception as _dtod_err:
+                        log.debug("Rust DtoD GPU %d→%d failed (P2P blocked?): %s",
+                                  source_gpu, target_gpu, _dtod_err)
 
                 # Persistent async pipeline with P2P auto-detection
                 pipe = self._get_gpu_pipeline(
