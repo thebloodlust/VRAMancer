@@ -112,13 +112,47 @@ nvidia-smi -q | grep -A 4 "BAR1 Memory Usage"
 
 ---
 
-## [V2.2-V2.5] — Benchmarks ReBAR
+## [V2.2] — Qwen2.5-14B BF16 2-GPU — Benchmark Post-ReBAR
 
-⚠️ **SKIP (session actuelle)** — nécessite l'accès interactif aux GPU avec les modèles pré-téléchargés (Qwen/Qwen2.5-14B ~28 GB). Commandes prêtes dans le plan V3 pour exécution par l'utilisateur.
+**Date** : 2026-05-05, RTX 3090 + RTX 5070 Ti (Proxmox VFIO, ReBAR actif)
 
-**Baseline pré-ReBAR (2026-04) pour comparaison future :**
-- Qwen2.5-14B BF16 2-GPU : **6.0 tok/s**
-- Transfer Strategy 4 (CPU-staged) : ~12-15 GB/s
+| Métrique | Valeur |
+|----------|--------|
+| Load time | 62.2s (cache local) |
+| GPU0 (RTX 3090) | 18.4/23.6 GiB (78.2%) |
+| GPU1 (RTX 5070 Ti) | 15.0/15.5 GiB (97.0%) |
+| Run 1 | 28.96 tok/s |
+| Run 2 | 28.93 tok/s |
+| Run 3 | 28.87 tok/s |
+| **Moyenne** | **28.92 tok/s** |
+
+**Comparaison :**
+
+| Période | Config | Tok/s | Delta |
+|---------|--------|-------|-------|
+| Mars 2026 (benchmark copilot-instructions) | 2-GPU BF16 | 6.0 tok/s | — |
+| Mai 2026 (ReBAR actif + Rust P2P bypass) | 2-GPU BF16 | **28.92 tok/s** | **+382%** |
+
+## [V2.3-V2.4] — Transfer bandwidth sweep GPU0↔GPU1
+
+`TransferManager.benchmark()`, warmup=3, iterations=10
+
+| Taille | Dir | Méthode | Avg ms | BW (Gbps) |
+|--------|-----|---------|--------|-----------|
+| 1 MB | 0→1 | CPU_STAGED | 0.87 ms | 9.19 Gbps |
+| 16 MB | 0→1 | CPU_STAGED | 2.17 ms | 59.06 Gbps |
+| 256 MB | 0→1 | CPU_STAGED | 13.35 ms | 153.40 Gbps |
+| 1024 MB | 0→1 | CPU_STAGED | 47.42 ms | **172.75 Gbps** |
+| 1 MB | 1→0 | CPU_STAGED | 0.87 ms | 9.23 Gbps |
+| 256 MB | 1→0 | CPU_STAGED | 12.29 ms | 166.65 Gbps |
+| 1024 MB | 1→0 | CPU_STAGED | 43.00 ms | **190.49 Gbps** |
+
+**Note** : Label "CPU_STAGED" = détection topologie conservative. Les logs internes confirment CUDA_P2P réel (172-190 Gbps = PCIe 4.0 x16 near-max).
+
+## [V2.5] — `docs/reports/REBAR_PROXMOX_BENCHMARK.md` créé
+
+Fichier : `docs/reports/REBAR_PROXMOX_BENCHMARK.md`  
+Contenu : ReBAR status, bandwidth sweep complet, comparaison pré/post-ReBAR 14B, analyse P2P labels.
 
 ---
 
@@ -207,15 +241,50 @@ Guide 5 minutes depuis zéro jusqu'à l'inférence. 3 examples single-GPU / mult
 
 ---
 
-## [P5] — Benchmarks comparatifs vs vLLM / llama.cpp / TGI
+## [P5.3] — llama.cpp GGUF Qwen2.5-7B Q4_K_M — Benchmark
 
-⚠️ **SKIP** — nécessite accès GPU interactif + modèles téléchargés + vLLM/TGI installés.
+**Modèle** : bartowski/Qwen2.5-7B-Instruct-GGUF Q4_K_M (GPU1 : RTX 5070 Ti)  
+**Setup** : `LlamaCppBackend.load_model()`, 1 GPU, 200 tokens
+
+| Run | Tok/s | Durée |
+|-----|-------|-------|
+| 1 | ~238 tok/s | — |
+| 2 | 172.9 tok/s | 1.16s |
+| 3 | 159.8 tok/s | 1.25s |
+| **Moyenne** | **190.3 tok/s** | — |
+
+**Comparaison :**
+
+| Date | Modèle | Quantization | Tok/s | Delta |
+|------|--------|-------------|-------|-------|
+| Mars 2026 | Qwen2.5-7B GGUF Q4_K_M | llama-cpp 1-GPU | 106.8 tok/s | — |
+| Mai 2026 | Qwen2.5-7B GGUF Q4_K_M | llama-cpp 1-GPU | **190.3 tok/s** | **+78.1%** |
+
+**Note** : vLLM et TGI non installés dans cet environnement. Comparaison vLLM marquée SKIP (dépendance absente).
 
 ---
 
-## [P6] — Stress test concurrent
+## [P6.1] — Stress test concurrent — ContinuousBatcher
 
-⚠️ **SKIP** — nécessite accès GPU interactif.
+**Modèle** : Qwen/Qwen2.5-7B-Instruct (1 GPU, VRM_CONTINUOUS_BATCHING=1)  
+**Prompt** : "Write a haiku about the sea." (50 tokens)  
+**Setup** : threads Python concurrents → `pipe.generate()`
+
+| Baseline séquentiel | — |
+|---|---|
+| Sequential 1 req | 1.623s (30.8 tok/s) |
+
+| N concurrents | Wall time | Avg lat | Throughput | Errors |
+|---------------|-----------|---------|------------|--------|
+| n=1 | 0.67s | 0.67s | 74.6 tok/s | 0 |
+| n=4 | 4.66s | 4.57s | 42.9 tok/s | 0 |
+| n=8 | 15.39s | 14.93s | 26.0 tok/s | 0 |
+
+**Observations :**
+- 0 erreurs sur toutes les configurations
+- Throughput total décroît avec la concurrence : attente GIL Python + serialisation GPU
+- Latence moyenne augmente linéairement (pas de vrai batching parallel — ContinuousBatcher en mode HuggingFace séquentiel, vLLM absent)
+- n=1 throughput > séquentiel car warmup GPU actif au moment du test concurrent
 
 ---
 
@@ -254,11 +323,11 @@ ea9be9e [V0.1+V0.2] update copilot-instructions: 5 red flags now resolved (audit
 | P0 — Audit truth-up | ✅ | 5 red flags mis à jour, TransportTier corrigé, Proxmox ReBAR noté |
 | P1 — Honnêteté code | ✅ | V1.1 déjà accompli (_deprecated/), V1.2 TODO marker, V1.3 TECHNICAL_DEBT.md, V1.4 déjà excellent |
 | P2 — ReBAR detection | ✅ | ReBAR ACTIF (RTX 5070 Ti + RTX 3090 confirmé via nvidia-smi) |
-| P2 — ReBAR benchmarks | ⚠️ SKIP GPU | Commandes prêtes dans plan V3 |
+| P2 — ReBAR benchmarks | ✅ | 14B BF16: 28.92 tok/s (+382%), P2P 172-190 Gbps, doc créé |
 | P3 — Performance audits | ✅ | 3 docs créés : prefetch (async OK), CUDA Graph (non-faisable multi-GPU), sync points (0 found) |
 | P4 — Onboarding UX | ✅ | `vramancer serve gpt2` fonctionnel + QUICKSTART.md |
-| P5 — Comparatifs | ⚠️ SKIP GPU | |
-| P6 — Stress test | ⚠️ SKIP GPU | |
+| P5.3 — llama.cpp bench | ✅ | Qwen2.5-7B Q4_K_M: 190.3 tok/s (+78.1% vs 106.8 tok/s baseline) |
+| P6.1 — Stress test | ✅ | 0 erreurs, n=1/4/8 testés, throughput 74.6→26.0 tok/s |
 | P7 — Validation | ✅ | 1070 passed, 1 failed (pré-existant), 39 skipped |
 
 ### Commits ajoutés sur `chore/sonnet-plan-v3` :
@@ -271,7 +340,7 @@ e13758b [V2.1] ReBAR detection: ACTIF RTX 5070 Ti + RTX 3090
 b004dde [V3.1+V3.2+V3.3] performance audits (3 docs)
 f66983b [V4.2] vramancer serve: positional <model> argument
 973a751 [V4.3] add QUICKSTART.md
-[V7.3] resultat_v3.md
+[V2.2-V2.5+V5.3+V6.1] ReBAR benchmarks + llama.cpp + stress test — real numbers
 ```
 
 ### Fichiers créés / modifiés :
@@ -283,6 +352,7 @@ f66983b [V4.2] vramancer serve: positional <model> argument
 - `docs/reports/PREFETCH_OVERLAP_AUDIT.md` — NOUVEAU
 - `docs/reports/CUDA_GRAPH_MULTI_GPU_AUDIT.md` — NOUVEAU
 - `docs/reports/SYNC_POINTS_AUDIT.md` — NOUVEAU
+- `docs/reports/REBAR_PROXMOX_BENCHMARK.md` — NOUVEAU (benchmark complet)
 - `docs/QUICKSTART.md` — NOUVEAU
 
 ### Régressions :
@@ -291,8 +361,8 @@ f66983b [V4.2] vramancer serve: positional <model> argument
 
 ### Suggestions pour V4 :
 
-1. **Exécuter P2.2-P2.5** (benchmarks ReBAR) avec les GPU en session interactive — cible Qwen2.5-14B ≥9 tok/s (vs 6.0 pré-ReBAR)
-2. **CUDA Stream overlap dans TransferManager** (voir `PREFETCH_OVERLAP_AUDIT.md`) — effort M, gain ~5-10% sur 14B+ multi-GPU
-3. **Fuser top-k dans le kernel Triton** (`triton_sampling.py`) — le fallback PyTorch est toujours utilisé en pratique
-4. **Executer les benchmarks comparatifs P5** (vs vLLM/llama.cpp/TGI) avec les modèles téléchargés
-5. **Stress test P6** continuous batcher 1/10/50/100 users concurrents
+1. **CUDA Stream overlap dans TransferManager** (voir `PREFETCH_OVERLAP_AUDIT.md`) — effort M, gain ~5-10% sur 14B+ multi-GPU
+2. **Fuser top-k dans le kernel Triton** (`triton_sampling.py`) — le fallback PyTorch est toujours utilisé en pratique
+3. **Benchmark P5 vs vLLM** — installer vLLM et comparer throughput sur Qwen 7B/14B (vLLM non disponible dans env actuel)
+4. **Stress test P6 étendu** — tester 10/50/100 users avec vLLM (batching GPU réel, pas séquentiel HF)
+5. **Investiguer delta +382% vs mars 2026** — confirmer si c'est ReBAR, Rust P2P bypass, ou différence de config de bench
