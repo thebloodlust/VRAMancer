@@ -6,7 +6,11 @@
 **Base :** chore/sonnet-plan-v4 @ b8d412d
 
 ## [BASELINE]
-(à remplir P0.3)
+- Date : 2026-05-06
+- Branche source : chore/sonnet-plan-v4 @ b8d412d
+- GPU0 : RTX 3090 24576 MiB | GPU1 : RTX 5070 Ti 16303 MiB
+- torch : 2.11.0+cu130 | transformers : 5.8.0 | vLLM : 0.20.1
+- Tests : **1 failed** (test_health_imports_fault_manager, pre-existing) | **1074 passed** | 42 skipped
 
 ## [P1] — ContinuousBatcher auto-start
 ## [P2] — TransferManager labels honnêtes
