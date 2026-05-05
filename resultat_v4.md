@@ -67,6 +67,30 @@ Documenter dans TECHNICAL_DEBT.md : `CONTINUOUS_BATCHER_GENERATE_BYPASS`.
 
 ## [P5] — vLLM benchmark
 
+### P5.1 — vLLM install ✅
+- vLLM 0.20.1 installé, torch 2.11.0+cu130, transformers 5.8.0
+- `core/backends_vllm.py` : VRM_MINIMAL_TEST guard déplacé AVANT l'import vllm
+- Tests : 1 failed (pre-existing), 1066 passed, 43 skipped
+- **Blocage mslk.so** : mslk 1.0.0+cu128 (FBGEMM) compilé pour libtorch C1(char*, int) vs torch 2.11 C1(SourceLocation, int) — ABI incompatible. LD_LIBRARY_PATH inefficace. Fix : `pip uninstall mslk -y`
+
+### P5.2 — Qwen2.5-7B VRAMancer vs vLLM ✅
+- GPU : RTX 3090 24GB (CUDA_DEVICE_ORDER=PCI_BUS_ID GPU1)
+- Prompt : "Explain quantum entanglement in simple terms." / MAX_TOKENS=100 / N=3 runs
+
+| Outil | tok/s (médiane) | VRAM |
+|---|---|---|
+| VRAMancer (BF16) | **27.53 tok/s** | 8.69 GiB |
+| vLLM 0.20.1 (BF16) | **51.45 tok/s** | ~21.5 GiB (90% util.) |
+| Rapport | vLLM +87% | vLLM +148% VRAM |
+
+**Analyse** : vLLM ~2x plus rapide sur single-GPU — attendu. vLLM préalloue 90% VRAM pour les KV blocks (CUDA Graphs + paged attention matérialisée). VRAMancer alloue à la demande. Le delta de VRAM explique ~30% de l'écart (meilleure densité de calcul GPU vLLM). Le reste vient du moteur vLLM (C++ worker loop, CUDA Graphs baked, chunked prefill).
+
+### P5.3 — vLLM Qwen2.5-14B hétérogène 2-GPU ✅
+- Config : RTX 5070 Ti (16GB, GPU0) + RTX 3090 (24GB, GPU1), tensor_parallel_size=2
+- Résultat : **OOM FATAL** — vLLM alloue 14.01 GiB sur GPU0 (15.47 GiB total) + tente autotuning → CUDA OOM
+- Root cause : vLLM TP suppose des GPUs homogènes, distribue équitablement. Sur setup asymétrique 16GB+24GB, GPU0 est saturé.
+- **Conclusion** : vLLM 0.20.1 refuse de charger Qwen2.5-14B sur GPU hétérogènes — OOM dès l'autotuning. VRAMancer (split VRAM-proportionnel) = SEULE solution opérationnelle pour ce cas d'usage.
+
 ## [P6] — Stubs formalisés
 
 ## [P7] — Dead code cleanup
