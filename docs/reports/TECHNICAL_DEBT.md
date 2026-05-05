@@ -25,6 +25,7 @@
 | CUDA Graph decode single-device seulement | NCCL inter-device non capturable — limitation PyTorch fondamentale |
 | aitp_receiver XDP requiert CAP_NET_ADMIN | Fallback UDP gracieux — pas un bug |
 | TransferManager P2P topology cached forever | Pas de hotplug GPU supporté en cours de session |
+| `_get_method_for()` retourne `CPU_STAGED` alors que `send_activation()` utilise le bypass Rust P2P (172-190 Gbps) | Label cosmétique uniquement — les performances sont réelles via le patch accelerate `send_to_device`. Voir `docs/reports/REBAR_PROXMOX_BENCHMARK.md`. Résoudre = renommer le label dans logs (faible priorité). |
 
 ## Stubs résolus depuis l'audit 2026-03 (pour traçabilité)
 
