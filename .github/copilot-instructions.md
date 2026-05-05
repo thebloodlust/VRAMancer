@@ -225,6 +225,8 @@ VRAMancer est un orchestrateur multi-GPU Python (88 fichiers .py dans core/, ~35
 | `VRM_LENDING_INTERVAL` | Intervalle du monitoring lending en secondes (defaut `2.0`) |
 | `VRM_TRANSFER_P2P` | Force-desactive P2P (`0`/`false`) — utile en VM IOMMU |
 | `VRM_PARALLEL_MODE` | `pp` (pipeline parallel, defaut) ou `tp` (tensor parallel NCCL all-reduce) |
+| `VRM_TRANSFER_OVERLAP` | `1` = active CUDA stream overlap pour les transferts P2P (defaut `0`). Gain ~0% sur Rust P2P bypass (Strategy 1.5 ignore le stream Python). V5 candidat. |
+| `VRM_DEBUG_SAMPLING` | `1` = active compteurs de branches dans `triton_sampling.py` (_PATH_COUNTS). Diagnostique quel path est utilise (greedy/fast_topk/triton_full/pytorch_fallback). |
 
 ## Commandes de developpement
 

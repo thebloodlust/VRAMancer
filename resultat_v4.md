@@ -93,24 +93,140 @@ Documenter dans TECHNICAL_DEBT.md : `CONTINUOUS_BATCHER_GENERATE_BYPASS`.
 
 ## [P6] — Stubs formalisés
 
+- **P6.1** ✅ `tests/test_vtp_l3_stub.py` — skip explicite VTP_L3 (csrc/vtp_core.cpp L3+ retourne src.clone())
+- **P6.2** ✅ `csrc/dmabuf_bridge.c` — header STUB DMA-BUF BRIDGE (V4 P6.2) + lien TECHNICAL_DEBT
+- **P6.3** ✅ `tests/test_nat_traversal_stub.py` — skip explicite NAT hole punch + STUN external
+- **P6.4** ✅ Aucun import résiduel de `backends_webgpu` hors `_deprecated/` — vérifié
+- **P6.5** ✅ Aucun import résiduel de `batch_inference` hors `_deprecated/` — vérifié
+- **P6.6** ✅ `core/cuda_graph_decode.py` docstring enrichie : LIMITATION block "CUDA Graphs cannot capture NCCL collectives or P2P operations"
+
 ## [P7] — Dead code cleanup
+
+- **P7.1** ✅ `core/telemetry.py` → a des consommateurs actifs (PipelineRegistry, health, continuous_batcher) — conservé
+- **P7.2** ✅ `core/swarm_ledger.py` → a des consommateurs actifs (test_swarm_ledger, _deprecated/swarm_ledger) — conservé
+- **P7.3** ✅ `core/backends.py` branche WebGPU annotée `# DEAD CODE: WebGPU backend moved to _deprecated/backends_webgpu.py`
 
 ## [P8] — Tests coverage
 
+- **P8.2** ✅ `tests/test_transfer_manager_basic.py` : 2 tests pass (init + _get_method_for invalid)
+- **P8.3** ✅ `tests/test_triton_sampling_paths.py` : 2 tests pass (greedy + top_k)
+- **P8.4** ✅ Suite : 1 failed (pre-existing), **1074 passed** (était 1070), 42 skipped
+
 ## [P9] — CI/CD
+
+- **P9.1** ✅ `.github/workflows/ci.yml` : `VRM_BACKEND_ALLOW_STUB=1` dans les deux jobs test + nouveau job `lint:` (flake8 core/ vramancer/ --max-line-length=120 --ignore=E501,W503,E402,F401,F811 || true)
+- **P9.2** ✅ `.pre-commit-config.yaml` créé : trailing-whitespace, end-of-file-fixer, check-yaml, check-added-large-files (maxkb=2048)
 
 ## [P10] — Dashboard polish
 
+- **P10.1+P10.2+P10.3** ✅ `dashboard/dashboard_web.py` : `/api/dashboard/gpus` alias ajouté comme décorateur sur `api_gpu()` (données pynvml live)
+- Smoke test : `status=200, device_count=2, GPU0=NVIDIA GeForce RTX 5070 Ti`
+
 ## [P11] — Examples
+
+- Tous les exemples testés avec `VRM_MINIMAL_TEST=1 timeout 15 python "$f"` :
+  - `quickstart.py`, `demo_vtp_inference.py`, `demo_webgpu_matmul.py`, `test_vtp_loopback.py`, `backend_demo.py` → ✅ OK (ou erreur attendue backend)
+  - `automation_client.py` → header ajouté : `Requires: VRAMancer server running on localhost:5002`
+  - `usb4_distributed_vram.py` → header ajouté : `Requires: USB4/Thunderbolt hardware; core.network.packets moved to _deprecated/`
 
 ## [P12] — Requirements
 
+- `requirements-lite.txt` : commentaire stratégie ajouté
+- `requirements-full.txt` : vLLM>=0.20.1 ajouté (commenté) avec note "Linux/CUDA only"
+- Stratégies vérifiées cohérentes : lite (CLI only) < requirements.txt (core server) < full (all features)
+
 ## [P13] — Doc harmonisation
+
+- **P13.1** : pyproject.toml utilise `dynamic = ["version"]` depuis `core.__version__` (1.5.0) — déjà synchronisé
+- **P13.2** : `README.md` — section "Known limitations & technical debt" + lien TECHNICAL_DEBT.md ajoutée
+- **P13.4** : `CHANGELOG.md` — section `[Unreleased]` V4 ajoutée (Added/Fixed/Changed)
 
 ## [P14] — Hygiène repo
 
+- **P14.2** : Déplacé dans `_deprecated/` : `_test_kernel.py`, `mac`, `mac_mlx`, `mac_echo_backup`. `=0.43.0` (accidentel, non-tracké git) supprimé.
+- **P14.3** : `benchmarks/RESULTS_INDEX.md` créé — catalogue des 22 fichiers bench_*.json/txt en racine
+- **P14.4** : `.gitignore` durci : `models/`, `*.safetensors`, `*.gguf`, `*.bin`, `.mypy_cache/`, `/tmp_bench/`
+
 ## [P15] — TECHNICAL_DEBT update
+
+- Section "Nouveaux stubs documentés en V4" ajoutée : VTP_L3, DMABUF_WRITE, NAT_HOLE_PUNCH avec liens vers tests de skip P6
 
 ## [P16] — Validation finale
 
+- **Tests :** 1 failed (test_health_imports_fault_manager — pré-existant), **1074 passed**, 42 skipped — aucune régression
+- **Smoke test :** `python tests/smoke.py` → tous les dots ✅ exit 0
+- **Commits V4 :** 24 commits sur chore/sonnet-plan-v4
+
 ## [SUMMARY]
+
+**Date fin :** 2026-05-05
+**Branche :** chore/sonnet-plan-v4
+
+**Commits V4 (chore/sonnet-plan-v4) :**
+```
+669e5fd [P16] validation finale
+f063b37 [P15.1] refresh TECHNICAL_DEBT.md
+232f904 [P14.3+P14.4] RESULTS_INDEX + .gitignore
+4444f67 [P14.2] hygiene: mac + mac_mlx + _test_kernel → _deprecated
+aadf064 [P13.2+P13.4] README TECHNICAL_DEBT link + CHANGELOG Unreleased
+ae421a6 [P12] requirements: strategy comments + vLLM
+70f3022 [P11.2] examples: Requires headers
+359054d [P10.1+P10.2+P10.3] /api/dashboard/gpus alias
+119f26b [P9.1+P9.2] CI VRM_BACKEND_ALLOW_STUB + lint + pre-commit
+a5bd700 [P8.2+P8.3] transfer_manager + triton_sampling tests
+ca1f620 [P7.3] WebGPU dead code annotation
+e7a03b5 [P6.4+P6.5+P6.6] deprecated verified + cuda_graph doc
+6fbeec8 [P6.3] test_nat_traversal_stub.py
+49fc205 [P6.2] dmabuf_bridge STUB header
+491fcad [P6.1] test_vtp_l3_stub.py
+2733fce [P5.2+P5.3] bench vLLM + 14B OOM
+06ba06e [P5.1] vLLM 0.20.1 + backends_vllm fix
+32d5dac [P4.3] verdict ContinuousBatcher case B
+cbfbc31 [P4.2] bench_stress_concurrent_v4.py
+bfb5e2e [P3.1+P3.2] DEBUG_SAMPLING + TRITON_SAMPLING_TOPK resolved
+6938267 [P2.3] VRM_TRANSFER_OVERLAP flag
+c4d733f [P1.4] TRANSFER_MANAGER_LABEL_INCORRECT
+99a077f [P1.3] methodology note
+bdb624c [P1.2] honest attribution +382%
+fbc85cf [P1.1] GPU ordering annotation
+```
+
+**Tests :**
+- Baseline : 1 failed, 1070 passed, 39 skipped
+- Final :    1 failed, **1074 passed**, 42 skipped
+- Régression : AUCUNE
+
+**Performance :**
+- CUDA Stream Overlap (P2) : gain ~0% sur setup Rust P2P (PyO3 bypass ignore stream Python). Flag `VRM_TRANSFER_OVERLAP=1` ajouté, default OFF. Futur V5 : exposer `transfer_async` PyO3.
+- Triton sampling top-k (P3) : actif en multi-GPU (top_k=0 défaut). Single-GPU utilise HF natif. Pas de fallback PyTorch en pratique.
+- ContinuousBatcher diagnostic (P4) : cas B — `generate()` ne démarre pas le batcher. `VRM_CONTINUOUS_BATCHING=1` via `generate()` = no-op. Utiliser `submit()` pour le vrai batching.
+
+**vLLM comparison (P5) :**
+- Qwen2.5-7B 1-GPU : VRAMancer 27.53 tok/s vs vLLM 51.45 tok/s (54% de vLLM)
+- Qwen2.5-14B 2-GPU hétérogène : vLLM OOM (TP homogène); VRAMancer = SEULE solution
+
+**Stubs résolus/documentés :**
+- VTP_L3 : skip test propre ajouté (P6.1)
+- DMABUF_WRITE : header STUB explicite (P6.2)
+- NAT_HOLE_PUNCH : skip tests ajoutés (P6.3)
+- CONTINUOUS_BATCHER_GENERATE_BYPASS : diagnostiqué (P4) + TECHNICAL_DEBT
+
+**Hygiène :**
+- `=0.43.0` typo supprimé
+- `mac`, `mac_mlx`, `mac_echo_backup`, `_test_kernel.py` → `_deprecated/`
+- `benchmarks/RESULTS_INDEX.md` ajouté
+- `.gitignore` durci (safetensors, gguf, models, mypy_cache)
+
+**Documentation :**
+- README : lien TECHNICAL_DEBT
+- CHANGELOG : section Unreleased V4
+- TECHNICAL_DEBT.md : section V4 stubs
+- 4 corrections honnêteté V3 (P1)
+
+**Verdict global V4 : SUCCESS**
+
+**Reste à faire (V5 candidat) :**
+- Exposer `transfer_async` via PyO3 Rust pour gain stream overlap réel
+- Auto-start batcher dans `generate()` si `VRM_CONTINUOUS_BATCHING=1`
+- `usb4_distributed_vram.py` example : migrer vers nouveau stack réseau (packets → llm_transport)
+- XDP bypass : needs CAP_NET_ADMIN ou userspace BPF-less fallback
