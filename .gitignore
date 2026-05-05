@@ -68,3 +68,15 @@ sc_source.txt
 sl_source.txt
 =0.43.0
 .vrm_admin_creds
+
+# Models / datasets locaux (large binaries, do not commit)
+models/
+*.safetensors
+*.gguf
+*.bin
+
+# Python analysis caches
+.mypy_cache/
+
+# Temporary bench output
+/tmp_bench/
