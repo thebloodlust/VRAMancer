@@ -23,16 +23,15 @@ class vLLMBackend(BaseLLMBackend):
 
     def load_model(self, model_name: str, **kwargs) -> Any:
         self.model_name = model_name
+        if os.environ.get("VRM_MINIMAL_TEST") == "1":
+            self.engine = "STUB_ENGINE"
+            self.is_loaded = True
+            return self.engine
         try:
             from vllm import LLMEngine, EngineArgs
         except ImportError:
-            if os.environ.get("VRM_MINIMAL_TEST") == "1":
-                self.engine = "STUB_ENGINE"
-                self.is_loaded = True
-                return self.engine
             logger.error("vLLM n'est pas installé. Lancez: pip install vllm")
             raise ImportError("vLLM not found")
-
         logger.info(f"Initialisation de vLLM (TP={self.tensor_parallel_size}, PP={self.pipeline_parallel_size}) pour {self.model_name}")
 
         # Pin to target GPU when TP=1 on a heterogeneous multi-GPU system
