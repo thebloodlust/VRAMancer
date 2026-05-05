@@ -138,6 +138,10 @@ nvidia-smi -q | grep -A 4 "BAR1 Memory Usage"
 | Mars 2026 (benchmark copilot-instructions) | 2-GPU BF16 | 6.0 tok/s | — |
 | Mai 2026 (ReBAR actif + Rust P2P bypass) | 2-GPU BF16 | **28.92 tok/s** | **+382%** |
 
+> **Note attribution (V4 P1.2) :** Le delta +382% est réel. Attribution estimée :
+> Rust P2P bypass ~70-80%, ReBAR ~10-15%, divers ~5-10%.
+> La décomposition exacte n'est pas mesurée. Voir `docs/reports/REBAR_PROXMOX_BENCHMARK.md#attribution-honnête-du-speedup-382-v4-p12-2026-05`.
+
 ## [V2.3-V2.4] — Transfer bandwidth sweep GPU0↔GPU1
 
 `TransferManager.benchmark()`, warmup=3, iterations=10

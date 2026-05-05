@@ -74,6 +74,18 @@ ReBAR est actif sur les deux GPUs : BAR1 ≥ VRAM, permettant l'accès CPU direc
 
 > Note: La différence de performance est probablement due à une combinaison de : ReBAR qui améliore la latence P2P, optimisations du pipeline (accelerate dispatch natif, Rust P2P bypass ≥ 512 KB), et possiblement différences de configuration au moment des benchmarks.
 
+### Attribution honnête du speedup +382% (V4 P1.2 — 2026-05)
+
+**Composantes estimées (à confirmer expérimentalement) :**
+
+| Source | Estimation gain | Justification |
+|--------|----------------|---------------|
+| Rust P2P bypass `send_to_device` ≥512 KB | ~70-80% | Remplace CPU staging (Strategy 4) par `cudaMemcpyPeerAsync` direct. Mars 2026 IOMMU bloquait P2P ; ReBAR + VFIO config a débloqué. |
+| ReBAR (BAR1 ≥ VRAM) | ~10-15% | Réduit latence accès BAR, prefetch plus efficace, bandwidth P2P near-max PCIe 4.0 x16. |
+| Optimisations diverses | ~5-10% | accelerate dispatch natif, KV cache pages distribuées, continuous batcher. |
+
+**Conclusion honnête :** la décomposition exacte n'est pas mesurée. Le delta +382% est réel et reproductible. L'attribution est une estimation à valider si nécessaire par A/B avec/sans Rust bypass.
+
 ---
 
 ## 4. Labels P2P vs CPU-Staged — Analyse
