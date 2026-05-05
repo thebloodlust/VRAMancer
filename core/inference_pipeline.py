@@ -1396,7 +1396,10 @@ class InferencePipeline:
                 device=self._detect_device(),
                 paged_kv_manager=self.paged_kv,
             )
-            # Don't auto-start — only start on first submit or explicit call
+            # Don't auto-start — only start on first submit or explicit call.
+            # NOTE: auto-start via generate() was tested in V5 P1 but caused
+            # 300s timeouts due to batcher incompatibility with transformers 5.x
+            # DynamicCache in decode loop. [NEGATIVE@P1.4]
             _logger.info("ContinuousBatcher ready (call pipeline.submit() to use)")
         except Exception as e:
             _logger.debug("ContinuousBatcher init skipped: %s", e)

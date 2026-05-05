@@ -863,10 +863,26 @@ class ContinuousBatcher:
 
     def _unbatch_kv_cache(self, batched_kv: Tuple, idx: int) -> Tuple:
         """Extract one request's KV cache from a batched KV cache."""
+        # Handle DynamicCache (transformers 5.x) directly
+        try:
+            from transformers import DynamicCache
+            if isinstance(batched_kv, DynamicCache):
+                cache = DynamicCache()
+                for layer_idx in range(len(batched_kv)):
+                    cache.update(
+                        batched_kv.key_cache[layer_idx][idx:idx + 1],
+                        batched_kv.value_cache[layer_idx][idx:idx + 1],
+                        layer_idx,
+                    )
+                return cache
+        except ImportError:
+            pass
         result = []
         for layer_kv in batched_kv:
-            k, v = layer_kv
-            result.append((k[idx:idx+1], v[idx:idx+1]))
+            # Use indexing to be robust against caches that store more than
+            # (key, value) per layer (e.g. sin/cos embeddings in some impls).
+            k, v = layer_kv[0], layer_kv[1]
+            result.append((k[idx:idx + 1], v[idx:idx + 1]))
         return tuple(result)
 
     def _forward_single(self, req: InferenceRequest, is_prefill: bool) -> None:
