@@ -1823,6 +1823,9 @@ class HuggingFaceBackend(BaseLLMBackend):
                 _tp = gen_kwargs.get('top_p', 1.0)
                 if _temp != 1.0 or _tk > 0 or _tp < 1.0:
                     gen_kwargs['do_sample'] = True
+            # KV cache is the default in HF generate() but be explicit to
+            # avoid regressions with custom GenerationConfig objects.
+            gen_kwargs.setdefault("use_cache", True)
 
             out_ids = self.model.generate(
                 input_ids=input_ids,
@@ -2056,6 +2059,7 @@ class HuggingFaceBackend(BaseLLMBackend):
             "pad_token_id": self.tokenizer.pad_token_id,
             **kwargs,
         }
+        gen_kwargs.setdefault("use_cache", True)
         if attention_mask is not None:
             gen_kwargs["attention_mask"] = attention_mask
 
