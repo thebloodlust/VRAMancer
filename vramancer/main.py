@@ -42,6 +42,8 @@ def main(argv=None):
 
     # ---- serve ----
     p_serve = sub.add_parser("serve", help="Lancer le serveur API REST")
+    p_serve.add_argument("model_pos", nargs="?", default=None, metavar="model",
+                         help="Modele LLM (positional, ex: vramancer serve gpt2)")
     p_serve.add_argument("--model", type=str, default=None,
                          help="Modele LLM a pre-charger (ex: gpt2)")
     p_serve.add_argument("--backend", type=str, default="auto",
@@ -145,7 +147,7 @@ def _cmd_version():
         from core import __version__
         print(f"VRAMancer v{__version__}")
     except Exception:
-        print("VRAMancer v0.2.4")
+        print("VRAMancer vunknown")
 
 
 def _cmd_status():
@@ -258,6 +260,9 @@ def _cmd_run(args):
 
 def _cmd_serve(args):
     """Lancer le serveur API avec pipeline complet."""
+    # Support positional model: vramancer serve gpt2
+    if getattr(args, 'model_pos', None) and not args.model:
+        args.model = args.model_pos
     try:
         from rich.console import Console
         from rich.panel import Panel

@@ -1,14 +1,13 @@
 """
-VRAMancer Connectome (Neuroplasticity Engine)
+VRAMancer Connectome (adaptive routing weights)
 ==================================================
-Implémente la Loi de Hebb pour les réseaux distribués : 
-"Des neurones qui s'excitent ensemble se lient entre eux".
+Adaptive Hebbian weighting for distributed networks.
 
-Ce module surveille en permanence (en tâche de fond) la qualité des "synapses" (liens réseau ou PCIe) 
+Ce module surveille en permanence (en tâche de fond) la qualité des liens (réseau ou PCIe)
 vers les noeuds distants/locaux.
-Si une connexion subit des latences ou des erreurs, son "poids synaptique" (Synaptic Strength) diminue.
+Si une connexion subit des latences ou des erreurs, son score de force diminue.
 Le PlacementEngine utilise ce score pour délaisser organiquement les noeuds malades,
-imitant la plasticité cérébrale sans nécessiter d'intervention humaine.
+sans nécessiter d'intervention humaine.
 """
 
 import time
@@ -118,7 +117,7 @@ class Connectome:
         with self._lock:
             if node_id not in self.synapses:
                 self.synapses[node_id] = Synapse(node_id, ip, port)
-                self.log.info("[Neuroplasticité] Nouvelle synapse vers %s (%s)", node_id, ip)
+                self.log.info("[Connectome] Nouveau lien vers %s (%s)", node_id, ip)
 
     def remove_node(self, node_id: str):
         with self._lock:
@@ -150,7 +149,7 @@ class Connectome:
         if syn is not None:
             syn.record_transfer(success)
             if not success:
-                self.log.warning("[Neuroplasticité] Perte vers %s — force: %.2f",
+                self.log.warning("[Connectome] Perte vers %s — score: %.2f",
                                  node_id, syn.strength)
 
     def snapshot(self) -> List[Dict[str, Any]]:

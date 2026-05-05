@@ -185,7 +185,7 @@ VRAMancer est un orchestrateur multi-GPU Python (88 fichiers .py dans core/, ~35
 | **libvramancer_rust.so** | 1.6 MB (release) | Compile avec `cargo build --release --features cuda`. 1 warning trivial (unused var). |
 | **CUDA FFI** | REEL | `memcpy_dtod`, `memcpy_peer_async`, `can_access_peer`, `ctx_enable_peer_access`, `mem_alloc_device/host`, `mem_free_device/host` — via libloading de libcuda.so.1. Proper error handling. |
 | **HMAC validation** | REEL | Rust HMAC-SHA256 100x plus rapide que Python hmac. |
-| **TransportTier** | STUB | `detect_best_transport()` retourne toujours ZeroCopyTcp. Pas de detection RDMA reelle. |
+| **TransportTier** | REEL | `detect_best_transport()` probe `libibverbs.so.1` via `libloading::Library::new()`. Retourne `DirectRdma` si present, sinon `ZeroCopyTcp`. |
 | **Triple-buffering** | REEL | Pipeline DtoD avec 3 buffers. Non cable a Python (direct_vram_copy() pas expose via PyO3). |
 | **Limitation** | — | Linux only (libcuda.so.1). `.expect()` crash si libcuda absent — pas de fallback gracieux. |
 
@@ -321,18 +321,18 @@ Tests integration (threading/reseau)  : ~30 tests (@pytest.mark.integration)
 
 1. ~~**hierarchical_memory.py**~~ — **CORRIGE** : eviction_cycle() + spill_to_nvme() deplacent reellement les tensors (GPU->CPU->disk via Rust). _tensor_registry tient les vrais torch tensors.
 2. ~~**transfer_manager.py Strategy 1.5**~~ — **CORRIGE** : `direct_vram_copy()` et `GpuPipeline.transfer()` exposes via PyO3, fonctionnels. Teste reel 2-GPU avril 2026.
-3. **block_router.py RemoteExecutor** — label "zero-copy" = **FAUX** (safetensors serialise).
-4. **software_cxl.cpp** — nom "CXL" = **TROMPEUR** : c'est du file I/O simple (std::ofstream).
+3. ~~**block_router.py RemoteExecutor**~~ **CORRIGE** (V2 plan, 2026-05) : docstring honnnete (safetensors -> TCP socket round-trip, pas zero-copy).
+4. ~~**software_cxl.cpp**~~ **CORRIGE** : renomme `csrc/file_offload.cpp` avec header explicite "formerly software_cxl, plain file I/O".
 5. ~~**supervision_api.py**~~ — **CORRIGE** : NODES list dynamique (populate via /api/edge/report). Grade C+ reel, 8 tests l'importent.
-6. **batch_inference.py** — `generate_batch_fn` **JAMAIS FOURNI** -> fallback toujours sequentiel.
-7. **backends_webgpu.py** — "Production Ready" = **FAUX**. POC/template.
-8. **aitp_receiver.py XDP** — `socket(44, SOCK_RAW, 0)` — famille 44 invalide, toujours False. Seul UDP marche.
+6. ~~**batch_inference.py**~~ **DEPRECIE** : deplace dans `_deprecated/batch_inference.py`. Use `core/continuous_batcher.py` a la place.
+7. **backends_webgpu.py** — "Production Ready" = **FAUX**. POC/template. Docstring module le precise explicitement (V1.1, 2026-05).
+8. **aitp_receiver.py XDP** — code defensif (`getattr(socket, "AF_XDP", 44)` + fallback gracieux). AF_XDP=44 est valide en Linux >=4.18 mais necessite CAP_NET_ADMIN. Sans permissions, retombe sur UDP. **Pas un red flag — defensive coding.**
 9. ~~**dashboard/launcher.py**~~ — **CORRIGE** : `launch_cli_dashboard()` existe via alias dans `dashboard/__init__.py`.
-10. **placement_engine.py** — `_apply_neuroplasticity_score()` = heuristique pseudo-scientifique non-deterministe.
+10. **placement_engine.py** — `_apply_neuroplasticity_score()` utilise les poids synaptiques du Connectome (Hebbian learning sur latence/reliability mesures). **Reel mais non-deterministe par design** — utilise les mesures live.
 
 ### LIMITATIONS REELLES
 
-- **VM Proxmox** : Seule Strategy 4 (CPU-staged pinned) fonctionne. P2P bloque par IOMMU. Overhead VFIO ~10-15%.
+- **VM Proxmox** : ~~Seule Strategy 4 (CPU-staged pinned) fonctionne. P2P bloque par IOMMU.~~ **CORRIGE 2026-05** : ReBAR active (partage Proxmox). Strategy 1.5 (P2P direct) desormais fonctionnelle. Performances proches du bare-metal.
 - ~~**continuous_batcher.py** GIL~~ **CORRIGE** : `_batch_prepare_requests()` reecrit avec fallback cascade (HF batch -> Rust `batch_tokenize_fast()` GIL-free -> sequential). GIL transition 1 par batch au lieu de N.
 - ~~**routes_ops.py**~~ **CORRIGE** : Detection GPU supporte ROCm/MPS/XPU, pas CUDA-only.
 - **BnB multi-GPU upstream bug** (accelerate 1.13.0 + BnB 0.49.2 + transformers 5.3.0) : AlignDevicesHook ne gere pas les residual connections cross-device avec couches quantifiees. VRAMancer force single-GPU pour BnB.

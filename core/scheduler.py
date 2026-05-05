@@ -364,7 +364,7 @@ class SimpleScheduler:
                 predicted.append(next_idx)
                 
         if predicted:
-            _logger.debug(f" [Swarm Synapse] Anticipating execution flow... Prefetching layers {predicted} ahead of current max layer {max_idx}.")
+            _logger.debug(f"[Adaptive Scheduler] Prefetching layers {predicted} ahead of current max layer {max_idx}.")
             
         return predicted
 

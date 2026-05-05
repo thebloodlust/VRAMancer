@@ -274,12 +274,14 @@ def create_app(model_name: Optional[str] = None,
         except Exception as e:
             logger.error("Failed to pre-load model: %s", e)
 
-    # Start VTP worker server for distributed inference
-    try:
-        from core.cross_node import start_vtp_server
-        start_vtp_server()
-    except Exception as exc:
-        logger.warning("VTP server failed to start: %s", exc)
+    # VTP server is opt-in: it opens listening sockets which is undesirable
+    # in tests and single-node deployments. Enable with VRM_FEATURE_AITP=1.
+    if os.environ.get("VRM_FEATURE_AITP", "").lower() in ("1", "true", "yes"):
+        try:
+            from core.cross_node import start_vtp_server
+            start_vtp_server()
+        except Exception as exc:
+            logger.warning("VTP server failed to start: %s", exc)
 
     return application
 

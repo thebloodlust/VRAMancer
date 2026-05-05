@@ -1,0 +1,20 @@
+{
+  "benchmark": "wan_4g",
+  "timestamp": "2026-04-07T23:44:05",
+  "ddns": "jeje1.synology.me",
+  "port": 55555,
+  "model": "gpt2",
+  "prompt": "The meaning of life is",
+  "wan_tok_per_s": 53.446371737639254,
+  "wan_total_ms": 542.5999755859375,
+  "wan_ttft_ms": 89.19999694824219,
+  "wan_avg_itl_ms": 15.2,
+  "wan_p99_itl_ms": 18.6,
+  "wan_rtt_ms": 46.3,
+  "upload_mb": 474.7,
+  "upload_seconds": 98.1,
+  "upload_mbps": 4.8,
+  "local_tok_per_s": 4.5,
+  "token_match": "30/30",
+  "tokens_generated": 30
+}
