@@ -173,6 +173,13 @@ class TransferManager:
         # Persistent Rust GpuPipeline instances (lazy, per GPU pair)
         self._gpu_pipelines: Dict[Tuple[int, int], Any] = {}
 
+        # CUDA Stream Overlap — dedicated transfer streams per src GPU
+        # Activated via VRM_TRANSFER_OVERLAP=1.
+        # When enabled, P2P sends use a non-default stream so the caller can
+        # overlap compute with the in-flight transfer via an Event wait.
+        self._overlap_enabled = os.environ.get("VRM_TRANSFER_OVERLAP", "0") == "1"
+        self._transfer_streams: Dict[int, Any] = {}  # {src_gpu: torch.cuda.Stream}
+
         # VM detection — VFIO passthrough adds ~10-15% overhead on DMA
         self._is_vm = False
         try:
@@ -425,8 +432,14 @@ class TransferManager:
             )
 
         # Select transport
+        # When VRM_TRANSFER_OVERLAP=1, pass a dedicated stream so the caller
+        # can overlap the in-flight copy with the next compute kernel.
+        effective_stream = stream
+        if self._overlap_enabled and stream is None and _TORCH_AVAILABLE:
+            effective_stream = self._get_transfer_stream(source_gpu)
+
         method, output_tensor = self._execute_transfer(
-            source_gpu, target_gpu, tensor, stream
+            source_gpu, target_gpu, tensor, effective_stream
         )
 
         duration = time.perf_counter() - start
@@ -474,6 +487,19 @@ class TransferManager:
             return tensor
         _, dst_tensor = self._execute_transfer(source_gpu, target_gpu, tensor, stream)
         return dst_tensor
+
+    def _get_transfer_stream(self, src_gpu: int) -> Optional[Any]:
+        """Lazy-init a dedicated CUDA Stream for transfers from src_gpu.
+
+        Used when VRM_TRANSFER_OVERLAP=1 to allow compute/transfer pipelining.
+        """
+        if not _TORCH_AVAILABLE or not torch.cuda.is_available():
+            return None
+        if src_gpu not in self._transfer_streams:
+            with torch.cuda.device(src_gpu):
+                # priority=-1 (high) so the transfer stream preempts default
+                self._transfer_streams[src_gpu] = torch.cuda.Stream(priority=-1)
+        return self._transfer_streams[src_gpu]
 
     def _execute_transfer(
         self,
