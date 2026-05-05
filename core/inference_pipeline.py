@@ -175,7 +175,19 @@ class InferencePipeline:
             For chaining: ``pipeline.load("gpt2").generate("Hello")``
         """
         with self._lock:
-            _logger.info("Loading model: %s (backend=%s)", model_name, self.backend_name)
+            _mode_flags = []
+            _quant = (_flags.QUANTIZATION if _flags else os.environ.get("VRM_QUANTIZATION", "")).upper()
+            if _quant:
+                _mode_flags.append(f"quant={_quant}")
+            _kv = (_flags.KV_COMPRESSION if _flags else os.environ.get("VRM_KV_COMPRESSION", ""))
+            if _kv:
+                _mode_flags.append(f"kv_compression={_kv}")
+            _pp = (_flags.PARALLEL_MODE if _flags else os.environ.get("VRM_PARALLEL_MODE", "pp")).upper()
+            _mode_flags.append(f"parallel={_pp}")
+            if _flags.CUDA_GRAPH if _flags else os.environ.get("VRM_CUDA_GRAPH"):
+                _mode_flags.append("cuda_graph=ON")
+            _mode_banner = " | ".join(_mode_flags) if _mode_flags else "defaults"
+            _logger.info("Loading model: %s (backend=%s) [%s]", model_name, self.backend_name, _mode_banner)
             self.model_name = model_name
 
             # 1. Init scheduler (detects GPUs) first
