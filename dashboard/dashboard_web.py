@@ -144,6 +144,7 @@ def dashboard():
 
 
 @app.route("/api/gpu")
+@app.route("/api/dashboard/gpus")
 def api_gpu():
     """Real-time GPU info (pynvml preferred, torch fallback)."""
     # Try pynvml first for accurate VRAM
