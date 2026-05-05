@@ -6,7 +6,13 @@
 **Base :** main @ 1caa58d
 
 ## [BASELINE]
-(à remplir P0.3)
+
+**Tests :** 1 failed (test_health_imports_fault_manager — pré-existant), 1070 passed, 39 skipped
+**Smoke :** pytest via tests/smoke.py → exit 0
+**GPU mapping :**
+- `nvidia-smi` ordre PCI_BUS_ID : GPU0=RTX 5070 Ti (16GB Blackwell), GPU1=RTX 3090 (24GB Ampere)
+- `torch.cuda` ordre FAST_FIRST : GPU0=RTX 3090 (24GB), GPU1=RTX 5070 Ti (16GB)
+**HEAD :** 1caa58d (main before branch)
 
 ## [P1] — Polish honnêteté
 
