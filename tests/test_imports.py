@@ -54,6 +54,7 @@ CORE_MODULES = [
     "core.wake_on_inference",
     "core.transport_factory",
     "core.webgpu_backend",
+    "core.production_api",
 ]
 
 NETWORK_MODULES = [
