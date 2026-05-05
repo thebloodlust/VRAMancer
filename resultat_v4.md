@@ -16,9 +16,33 @@
 
 ## [P1] — Polish honnêteté
 
+- **P1.1** ✅ Note GPU ordering (PCI vs torch.cuda FAST_FIRST) dans resultat_v3.md § V2.1
+- **P1.2** ✅ Attribution honnête +382% dans REBAR_PROXMOX_BENCHMARK.md + resultat_v3.md (Rust P2P ~75%, ReBAR ~15%, divers ~10%)
+- **P1.3** ✅ Correction méthodologique P6.1 dans resultat_v3.md (KV cache chaud, pas warmup GPU)
+- **P1.4** ✅ Cas B : `_get_method_for()` retourne CPU_STAGED mais transferts réels via Rust P2P bypass (172-190 Gbps). Documenté dans TECHNICAL_DEBT.md "Limitations connues".
+
 ## [P2] — CUDA Stream Overlap
 
+**P2.1** ✅ Audit : sync points dans transfer_manager. Chemin actuel = Strategy 1.5 Rust `GpuPipeline.transfer()` — ignore le stream Python passé.
+**P2.3** ✅ Implémenté flag `VRM_TRANSFER_OVERLAP=1` + `_get_transfer_stream()` (lazy, priority=-1). Default OFF.
+**P2.5** KEEP (flag off) — Gain ~0% sur ce setup car Strategy 1.5 Rust ne consomme pas le stream Python. Safe, pas de régression. Pour gain réel : exposer `transfer_async` en PyO3 (futur V5).
+Voir : `docs/reports/STREAM_OVERLAP_AUDIT.md`
+
 ## [P3] — Triton sampling top-k
+
+**P3.1 VRM_DEBUG_SAMPLING flag :** Ajouté `_DEBUG_SAMPLING` + `_PATH_COUNTS` à `core/triton_sampling.py`. Mesure des branches : greedy / fast_topk / triton_full / pytorch_fallback.
+
+**Diagnostic :** `PATH_COUNTS = {0, 0, 0, 0}` sur GPT-2 1-GPU → `fused_sample` n'est pas appelé du tout.
+
+**Root cause :** HuggingFaceBackend.generate() a 2 paths :
+- **Path 1 (1 GPU / blocks=None)** → `model.generate()` HF natif — sampling HF interne, `fused_sample` non appelé.
+- **Path 2 (multi-GPU pipeline)** → custom decode loop → `fused_sample()` appelé.
+
+GPT-2 sur 1 GPU = Path 1 → `fused_sample` jamais appelé.
+
+**Multi-GPU check :** `_HAS_TRITON=True`, `_HAS_FUSED_SAMPLE=True`. En multi-GPU avec `top_k=0` (défaut), le kernel Triton full-vocab est actif. Le "fallback PyTorch" du TECHNICAL_DEBT était inexact.
+
+**P3.2 TRITON_SAMPLING_TOPK résolu :** TECHNICAL_DEBT corrigé — Triton est actif en multi-GPU, pas de fallback PyTorch. La fast_topk branche est sous-utilisée (top_k=0 défaut), mais changer le défaut implique un changement sémantique de sampling → **DÉCISION : ne pas modifier le défaut top_k**. Verdict : description clarifiée, priorité abaissée.
 
 ## [P4] — Diagnostic batcher
 
