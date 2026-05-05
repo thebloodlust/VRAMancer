@@ -558,15 +558,25 @@ class TransferManager:
                 nbytes = src_tensor.element_size() * src_tensor.nelement()
 
                 if nbytes <= 1 * 1024 * 1024 and hasattr(vramancer_rust, 'direct_vram_copy'):
-                    # Small activations: try cuMemcpyDtoD (lowest latency)
+                    # Small activations: try cuMemcpyDtoD (lowest latency).
+                    # When VRM_TRANSFER_ASYNC=1, use cuMemcpyDtoDAsync (non-blocking host).
+                    _use_async = os.environ.get("VRM_TRANSFER_ASYNC", "0") not in ("0", "false", "no", "")
+                    _async_fn = getattr(vramancer_rust, 'direct_vram_copy_async', None)
                     try:
-                        vramancer_rust.direct_vram_copy(
-                            src_tensor.data_ptr(), dst_tensor.data_ptr(), nbytes
-                        )
-                        log.debug(
-                            f"Rust DtoD GPU {source_gpu} → GPU {target_gpu}: "
-                            f"{nbytes / 1e6:.1f} MB"
-                        )
+                        if _use_async and _async_fn is not None:
+                            _async_fn(src_tensor.data_ptr(), dst_tensor.data_ptr(), nbytes)
+                            log.debug(
+                                f"Rust DtoDAsync GPU {source_gpu} → GPU {target_gpu}: "
+                                f"{nbytes / 1e6:.1f} MB"
+                            )
+                        else:
+                            vramancer_rust.direct_vram_copy(
+                                src_tensor.data_ptr(), dst_tensor.data_ptr(), nbytes
+                            )
+                            log.debug(
+                                f"Rust DtoD GPU {source_gpu} → GPU {target_gpu}: "
+                                f"{nbytes / 1e6:.1f} MB"
+                            )
                         return TransportMethod.RUST_P2P, dst_tensor
                     except Exception:
                         pass  # DtoD failed (P2P blocked), fall through to pipeline

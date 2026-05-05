@@ -97,6 +97,22 @@ mod cuda_ffi {
         }
     }
 
+    /// cuMemcpyDtoDAsync_v2(dst, src, ByteCount, hStream)
+    /// Asynchronous device-to-device copy. With stream=0 (null stream),
+    /// subsequent GPU operations on the same device will serialize after it.
+    pub fn memcpy_dtod_async(dst: u64, src: u64, bytes: usize, stream: u64) -> Result<(), String> {
+        unsafe {
+            let sym: libloading::Symbol<unsafe extern "C" fn(u64, u64, usize, u64) -> CUresult> =
+                lib().get(b"cuMemcpyDtoDAsync_v2\0")
+                    .map_err(|e| format!("cuMemcpyDtoDAsync_v2 not found: {e}"))?;
+            let res = sym(dst, src, bytes, stream);
+            if res != 0 {
+                return Err(format!("cuMemcpyDtoDAsync_v2 returned {res}"));
+            }
+            Ok(())
+        }
+    }
+
     /// cuMemcpyHtoD_v2(dstDevice, srcHost, ByteCount)
     pub fn memcpy_htod(dst_dev: u64, src_host: *const u8, bytes: usize) -> Result<(), String> {
         unsafe {
@@ -1155,6 +1171,30 @@ fn direct_vram_copy(_py: Python, _src_ptr: u64, _dst_ptr: u64, _size_bytes: usiz
     Err(PyValueError::new_err("Compilé sans feature CUDA."))
 }
 
+/// Async P2P GPU-to-GPU copy via cuMemcpyDtoDAsync_v2 on the null stream.
+/// Does NOT block the host CPU. Subsequent PyTorch operations enqueued on the
+/// same CUDA device will naturally serialize after this copy via the default
+/// stream. Gate behind VRM_TRANSFER_ASYNC=1 in transfer_manager.py.
+#[cfg(feature = "cuda")]
+#[pyfunction]
+fn direct_vram_copy_async(py: Python, src_ptr: u64, dst_ptr: u64, size_bytes: usize) -> PyResult<bool> {
+    py.allow_threads(|| {
+        // Enqueue async DtoD on stream=0 (null/default stream).
+        // The host returns immediately; GPU operations on this device that
+        // follow will implicitly wait for this copy to complete.
+        match cuda_ffi::memcpy_dtod_async(dst_ptr, src_ptr, size_bytes, 0) {
+            Ok(()) => Ok(true),
+            Err(e) => Err(PyValueError::new_err(format!("CUDA DtoDAsync failed: {e}")))
+        }
+    })
+}
+
+#[pyfunction]
+#[cfg(not(feature = "cuda"))]
+fn direct_vram_copy_async(_py: Python, _src_ptr: u64, _dst_ptr: u64, _size_bytes: usize) -> PyResult<bool> {
+    Err(PyValueError::new_err("Compilé sans feature CUDA."))
+}
+
 /// Double-buffered CPU-staged GPU-to-GPU transfer via Rust (GIL released).
 /// Uses pinned memory + alternating buffers to maximize PCIe throughput.
 /// This is the NVFP4 bypass: when P2P is blocked, this routes through
@@ -1992,6 +2032,7 @@ fn vramancer_rust(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(detect_best_transport, m)?)?;
     m.add_function(wrap_pyfunction!(direct_vram_load, m)?)?;
     m.add_function(wrap_pyfunction!(direct_vram_copy, m)?)?;
+    m.add_function(wrap_pyfunction!(direct_vram_copy_async, m)?)?;
     m.add_function(wrap_pyfunction!(staged_gpu_transfer, m)?)?;
     m.add_function(wrap_pyfunction!(async_gpu_transfer, m)?)?;
     m.add_function(wrap_pyfunction!(bench_gpu_transfer, m)?)?;
