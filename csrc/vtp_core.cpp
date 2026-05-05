@@ -51,6 +51,9 @@ torch::Tensor vtp_migrate_tensor(torch::Tensor src, int current_tier, int target
         }
     }
     
+    // TODO(VTP_L3): Implement actual RDMA transport via libibverbs.
+    // Current behavior: returns src.clone() — no remote transfer.
+    // Track in: docs/reports/TECHNICAL_DEBT.md#vtp-l3-l7
     if (target_tier == L3_VRAM_REMOTE_RDMA) {
         // STUB: No RDMA transport implemented here; returns clone.
         // Real RDMA path: core/network/network_transport.py (pyverbs QP)
