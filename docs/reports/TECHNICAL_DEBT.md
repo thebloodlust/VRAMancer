@@ -1,6 +1,6 @@
 # Technical Debt — VRAMancer
 
-> Dernière mise à jour : 2026-05 (V4 plan execution)
+> Dernière mise à jour : 2026-05 (V5 plan execution)
 > Maintenu manuellement à chaque PR qui ajoute ou résout un stub.
 
 ## Nouveaux stubs documentés en V4 (skip tests propres ajoutés)

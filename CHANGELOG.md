@@ -1,6 +1,30 @@
 ## Changelog
 
-## [Unreleased] — V4 plan (sera 1.5.1 ou 1.6.0)
+## [Unreleased] — V5 plan suite
+
+(à remplir au fur et à mesure)
+
+## [1.6.0] — 2026-05-06 — V4 + V5 release
+
+### Added (V5)
+- Auto-start `ContinuousBatcher` init path guarded by `VRM_CONTINUOUS_BATCHING=1` (P1)
+- Label `RUST_P2P` honnête dans `TransferManager._get_method_for()` (P2)
+- `use_cache=True` explicite dans `HuggingFaceBackend.generate()` single-GPU (P3)
+- Flag `VRM_TRANSFER_ASYNC=1` + PyO3 `direct_vram_copy_async` (P4)
+- `benchmarks/bench_hetero_advantage.py` reproducible (P6)
+- Tests régression : auto-start batcher + label `RUST_P2P` (P10)
+
+### Fixed (V5)
+- 33 silents excepts en hot path migrés vers `_logger.debug(exc_info=True)` (P5)
+- `usb4_distributed_vram.py` example déprécié proprement dans `_deprecated/examples/` (P7)
+- 22 `bench_*.{json,log,txt}` à la racine déplacés vers `benchmarks/results/` (P8)
+- TODO open `core/turbo_engine.py:202` migré vers `TECHNICAL_DEBT.md → TURBO_KV_CUDAGRAPH` (P9)
+
+### Changed (V5)
+- `TECHNICAL_DEBT.md` rafraîchi (entrée TURBO_KV_CUDAGRAPH ajoutée, date V5)
+- Version 1.5.0 → 1.6.0
+
+### Added (V4 — récap)
 
 ### Added
 - `VRM_TRANSFER_OVERLAP` flag: CUDA stream overlap for inter-GPU transfers (P2)
