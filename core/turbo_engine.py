@@ -199,7 +199,8 @@ class TurboForward(nn.Module):
     lm_head only on the LAST token position (saves compute).
 
     Phase 1: Uses DynamicCache (proven 52+ tok/s, no graph capture).
-    Phase 2 (TODO): StaticKVCache + CUDA Graph capture.
+    Phase 2 (deferred): StaticKVCache + CUDA Graph capture.
+    See TECHNICAL_DEBT.md → TURBO_KV_CUDAGRAPH.
     """
 
     def __init__(self, hf_model):
