@@ -295,6 +295,13 @@ Guide 5 minutes depuis zéro jusqu'à l'inférence. 3 examples single-GPU / mult
 - Latence moyenne augmente linéairement (pas de vrai batching parallel — ContinuousBatcher en mode HuggingFace séquentiel, vLLM absent)
 - n=1 throughput > séquentiel car warmup GPU actif au moment du test concurrent
 
+> **Correction méthodologique (V4 P1.3) :** L'explication "warmup GPU actif" est inexacte.
+> Diagnostic réel :
+> - Le baseline `Sequential` mesure `prefill + decode` à froid (premier appel).
+> - Le test `n=1 concurrent` arrive APRÈS le warmup → KV cache chaud, tokenizer chaud, CUDA kernels compilés.
+> - Comparaison apples-to-apples = `n=1` vs séquentiel APRÈS warmup identique.
+> - À reprendre proprement avec le script `benchmarks/bench_stress_concurrent_v4.py` (V4 P4).
+
 ---
 
 ## [V7.1] — Suite de tests finale
