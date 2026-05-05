@@ -404,7 +404,9 @@ def select_backend(model_name: str, cache_dir: str = None, backend: str = "auto"
         return OllamaBackend(model_name)
 
     if backend == "webgpu":
-        from core.webgpu_backend import WebGPUBackend
+        # DEAD CODE: WebGPU backend moved to _deprecated/backends_webgpu.py
+        # core.webgpu_backend does not exist — this path always raises ImportError.
+        from core.webgpu_backend import WebGPUBackend  # type: ignore[import]
         return WebGPUBackend()
 
     if backend == "huggingface":
