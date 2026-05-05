@@ -1,7 +1,8 @@
 /**
  * DMA-BUF Cross-Vendor GPU Bridge — VRAMancer native extension
  *
- * STATUS: PARTIAL IMPLEMENTATION
+ * DMA-BUF BRIDGE — STUB (V4 P6.2)
+ * STATUS: PARTIAL IMPLEMENTATION — mmap write (dst side) NOT IMPLEMENTED.
  *   REAL:  vrm_dmabuf_open/close, vrm_dmabuf_export/import (DRM PRIME ioctls)
  *          vrm_dmabuf_probe (DRM version check), vrm_dmabuf_transfer (mmap read)
  *   STUB:  vrm_dmabuf_copy (pointer-based path — returns -1, needs CUDA-DRM interop)
@@ -11,6 +12,7 @@
  * The working cross-GPU transfer path in VRAMancer is CUDA IPC (P2P) or
  * CPU-staged pinned memory (TransferManager strategy 4). This DMA-BUF bridge
  * is experimental and requires DRM render nodes + nvidia-drm 495+.
+ * See: docs/reports/TECHNICAL_DEBT.md#DMABUF_WRITE
  *
  * Provides zero-copy GPU-to-GPU transfer via Linux DRM/DMA-BUF:
  *   1. Open DRM render nodes (/dev/dri/renderDXXX)
