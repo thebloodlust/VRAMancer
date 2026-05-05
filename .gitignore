@@ -80,3 +80,11 @@ models/
 
 # Temporary bench output
 /tmp_bench/
+
+# V5 P8 — block bench artifacts at repo root (use benchmarks/results/ instead)
+/bench_*.json
+/bench_*.log
+/bench_*.txt
+/test_results.txt
+/test_output.log
+/cache_base.txt
