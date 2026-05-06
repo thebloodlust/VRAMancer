@@ -1,0 +1,6 @@
+{
+  "model": "/home/jeremie/.cache/huggingface/hub/models--deepseek-ai--DeepSeek-V4-Flash",
+  "backend": "vllm",
+  "note": "FAILED \u2014 vLLM load error",
+  "error": "Engine core initialization failed. See root cause above. Failed core proc(s): {}"
+}
