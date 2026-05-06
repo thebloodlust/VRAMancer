@@ -40,14 +40,24 @@
 ## [P11] — Documentation 1.6.0
 ## [P12] — HF browser load
 ## [P13] — DeepSeek + engram
-**[DÉBLOQUÉ — RAM 192 GB confirmée après redémarrage Proxmox]**
-- RAM après redémarrage : **191 Gi total, 185 Gi disponible** — `free -h` du 2026-05-06
-- Config finale : RTX 3090 (24 GB) + RTX 5070 Ti (16 GB) = 40 GB VRAM + 185 Gi RAM système
-- Plan :
-  - DeepSeek Q4 (GGUF Q4_K_M ou AWQ INT4) dual-GPU
-  - KV cache Flash qui déborde des GPU → ReBAR → RAM système (engram / hierarchical_memory)
-  - Quantization cible : **Q4** (GGUF Q4_K_M ou AWQ INT4)
-  - Skip if OOM toujours valide si modèle trop lourd même en Q4
+**[BLOCKED — deep_gemm "Unsupported architecture" — hardware incompatibility H100 requis]**
+
+**Tentatives :**
+1. Run 1 : `RuntimeError: DeepGEMM backend is not available` → root cause : `libnvrtc.so.13` absent du LD path. Fix : `LD_LIBRARY_PATH=.venv/lib/python3.12/site-packages/nvidia/cu13/lib`. **RÉSOLU** → Run 2 lancé.
+2. Run 2 : `RuntimeError: Assertion error (hyperconnection.hpp:56): Unsupported architecture` → root cause : hardware **définitif, non-contournable**.
+
+**Diagnostic technique (run 2, 2026-05-06 16:02) :**
+- Modèle chargé en 150.93s (46 shards, ~159 GB DRAM + 5.9 GB VRAM par GPU)
+- Crash lors de `profile_run()` → `_dummy_run()` → `deepseek_v4.py:forward` → `mhc_pre()` → `tf32_hc_prenorm_gemm()` → `deep_gemm.hyperconnection.hpp:56`
+- **Root cause** : DeepSeek-V4-Flash utilise MHC (Multi-Head Compression / HyperConnection), un mécanisme d'attention qui requiert le kernel `tf32_hc_prenorm_gemm` de deep_gemm
+- Ce kernel utilise les instructions `wgmma` (warpgroup matrix multiply accumulate), spécifiques à l'ISA **Hopper (SM90)**
+- `support_deep_gemm()` dans vLLM : `is_device_capability(90) or is_device_capability_family(100)`
+  - RTX 3090 (SM 8.6) → **False**
+  - RTX 5070 Ti (SM 12.0) → `is_device_capability(90)` True mais deep_gemm JIT assert fail sur SM 12.0 (famille consumer Blackwell inconnue de deep_gemm)
+- **Aucun fallback** : `tf32_hc_prenorm_gemm` avec `_tf32_hc_prenorm_gemm_impl = None` → `_missing()` → RuntimeError. MHC est obligatoire dans l'architecture DeepSeek-V4.
+- **Conclusion** : DeepSeek-V4-Flash nécessite H100 (SM90) ou B200 (SM100 datacenter). Consumer GPUs incompatibles.
+
+**V5 STOP rule** : bloqué 2 fois sur deep_gemm (bloquer #1 libnvrtc.so.13 résolu, blocker #2 architecture matérielle incontournable) → STOP documenté.
 ## [P14] — Validation finale
 - **Tests post-reboot (2026-05-06) :** 0 failed, 1064 passed, 60 skipped
 - Fix appliqué : `test_nvfp4_returns_nvfp4_on_blackwell` — le test mockait `sys.modules["torch"]` mais `_get_quantization_mode()` utilise `_torch` (variable module-level liée à l'import). Fix : patch `core.backends._torch` + `core.backends._HAS_TORCH` directement.
