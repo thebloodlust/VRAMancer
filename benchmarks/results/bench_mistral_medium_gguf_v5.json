@@ -1,0 +1,44 @@
+{
+  "model": "unsloth/Mistral-Medium-3.5-128B-GGUF (UD-IQ2_XXS, 33 GB)",
+  "backend": "llama-cpp-python 0.3.22",
+  "hardware": "RTX 3090 (CUDA0, 60%) + RTX 5070 Ti (CUDA1, 40%)",
+  "config": {
+    "tensor_split": [0.60, 0.40],
+    "offload_kqv": false,
+    "type_k": 2,
+    "type_v": 2,
+    "flash_attn": true,
+    "n_threads": 8,
+    "n_predict": 128
+  },
+  "note": "offload_kqv=False => KV cache stored in CPU RAM (not VRAM). Constant throughput across all context lengths.",
+  "results": [
+    {
+      "n_ctx": 32768,
+      "load_time_s": 6.8,
+      "tokens_per_sec": 14.73,
+      "gen_time_s": 8.7,
+      "vram_gpu0_gb": 13.43,
+      "vram_gpu1_gb": 19.55,
+      "ram_delta_gb": 3.7
+    },
+    {
+      "n_ctx": 131072,
+      "load_time_s": 9.2,
+      "tokens_per_sec": 14.87,
+      "gen_time_s": 8.6,
+      "vram_gpu0_gb": 13.51,
+      "vram_gpu1_gb": 19.89,
+      "ram_delta_gb": 12.4
+    },
+    {
+      "n_ctx": 262144,
+      "load_time_s": 13.0,
+      "tokens_per_sec": 14.84,
+      "gen_time_s": 8.6,
+      "vram_gpu0_gb": 13.78,
+      "vram_gpu1_gb": 20.41,
+      "ram_delta_gb": 26.9
+    }
+  ]
+}
