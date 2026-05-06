@@ -36,19 +36,22 @@ class TestNVFP4QuantizationMode:
     @patch.dict(os.environ, {"VRM_QUANTIZATION": "nvfp4"})
     def test_nvfp4_returns_nvfp4_on_blackwell(self):
         """When a Blackwell GPU is present and torchao available, return 'nvfp4'."""
+        import core.backends as _backends_mod
         backend = self._make_backend()
-        with patch.object(type(backend), '_has_blackwell_gpu', return_value=True):
-            # Mock torchao import
+        # Must patch the module-level _torch and _HAS_TORCH, not sys.modules["torch"],
+        # because core/backends.py binds _torch at import time and uses it directly.
+        torch_mock = MagicMock()
+        torch_mock.cuda.is_available.return_value = True
+        with patch.object(type(backend), '_has_blackwell_gpu', return_value=True), \
+             patch.object(_backends_mod, '_torch', torch_mock), \
+             patch.object(_backends_mod, '_HAS_TORCH', True):
+            # Mock torchao import so the try/import inside _get_quantization_mode works
             nvfp4_mod = types.ModuleType("torchao.prototype.mx_formats.nvfp4_tensor")
             nvfp4_mod.NVFP4Tensor = MagicMock
             with patch.dict(sys.modules, {
                 "torchao.prototype.mx_formats.nvfp4_tensor": nvfp4_mod,
             }):
-                # Also need torch + bitsandbytes for fallback check
-                torch_mock = MagicMock()
-                torch_mock.cuda.is_available.return_value = True
-                with patch.dict(sys.modules, {"torch": torch_mock}):
-                    mode = backend._get_quantization_mode()
+                mode = backend._get_quantization_mode()
         assert mode == "nvfp4"
 
     @patch.dict(os.environ, {"VRM_QUANTIZATION": "nvfp4"})
