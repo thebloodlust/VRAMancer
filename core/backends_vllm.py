@@ -42,13 +42,26 @@ class vLLMBackend(BaseLLMBackend):
         gpu_utilization = float(kwargs.get("gpu_memory_utilization", self.gpu_memory_utilization))
         max_model_len = int(kwargs.get("max_model_len", 8192))
         dtype = kwargs.get("dtype", self.dtype_str)
+        cpu_offload_gb = float(kwargs.get("cpu_offload_gb", 0))
+
+        logger.info(f"Paramètres vLLM: gpu_memory_utilization={gpu_utilization}, max_model_len={max_model_len}, dtype={dtype}, cpu_offload_gb={cpu_offload_gb}")
         
-        logger.info(f"Paramètres vLLM: gpu_memory_utilization={gpu_utilization}, max_model_len={max_model_len}, dtype={dtype}")
-        
+        # Allow explicit tensor_parallel_size override from caller
+        tp = int(kwargs.get("tensor_parallel_size", self.tensor_parallel_size))
+        kv_cache_dtype = kwargs.get("kv_cache_dtype", None)
+
+        # Pin to target GPU only when truly single-GPU; multi-GPU needs all devices visible
+        if tp > 1:
+            os.environ.pop("CUDA_VISIBLE_DEVICES", None)
+            logger.info(f"vLLM TP={tp}: CUDA_VISIBLE_DEVICES cleared, all GPUs exposed")
+        elif self.target_gpu is not None:
+            os.environ["CUDA_VISIBLE_DEVICES"] = str(self.target_gpu)
+            logger.info(f"vLLM pinned to GPU {self.target_gpu} via CUDA_VISIBLE_DEVICES")
+
         engine_kwargs = dict(
             model=self.model_name,
             download_dir=self.cache_dir,
-            tensor_parallel_size=self.tensor_parallel_size,
+            tensor_parallel_size=tp,
             pipeline_parallel_size=self.pipeline_parallel_size,
             trust_remote_code=True,
             gpu_memory_utilization=gpu_utilization,
@@ -57,6 +70,10 @@ class vLLMBackend(BaseLLMBackend):
         )
         if dtype:
             engine_kwargs["dtype"] = dtype
+        if cpu_offload_gb > 0:
+            engine_kwargs["cpu_offload_gb"] = cpu_offload_gb
+        if kv_cache_dtype:
+            engine_kwargs["kv_cache_dtype"] = kv_cache_dtype
         
         engine_args = EngineArgs(**engine_kwargs)
         self.engine = LLMEngine.from_engine_args(engine_args)
