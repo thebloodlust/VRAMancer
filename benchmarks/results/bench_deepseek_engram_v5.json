@@ -1,6 +1,40 @@
 {
-  "model": "/home/jeremie/.cache/huggingface/hub/models--deepseek-ai--DeepSeek-V4-Flash",
-  "backend": "vllm",
-  "note": "FAILED \u2014 vLLM load error",
-  "error": "Engine core initialization failed. See root cause above. Failed core proc(s): {}"
+  "model": "deepseek-ai/DeepSeek-V4-Flash",
+  "backend": "tilelang-custom",
+  "status": "PHASE_1_OK",
+  "hardware": {
+    "compute_gpu": "RTX 5070 Ti (SM 12.0, 16 GB)",
+    "storage_gpu": "RTX 3090 (SM 8.6, 24 GB) — VRAM lending via VRAMancer ReBAR",
+    "ram": "191 GB"
+  },
+  "phase_results": {
+    "phase_0_disk": "PASS — 217 GB free (>= 180 GB required)",
+    "phase_0_ram": "PASS — 184 GB available (>= 150 GB required)",
+    "phase_1_tilelang_sm120": "PASS — FP8 GEMM kernel (act_quant + fp8_gemm) compiled and executed on RTX 5070 Ti SM12.0",
+    "phase_1_tilelang_sm86": "FAIL (expected) — RTX 3090 SM8.6 has no FP8 tensor cores",
+    "phase_2_code": "PASS — inference/{kernel,model,generate,convert}.py + encoding/encoding_dsv4.py cloned",
+    "phase_3_download": "IN_PROGRESS — 74 files fetching (159.6 GB / 46 safetensors shards)",
+    "phase_4_convert": "PENDING",
+    "phase_5_load_test": "PENDING"
+  },
+  "tilelang_patches": {
+    "description": "Three patches applied to .venv (NOT tracked by git) to enable FP8 MMA on SM12.0 with nvcc 12.0",
+    "patch_1": {
+      "file": ".venv/lib/python3.12/site-packages/tilelang/contrib/nvcc.py",
+      "function": "get_target_arch",
+      "change": "Add early return 'return 89' for major >= 12 (SM12.x Blackwell consumer). nvcc < 12.8 does not know sm_120/sm_120a."
+    },
+    "patch_2": {
+      "file": ".venv/lib/python3.12/site-packages/tilelang/contrib/nvcc.py",
+      "line": "68 (compile_cuda default arch)",
+      "change": "code=sm_{arch} → code=compute_{arch} (embed PTX not binary cubin for forward compat)"
+    },
+    "patch_3": {
+      "file": ".venv/lib/python3.12/site-packages/tilelang/engine/lower.py",
+      "function": "tilelang_callback_cuda_compile",
+      "change": "New _find_compat_ptxas() helper + two-stage path: nvcc 12.0 → PTX, bump .version 8.0→8.4, return PTX str. CUDA driver (595.58, CUDA 13.2) JIT-compiles for SM12.0 at load time."
+    }
+  },
+  "root_cause_analysis": "nvcc 12.0 generates PTX ISA 8.0; FP8 MMA instructions (SM89_16x8x32_F32E4M3E4M3F32_TN) require PTX ISA 8.4+. Fix: generate PTX with nvcc 12.0, bump .version header to 8.4, return as PTX string. Driver (CUDA 13.2 / 595.58) JIT-compiles transparently for SM12.0.",
+  "next_step": "Wait for Phase 3 download to complete, then Phase 4 convert (MP=2), Phase 5 load test on 5070Ti+3090 with VRAMancer expert offloading"
 }

@@ -1,6 +1,9 @@
-# DeepSeek + engram KV offload bench (V5 P13)
+# DeepSeek V4 Flash + engram KV offload bench (V5 P13→P16)
 
-> **PARTIAL@P13.1**: Target was `deepseek-ai/DeepSeek-V4-Flash` (158B params).
+> **Phase 1 PASS**: `deepseek-ai/DeepSeek-V4-Flash` tilelang FP8 GEMM kernel compiles and executes on RTX 5070 Ti (SM 12.0) via three `.venv` patches (see bench_deepseek_engram_v5.json).
+> Phase 3 download in progress (~159 GB). Phases 4–5 (convert + load test) pending.
+>
+> **PARTIAL@P13.1**: Proxy run while blocked on hardware/toolchain. Target was `deepseek-ai/DeepSeek-V4-Flash` (158B params).
 > 158B >> 40GB VRAM (RTX 5070 Ti 16GB + RTX 3090 24GB). Proxy: `Qwen/Qwen2.5-7B-Instruct`.
 
 **Model:** `Qwen/Qwen2.5-7B-Instruct`
