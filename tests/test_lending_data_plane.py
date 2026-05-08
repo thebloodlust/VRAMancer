@@ -473,3 +473,192 @@ def test_borrow_overflow_page_phase2_allocates_buffer_when_env_set(monkeypatch):
     # Verify borrowed_tensor was set on the page
     page = manager._pages[page_id]
     assert page.borrowed_tensor == sentinel_tensor
+
+
+# =============================================================================
+# V6.D Phase 3: cross-GPU staging in to_hf_cache()
+# =============================================================================
+
+def _make_manager_with_pool(num_layers=2, num_kv_heads=4, page_size=8, head_dim=16):
+    """Helper: build a PagedKVCacheManager bypassing __init__ for unit tests."""
+    import threading
+    from core.paged_attention import PagedKVCacheManager, PagedKVConfig
+
+    manager = PagedKVCacheManager.__new__(PagedKVCacheManager)
+    manager.config = PagedKVConfig(
+        num_layers=num_layers,
+        num_kv_heads=num_kv_heads,
+        page_size=page_size,
+        head_dim=head_dim,
+        device="cuda:0",
+    )
+    manager._lock = threading.Lock()
+    manager._pages = []
+    manager._page_tables = {}
+    manager._lending_leases = {}
+    manager._free_pages = []
+    manager._compressed_pages = {}
+    manager._total_frees = 0
+    manager._total_allocations = 0
+    manager._overflow_borrows = 0
+    manager._phase3_stages = 0
+    manager._phase3_failures = 0
+    manager._lending_pool = None
+    manager._gpu_pool = None
+    return manager
+
+
+def test_to_hf_cache_phase3_stages_borrowed_pages_when_env_set(monkeypatch):
+    """V6.D Phase 3: borrowed pages are staged via transfer_from_lease() when
+    VRM_KV_LEND_ATTENTION=1, and merged into the returned past_key_values."""
+    pytest.importorskip("torch")
+    import torch
+    from core.paged_attention import PhysicalPage, PageTableEntry
+
+    monkeypatch.setenv("VRM_KV_LEND_ATTENTION", "1")
+
+    manager = _make_manager_with_pool(num_layers=2, num_kv_heads=4, page_size=8, head_dim=16)
+
+    # Build a fake _gpu_pool on CPU (simulating query GPU). Shape:
+    # [max_pages, num_layers, 2(K/V), num_kv_heads, page_size, head_dim]
+    pool_shape = (3, 2, 2, 4, 8, 16)
+    manager._gpu_pool = torch.zeros(pool_shape)
+
+    # Page 0: local — fill with 1.0 marker
+    manager._gpu_pool[0] = 1.0
+    # Page 1: borrowed — placeholder zeros in pool (real data is on lender)
+    # Page 2: local — fill with 3.0 marker
+    manager._gpu_pool[2] = 3.0
+
+    manager._pages = [
+        PhysicalPage(page_id=0, ref_count=1, allocated=True, is_borrowed=False),
+        PhysicalPage(
+            page_id=1, ref_count=1, allocated=True,
+            is_borrowed=True, lease_id="L_phase3",
+        ),
+        PhysicalPage(page_id=2, ref_count=1, allocated=True, is_borrowed=False),
+    ]
+
+    # Mock lease + lending pool
+    mock_lease = Mock()
+    mock_lease.lease_id = "L_phase3"
+    mock_lease.owner_gpu = 1
+    manager._lending_leases["L_phase3"] = mock_lease
+
+    # Borrowed page is referenced (must be non-None for Phase 3 to engage)
+    manager._pages[1].borrowed_tensor = Mock()
+
+    # Pool's transfer_from_lease returns a staged tensor on query GPU
+    # filled with 2.0 — so we can verify the merge slotted it in.
+    staged_tensor = torch.full((2, 2, 4, 8, 16), 2.0)
+    mock_pool = Mock()
+    mock_pool.transfer_from_lease.return_value = staged_tensor
+    manager._lending_pool = mock_pool
+
+    # Page table: request uses pages [0, 1, 2] in that order, 24 tokens total
+    request_id = "req_phase3"
+    manager._page_tables[request_id] = PageTableEntry(
+        request_id=request_id,
+        pages=[0, 1, 2],
+        num_tokens=24,
+    )
+
+    # Call to_hf_cache
+    pkv = manager.to_hf_cache(request_id)
+
+    # Verify transfer_from_lease was called with the lease and query GPU 0
+    mock_pool.transfer_from_lease.assert_called_once_with(mock_lease, 0)
+
+    # Verify counters incremented
+    assert manager._phase3_stages == 1
+    assert manager._phase3_failures == 0
+
+    # Verify shape: tuple of 2 layers, each (k, v), each [1, heads, 24, head_dim]
+    assert pkv is not None
+    assert len(pkv) == 2  # 2 layers
+    for layer_kv in pkv:
+        k, v = layer_kv
+        assert k.shape == (1, 4, 24, 16)
+        assert v.shape == (1, 4, 24, 16)
+        # Tokens 0-7 from page 0 should be 1.0, 8-15 from staged page 1 should be 2.0,
+        # 16-23 from page 2 should be 3.0
+        assert torch.all(k[0, :, 0:8, :] == 1.0)
+        assert torch.all(k[0, :, 8:16, :] == 2.0)
+        assert torch.all(k[0, :, 16:24, :] == 3.0)
+
+
+def test_to_hf_cache_phase3_disabled_by_default():
+    """Without VRM_KV_LEND_ATTENTION=1, borrowed pages are NOT staged
+    (original behavior preserved — borrowed slots return zeros)."""
+    pytest.importorskip("torch")
+    import torch
+    from core.paged_attention import PhysicalPage, PageTableEntry
+
+    # Ensure env var is OFF
+    os.environ.pop("VRM_KV_LEND_ATTENTION", None)
+
+    manager = _make_manager_with_pool(num_layers=1, num_kv_heads=2, page_size=4, head_dim=8)
+    manager._gpu_pool = torch.zeros((2, 1, 2, 2, 4, 8))
+
+    manager._pages = [
+        PhysicalPage(
+            page_id=0, ref_count=1, allocated=True,
+            is_borrowed=True, lease_id="LX",
+        ),
+        PhysicalPage(page_id=1, ref_count=1, allocated=True, is_borrowed=False),
+    ]
+    manager._pages[0].borrowed_tensor = Mock()
+    mock_pool = Mock()
+    manager._lending_pool = mock_pool
+    manager._lending_leases["LX"] = Mock(lease_id="LX", owner_gpu=1)
+
+    manager._page_tables["r"] = PageTableEntry(
+        request_id="r", pages=[0, 1], num_tokens=8,
+    )
+
+    pkv = manager.to_hf_cache("r")
+
+    # transfer_from_lease MUST NOT have been called
+    mock_pool.transfer_from_lease.assert_not_called()
+    assert manager._phase3_stages == 0
+    assert pkv is not None  # original code path still produces output
+
+
+def test_to_hf_cache_phase3_handles_stage_failure(monkeypatch):
+    """When transfer_from_lease() raises, Phase 3 falls back to the
+    direct _gpu_pool read (degraded but non-fatal) and increments failure counter."""
+    pytest.importorskip("torch")
+    import torch
+    from core.paged_attention import PhysicalPage, PageTableEntry
+
+    monkeypatch.setenv("VRM_KV_LEND_ATTENTION", "1")
+
+    manager = _make_manager_with_pool(num_layers=1, num_kv_heads=2, page_size=4, head_dim=8)
+    manager._gpu_pool = torch.zeros((1, 1, 2, 2, 4, 8))
+
+    manager._pages = [
+        PhysicalPage(
+            page_id=0, ref_count=1, allocated=True,
+            is_borrowed=True, lease_id="LF",
+        ),
+    ]
+    manager._pages[0].borrowed_tensor = Mock()
+
+    mock_pool = Mock()
+    mock_pool.transfer_from_lease.side_effect = RuntimeError("simulated transfer failure")
+    manager._lending_pool = mock_pool
+    manager._lending_leases["LF"] = Mock(lease_id="LF", owner_gpu=1)
+
+    manager._page_tables["rf"] = PageTableEntry(
+        request_id="rf", pages=[0], num_tokens=4,
+    )
+
+    pkv = manager.to_hf_cache("rf")
+
+    # Failure counted, attempt was made
+    assert manager._phase3_failures == 1
+    assert manager._phase3_stages == 0
+    mock_pool.transfer_from_lease.assert_called_once()
+    # Output still produced (degraded path)
+    assert pkv is not None
+
