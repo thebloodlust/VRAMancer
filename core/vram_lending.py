@@ -140,8 +140,14 @@ class GPUBudget:
 
     @property
     def lendable_bytes(self) -> int:
-        """How much this GPU can lend right now."""
-        return max(0, self.free_bytes - self.reserved_bytes)
+        """How much this GPU can lend right now (free VRAM after safety reserve).
+
+        ``free_bytes`` already subtracts ``reserved_bytes`` (line 138), so the
+        prior ``free_bytes - reserved_bytes`` here was double-counting the
+        safety margin and clamped lendable to 0 on any GPU substantially
+        filled by the model. Now: lendable = whatever free_bytes returns.
+        """
+        return max(0, self.free_bytes)
 
     @property
     def utilization(self) -> float:
