@@ -165,6 +165,11 @@ class PhysicalPage:
     # Shape: [num_layers, 2(K/V), num_kv_heads, page_size, head_dim]
     data: Any = None
 
+    # V6.D Phase 2: empty buffer allocated on lender GPU for borrowed pages
+    # (when VRM_KV_LEND=1). Actual KV writes to this buffer are NOT yet wired
+    # into the inference path — use with caution.
+    borrowed_tensor: Any = None
+
 
 # ---------------------------------------------------------------------------
 # Page table (per-request virtual→physical mapping)
@@ -225,6 +230,7 @@ class PagedKVCacheManager:
         # VRAMLendingPool integration for overflow
         self._lending_pool = None
         self._lending_leases: Dict[str, Any] = {}  # lease_id -> lease
+        self._transfer_manager = None  # V6.D: injected for cross-GPU KV transfers
 
         # KV cache compression (per-head compressor + compressed sidecar)
         self._kv_compressor: Any = None
@@ -260,6 +266,10 @@ class PagedKVCacheManager:
             self.config.total_memory_bytes / 1e6,
             self.config.devices,
         )
+
+    def set_transfer_manager(self, transfer_manager) -> None:
+        """Inject TransferManager for V6.D KV lending data plane. Optional."""
+        self._transfer_manager = transfer_manager
 
     def _init_multi_gpu_pools(self) -> None:
         """Pre-allocate page pools across all registered GPUs.
@@ -457,6 +467,18 @@ class PagedKVCacheManager:
                 page = self._pages[page_id]
                 page.ref_count -= 1
                 if page.ref_count <= 0:
+                    # V6.D Phase 1: release lending lease for borrowed pages
+                    if page.is_borrowed and page.lease_id and self._lending_pool:
+                        try:
+                            self._lending_pool.release(page.lease_id)
+                        except Exception:
+                            _logger.debug(
+                                "Lease release failed for page %d", page_id, exc_info=True
+                            )
+                        self._lending_leases.pop(page.lease_id, None)
+                        page.is_borrowed = False
+                        page.lease_id = None
+
                     page.allocated = False
                     page.ref_count = 0
                     self._free_pages.append(page_id)
@@ -740,6 +762,12 @@ class PagedKVCacheManager:
           key/value shape: [1, num_kv_heads, seq_len, head_dim]
         Returns None if request not found or GPU pool unavailable.
         """
+        # TODO@V6.D-Phase3: cross-GPU access for borrowed pages.
+        # When VRM_KV_LEND_ATTENTION=1 (not yet implemented), stage borrowed
+        # pages to query GPU before reading _gpu_pool. Without this, borrowed
+        # pages will produce zeroed KV reads. For now, Phase 2 only allocates
+        # the empty buffer; actual KV writes to borrowed pages are not yet
+        # wired into the inference path. Use VRM_KV_LEND=1 with caution.
         if self._gpu_pool is None:
             return None
 
@@ -824,6 +852,30 @@ class PagedKVCacheManager:
             self._lending_leases[lease.lease_id] = lease
             self._overflow_borrows += 1
             self._total_allocations += 1
+
+            # V6.D Phase 2: eagerly allocate an empty buffer on lender GPU
+            # (gated by VRM_KV_LEND=1, default off). The actual KV bytes are NOT
+            # migrated here — that requires Phase 3 (cross-GPU attention staging).
+            if os.getenv("VRM_KV_LEND", "0") == "1":
+                try:
+                    # Infer shape from page geometry: [num_layers, 2, num_kv_heads, page_size, head_dim]
+                    shape = (
+                        self.config.num_layers,
+                        2,
+                        self.config.num_kv_heads,
+                        self.config.page_size,
+                        self.config.head_dim,
+                    )
+                    dtype = self.config.dtype if hasattr(self.config, "dtype") else None
+                    borrowed_tensor = self._lending_pool.allocate_on_lease(lease, shape=shape, dtype=dtype)
+                    if borrowed_tensor is not None:
+                        page.borrowed_tensor = borrowed_tensor
+                        _logger.info(
+                            "V6.D: allocated empty buffer on lender GPU %d for borrowed page %d (lease %s)",
+                            lease.owner_gpu, overflow_id, lease.lease_id,
+                        )
+                except Exception:
+                    _logger.debug("V6.D Phase 2 buffer allocation failed", exc_info=True)
 
             _logger.debug(
                 "Overflow page %d borrowed from GPU %d (lease %s)",

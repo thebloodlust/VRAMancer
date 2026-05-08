@@ -322,3 +322,154 @@ def test_transfer_into_lease_no_transfer_manager_fallback_real():
     assert torch.allclose(result, src_same)
 
     pool.return_lease(lease)
+
+
+# =============================================================================
+# V6.D tests — PagedKVCacheManager lease lifecycle
+# =============================================================================
+
+def test_paged_kv_free_releases_borrowed_lease():
+    """PagedKVCacheManager.free() releases the lending pool lease for borrowed pages."""
+    from core.paged_attention import PagedKVCacheManager, PhysicalPage, PageTableEntry
+
+    # Create manager bypassing __init__ to avoid torch dependencies
+    manager = PagedKVCacheManager.__new__(PagedKVCacheManager)
+    manager._lock = __import__('threading').Lock()
+    manager._page_tables = {}
+    manager._lending_leases = {}
+    manager._free_pages = []
+    manager._total_frees = 0
+    manager._overflow_borrows = 0
+
+    # Mock lending pool
+    mock_pool = Mock()
+    manager._lending_pool = mock_pool
+
+    # Create a borrowed page at index 0 (page_id=0)
+    page = PhysicalPage(
+        page_id=0,
+        ref_count=1,
+        allocated=True,
+        is_borrowed=True,
+        lease_id="L123",
+    )
+    manager._pages = [page]  # Page at index 0
+
+    # Register page in page table
+    request_id = "req1"
+    manager._page_tables[request_id] = PageTableEntry(
+        request_id=request_id,
+        pages=[0],  # Reference page_id 0
+        num_tokens=10,
+    )
+
+    # Call free()
+    manager.free(request_id)
+
+    # Verify lease was released
+    mock_pool.release.assert_called_once_with("L123")
+
+    # Verify page state cleared
+    assert page.is_borrowed is False
+    assert page.lease_id is None
+    assert page.ref_count == 0
+    assert not page.allocated
+    assert 0 in manager._free_pages
+
+
+def test_paged_kv_free_no_release_when_not_borrowed():
+    """PagedKVCacheManager.free() doesn't call pool.release() for local pages."""
+    from core.paged_attention import PagedKVCacheManager, PhysicalPage, PageTableEntry
+
+    # Create manager bypassing __init__
+    manager = PagedKVCacheManager.__new__(PagedKVCacheManager)
+    manager._lock = __import__('threading').Lock()
+    manager._pages = []
+    manager._page_tables = {}
+    manager._lending_leases = {}
+    manager._free_pages = []
+    manager._total_frees = 0
+
+    # Mock lending pool
+    mock_pool = Mock()
+    manager._lending_pool = mock_pool
+
+    # Create a LOCAL page (not borrowed) at index 0
+    page = PhysicalPage(
+        page_id=0,
+        ref_count=1,
+        allocated=True,
+        is_borrowed=False,  # NOT borrowed
+        lease_id=None,
+    )
+    manager._pages = [page]  # Page at index 0
+
+    # Register page in page table
+    request_id = "req2"
+    manager._page_tables[request_id] = PageTableEntry(
+        request_id=request_id,
+        pages=[0],  # Reference page_id 0
+        num_tokens=8,
+    )
+
+    # Call free()
+    manager.free(request_id)
+
+    # Verify pool.release was NOT called
+    mock_pool.release.assert_not_called()
+
+    # Verify page was freed normally
+    assert page.ref_count == 0
+    assert not page.allocated
+    assert 0 in manager._free_pages
+
+def test_borrow_overflow_page_phase2_allocates_buffer_when_env_set(monkeypatch):
+    """_borrow_overflow_page allocates empty buffer on lender GPU when VRM_KV_LEND=1."""
+    from core.paged_attention import PagedKVCacheManager, PagedKVConfig
+
+    # Set env var to enable Phase 2
+    monkeypatch.setenv("VRM_KV_LEND", "1")
+
+    # Create manager with minimal config
+    manager = PagedKVCacheManager.__new__(PagedKVCacheManager)
+    manager.config = PagedKVConfig(
+        num_layers=4,
+        num_kv_heads=8,
+        page_size=16,
+        head_dim=64,
+        device="cuda:0",
+    )
+    manager._lock = __import__('threading').Lock()
+    manager._pages = []
+    manager._lending_leases = {}
+    manager._overflow_borrows = 0
+    manager._total_allocations = 0
+
+    # Mock lending pool with borrow() and allocate_on_lease()
+    mock_pool = Mock()
+    mock_lease = Mock()
+    mock_lease.lease_id = "L999"
+    mock_lease.owner_gpu = 1
+    mock_pool.borrow.return_value = mock_lease
+
+    sentinel_tensor = Mock()
+    mock_pool.allocate_on_lease.return_value = sentinel_tensor
+
+    manager._lending_pool = mock_pool
+
+    # Call _borrow_overflow_page
+    page_id = manager._borrow_overflow_page()
+
+    # Verify lease was acquired
+    assert page_id is not None
+    mock_pool.borrow.assert_called_once()
+
+    # Verify allocate_on_lease was called with correct shape
+    mock_pool.allocate_on_lease.assert_called_once()
+    call_args = mock_pool.allocate_on_lease.call_args
+    assert call_args[0][0] == mock_lease  # First arg is lease
+    assert call_args[1]['shape'] == (4, 2, 8, 16, 64)  # (num_layers, 2, num_kv_heads, page_size, head_dim)
+
+    # Verify borrowed_tensor was set on the page
+    page = manager._pages[page_id]
+    assert page.borrowed_tensor == sentinel_tensor
