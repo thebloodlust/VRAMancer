@@ -64,7 +64,7 @@ def _init_lb_metrics():
             "Routing failures (no healthy node available)",
         )
     except Exception:
-        pass
+        logger.debug("Prometheus metrics unavailable", exc_info=True)
 
 
 class AnycastNode:
@@ -200,6 +200,7 @@ class AnycastLoadBalancer:
                 from core.network.connectome import global_connectome
                 connectome = global_connectome
             except ImportError:
+                logger.debug("Connectome module unavailable", exc_info=True)
                 return
 
         weights = connectome.get_all_weights()
@@ -225,6 +226,7 @@ class AnycastLoadBalancer:
                 # No global singleton, caller must provide
                 return
             except ImportError:
+                logger.debug("AITP sensing module unavailable", exc_info=True)
                 return
 
         for uid, peer_info in sensor.peers.items():

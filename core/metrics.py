@@ -116,7 +116,7 @@ def reset_metrics():
         try:
             g._metrics.clear()
         except Exception:
-            pass
+            logging.debug("Failed to clear labeled gauge", exc_info=True)
     for g in _SIMPLE_GAUGES:
         try:
             g.set(0)
@@ -124,7 +124,7 @@ def reset_metrics():
             try:
                 g._metrics.clear()
             except Exception:
-                pass
+                logging.debug("Failed to clear simple gauge metrics", exc_info=True)
 
 __all__ = [
     "INFER_REQUESTS",
@@ -194,7 +194,7 @@ def counter_value(counter) -> float:
         if samples:
             return float(samples[0].value)
     except Exception:
-        pass
+        logging.debug("Failed to read Prometheus metric", exc_info=True)
     return 0.0
 
 

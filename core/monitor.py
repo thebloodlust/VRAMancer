@@ -128,7 +128,7 @@ class GPUMonitor:
                 pynvml.nvmlInit()
                 self._pynvml_ok = True
             except Exception:
-                pass
+                _logger.debug("pynvml init failed", exc_info=True)
 
         # Take initial snapshot
         self._refresh_all()
@@ -273,7 +273,7 @@ class GPUMonitor:
             if (idx == "mps" or idx == 0) and hasattr(torch, "mps") and torch.mps.is_available():
                 return torch.mps.current_allocated_memory()
         except Exception:
-            pass
+            _logger.debug("MPS memory query failed", exc_info=True)
         # ROCm-SMI fallback
         if self._backend == "rocm" and isinstance(idx, int):
             info = _rocm_smi_memory(idx)
@@ -288,7 +288,7 @@ class GPUMonitor:
             if isinstance(idx, int) and torch.cuda.is_available() and idx < torch.cuda.device_count():
                 return torch.cuda.memory_reserved(idx)
         except Exception:
-            pass
+            _logger.debug("Reserved memory query failed", exc_info=True)
         return 0
 
     def _query_total(self, idx: int | str) -> Optional[int]:
@@ -307,7 +307,7 @@ class GPUMonitor:
             if isinstance(idx, int) and torch.cuda.is_available() and idx < torch.cuda.device_count():
                 return torch.cuda.get_device_properties(idx).total_mem
         except Exception:
-            pass
+            _logger.debug("torch.cuda get device properties failed", exc_info=True)
         # MPS
         try:
             if hasattr(torch, "mps") and torch.mps.is_available():
@@ -317,7 +317,7 @@ class GPUMonitor:
                 # Fallback: macOS sysctl
                 return _macos_total_memory()
         except Exception:
-            pass
+            _logger.debug("MPS total memory query failed", exc_info=True)
         # ROCm-SMI fallback
         if self._backend == "rocm" and isinstance(idx, int):
             info = _rocm_smi_memory(idx)

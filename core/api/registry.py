@@ -56,7 +56,7 @@ class PipelineRegistry:
                 try:
                     self._pipeline.shutdown()
                 except Exception:
-                    pass
+                    _logger.debug("Pipeline shutdown failed during reset", exc_info=True)
             from core.inference_pipeline import InferencePipeline
             self._pipeline = InferencePipeline(
                 backend_name=backend, verbose=verbose
@@ -77,7 +77,7 @@ class PipelineRegistry:
                 try:
                     self._pipeline.shutdown()
                 except Exception:
-                    pass
+                    _logger.debug("Pipeline shutdown failed during cleanup", exc_info=True)
                 self._pipeline = None
             # Stop cluster discovery threads
             if self.discovery:

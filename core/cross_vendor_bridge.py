@@ -224,7 +224,7 @@ def detect_gpu_vendor(device_index: int) -> GPUVendor:
             return GPUVendor.NVIDIA
 
     except Exception:
-        pass
+        _logger.debug("GPU vendor detection failed", exc_info=True)
 
     return GPUVendor.UNKNOWN
 

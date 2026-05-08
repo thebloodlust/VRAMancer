@@ -117,6 +117,7 @@ def _get_gpu_compute_scores(num_gpus: int) -> List[float]:
             # Estimate relative throughput (rough but fair)
             scores.append(cc * sm)
         except Exception:
+            _logger.debug(f"GPU scoring failed for device {i}", exc_info=True)
             scores.append(1.0)
     return scores
 

@@ -109,7 +109,7 @@ def gpu_detailed_health() -> Dict[str, Any]:
         stats = fm.stats()
         fault_states = stats.get("gpu_states", {})
     except Exception:
-        pass
+        logging.debug("Fault manager unavailable", exc_info=True)
 
     # Get temperature via pynvml if available (with timeout protection)
     nvml_handles = {}
@@ -123,7 +123,7 @@ def gpu_detailed_health() -> Dict[str, Any]:
                 try:
                     handles[i] = pynvml.nvmlDeviceGetHandleByIndex(i)
                 except Exception:
-                    pass
+                    logging.debug(f"Failed to get NVML handle for GPU {i}", exc_info=True)
             return handles
 
         result = _call_with_timeout(_init_nvml_handles)
@@ -199,7 +199,7 @@ def kv_cache_status() -> Dict[str, Any]:
         if pipeline.paged_kv:
             return pipeline.paged_kv.stats()
     except Exception:
-        pass
+        logging.debug("PagedKV stats unavailable", exc_info=True)
     return {"active": False}
 
 
@@ -211,7 +211,7 @@ def transfer_status() -> Dict[str, Any]:
         if pipeline.transfer_manager:
             return pipeline.transfer_manager.stats()
     except Exception:
-        pass
+        logging.debug("Transfer manager stats unavailable", exc_info=True)
     return {"active": False}
 
 
@@ -222,6 +222,7 @@ def cross_vendor_status() -> Dict[str, Any]:
         bridge = get_cross_vendor_bridge()
         return bridge.stats()
     except Exception:
+        logging.debug("Cross-vendor bridge stats unavailable", exc_info=True)
         return {"active": False}
 
 

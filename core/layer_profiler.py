@@ -89,7 +89,7 @@ def _detect_pcie_bandwidth_gbps() -> float:
             _logger.debug("PCIe bandwidth detected via pynvml: %.1f GB/s", bw)
             return bw
     except Exception:
-        pass
+        _logger.debug("PCIe bandwidth detection via pynvml failed", exc_info=True)
 
     # ---- Fallback: conservative default (PCIe Gen3 x16) ----
     _logger.debug("PCIe bandwidth detection failed, using default 15.75 GB/s (Gen3 x16)")
@@ -279,6 +279,7 @@ class LayerProfiler:
             profile.param_count = params
             profile.param_memory_mb = param_bytes / (1024 * 1024)
         except Exception:
+            _logger.debug("Param count estimation failed", exc_info=True)
             profile.param_count = 0
             profile.param_memory_mb = 0.0
 

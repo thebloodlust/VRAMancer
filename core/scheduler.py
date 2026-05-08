@@ -232,6 +232,7 @@ class SimpleScheduler:
                     alloc = torch.cuda.memory_allocated(i) // (1024 * 1024)
                     free_mb = total_mb - alloc
                 except Exception:
+                    _logger.debug(f"Failed to query memory allocation for GPU {i}", exc_info=True)
                     free_mb = total_mb
 
             gpus.append({

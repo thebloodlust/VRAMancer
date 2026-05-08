@@ -105,9 +105,11 @@ else:  # mode normal mais on protège chaque import lourd + fallback tokenizer p
                         try:
                             return AutoTokenizer.from_pretrained(model_name, use_fast=False)
                         except Exception:
+                            logging.debug("Slow tokenizer failed, using basic", exc_info=True)
                             return _basic()
                     return _basic()
         except Exception:
+            logging.debug("AutoTokenizer import failed, using basic", exc_info=True)
             FORCE_BASIC = True
     if FORCE_BASIC:
         def get_tokenizer(model_name: str):  # pragma: no cover - trivial
@@ -151,7 +153,7 @@ def detect_backend() -> str:
                 if 'AMD' in device_name or 'RADEON' in device_name or 'INSTINCT' in device_name:
                     return 'rocm'  # AMD GPU détectée
             except Exception:
-                pass
+                logging.debug("Failed to check GPU device name", exc_info=True)
             return 'cuda'
 
         # Intel XPU (IPEX)
@@ -168,13 +170,13 @@ def detect_backend() -> str:
             if xm.xla_device():
                 return 'tpu'
         except ImportError:
-            pass
+            logging.debug("Torch XLA not available", exc_info=True)
         
         # Apple Silicon MPS
         if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
             return 'mps'
     except Exception:
-        pass
+        logging.debug("Backend detection failed", exc_info=True)
     return 'cpu'
 
 

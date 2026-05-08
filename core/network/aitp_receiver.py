@@ -89,7 +89,7 @@ def _init_rx_metrics():
             "AITP receiver backpressure drops",
         )
     except Exception:
-        pass
+        logger.debug("Prometheus metrics unavailable", exc_info=True)
 
 
 class AITPReceiver:
@@ -196,7 +196,7 @@ class AITPReceiver:
             )
             return gpu_buf
         except Exception:
-            pass
+            logger.debug("GPU buffer creation failed", exc_info=True)
 
     # ------------------------------------------------------------------
     # Backpressure
