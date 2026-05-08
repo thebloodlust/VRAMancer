@@ -238,6 +238,66 @@ Le pool a bien **redistribué** : -1320 MB sur 5070 Ti, +1322 MB sur 3090. -3.4 
 - `benchmarks/results/bench_lending_hetero_real_qwen14b_v6b_fixed.{json,md}` — regression check
 - `benchmarks/results/bench_lending_hetero_real_qwen32b_v6b_fixed.{json,md}` — **preuve OOM-débloque**
 
+### V6.C — Data plane des leases via TransferManager (commit `bffb2ea`)
+
+`allocate_on_lease()` reste sur le lender mais deux nouveaux helpers exercent le vrai data plane via `TransferManager` (Rust DtoD ≥ 512 KB / ReBAR pipelined / CPU staged) :
+- `transfer_into_lease(lease, src_tensor)` — copie src_tensor cross-GPU vers la VRAM louée
+- `transfer_from_lease(lease, dst_gpu)` — matérialise une copie sur le borrower
+- Fallback `tensor.copy_()` quand TransferManager non injecté
+
+Tests ajoutés : `tests/test_lending_data_plane.py` (821 lignes, skip si < 2 GPUs CUDA).
+
+### V6.D — KV overflow vers lending pool (commits `4d4c037` → `5796ce8`)
+
+Quatre phases livrées (Phase 5 SKIP, voir plus bas) :
+- **Phase 1-2** : lifecycle du lease + buffer allocation pour KV pages
+- **Phase 3** : cross-GPU staging dans `paged_attention.to_hf_cache()` (read path)
+- **Phase 4** : write path vers `borrowed_tensor` sur le lender, gaté `VRM_KV_LEND_ATTENTION=1` par défaut OFF
+
+Quand `VRM_KV_LEND=1` + `VRM_KV_LEND_ATTENTION=1`, les pages KV qui dépassent la VRAM de GPU0 sont stockées sur GPU1 via le pool au lieu de spillover DRAM via UVA.
+
+Bench prêt mais non exécuté ici (TÂCHE 4 de Sonnet) : `benchmarks/bench_v6_lending_kv.py --compare`.
+
+### V6.D Phase 5 — SKIP (TransferManager.send_tensor n'a pas de `dst_view`)
+
+Objectif : router les page-slice writes ≥ 512 KB via Rust DtoD au lieu du `borrowed_tensor[...] = source_slice` natif.
+
+**Bloqueur** : `TransferManager.send_tensor()` retourne un nouveau tensor alloué sur le target, pas d'écriture dans une vue existante. Router via TM aurait fait **2 copies** (allocation + write into slice) au lieu d'**1** (P2P direct via PyTorch). L'optimisation aurait régressé la performance.
+
+Décision honnête : pas de fake fix. À tracker pour une PR future ajoutant `dst_view` à `send_tensor`, indépendante de V6.
+
+### V6.E — Silent except sweep (5 batches, commits `247f167` → `9bba765`)
+
+Total : **183 sites silents** (`except Exception: pass`) remplacés par `_logger.debug(message, exc_info=True)` sur 50 modules. Aucune régression (967 tests passants).
+
+| Batch | Commit | Sites | Modules |
+|-------|--------|-------|---------|
+| 1 | `247f167` | 30 | 8 (hot path: turbo_engine, paged_attention…) |
+| 2 | `675065b` | 31 | 17 (utils, security, transport, …) |
+| 3 | `8dd8342` | 29 | 10 (vllm, paged_attention, network…) |
+| 4 | `908b9c6` | 28 | 5 (monitor, cross_node, hetero_config…) |
+| 5 | `9bba765` | 65 | 15 (production_api, llm_transport, webgpu…) |
+
+**~13 sites restent silents par design** (documentés dans `vram_lending.py` et fichiers concernés) :
+- Prometheus metric calls (`vram_lending.py:457, 816`) — un metric qui crash ne doit jamais tuer le hot path
+- User-defined callbacks (`vram_lending.py:472, 909`) — isolation du callback du pool
+- Multi-source fallbacks pour température/VRAM (`vram_lending.py:1001, 1018, 1027`)
+- Imports optionnels (`backends.py:52`, `network_transport.py:55`, `llm_transport.py:110`, `aitp_sensing.py:58`)
+- Pragma no-cover environnement minimal sans torch (`supervision_api.py:131`)
+
+### V6.D bench protocol — `benchmarks/bench_v6_lending_kv.py` (commit `ea198b1`)
+
+Script A/B prêt pour exécution manuelle 2-GPU :
+```bash
+# Comparaison automatique baseline vs lending_kv
+python benchmarks/bench_v6_lending_kv.py --compare
+
+# Variantes individuelles
+python benchmarks/bench_v6_lending_kv.py                                          # baseline
+VRM_KV_LEND=1 VRM_KV_LEND_ATTENTION=1 python benchmarks/bench_v6_lending_kv.py    # phase 3+4
+```
+Métriques capturées : tok/s, VRAM Δ par GPU (via NVML), `pool_stats` pre/post-gen, lease counts.
+
 **Fichiers résultats :**
 - `benchmarks/results/bench_deepseek_engram_v5.json`
 - `benchmarks/results/bench_deepseek_engram_v5.md`

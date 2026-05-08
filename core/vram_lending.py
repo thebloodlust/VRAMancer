@@ -455,7 +455,7 @@ class VRAMLendingPool:
                 try:
                     MEMORY_PROMOTIONS.labels("lending", f"gpu{lender_gpu}->gpu{borrower_gpu}").inc()
                 except Exception:
-                    pass
+                    pass  # intentional: Prometheus metric call must never crash hot path
 
             log.info(
                 "Lease %s: GPU %d lends %.1f MB to GPU %d (purpose=%s, "
@@ -470,7 +470,7 @@ class VRAMLendingPool:
                 try:
                     cb(lease)
                 except Exception:
-                    pass
+                    pass  # intentional: user-provided callback isolated from pool internals
 
             return lease
 
@@ -814,7 +814,7 @@ class VRAMLendingPool:
             try:
                 MEMORY_EVICTIONS.labels("lending_reclaim", f"gpu{owner_gpu}").inc()
             except Exception:
-                pass
+                pass  # intentional: Prometheus metric call must never crash reclaim
 
         log.info(
             "Reclaim GPU %d: %.1f MB recovered in %.2f ms "
@@ -907,7 +907,7 @@ class VRAMLendingPool:
             try:
                 cb(lease)
             except Exception:
-                pass
+                pass  # intentional: user-provided callback isolated from pool internals
 
     def release(self, lease_id: str) -> bool:
         """Voluntarily release a lease (borrower no longer needs it).
@@ -999,7 +999,7 @@ class VRAMLendingPool:
             temp = pynvml.nvmlDeviceGetTemperature(handle, pynvml.NVML_TEMPERATURE_GPU)
             return float(temp)
         except Exception:
-            pass
+            pass  # intentional: NVML unavailable → fall through to ROCm probe
         # ROCm fallback
         try:
             import subprocess
@@ -1016,7 +1016,7 @@ class VRAMLendingPool:
                         if temp_val is not None:
                             return float(temp_val)
         except Exception:
-            pass
+            pass  # intentional: rocm-smi unavailable → no temp data, return None
         return None
 
     def _get_real_utilization(self, gpu_id: int) -> Optional[float]:
@@ -1025,7 +1025,7 @@ class VRAMLendingPool:
             try:
                 return self._monitor.vram_usage(gpu_id)
             except Exception:
-                pass
+                pass  # intentional: monitor probe optional, return None on failure
         return None
 
     # ------------------------------------------------------------------
