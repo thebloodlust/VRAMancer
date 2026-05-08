@@ -371,7 +371,7 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
                         path=path_label, method='POST', status='200'
                     ).observe(_elapsed)
                 except Exception:
-                    pass
+                    logger.debug("Metrics record failed", exc_info=True)
             except Exception as exc:
                 if _circuit_breaker:
                     _circuit_breaker.record_failure()
@@ -453,7 +453,7 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
                 from core.metrics import INFER_REQUESTS, INFER_LATENCY, API_LATENCY
                 INFER_REQUESTS.inc()
             except Exception:
-                pass
+                logger.debug("Metrics import failed", exc_info=True)
 
             req_id = "vrm-" + uuid.uuid4().hex[:12]
 
@@ -522,7 +522,7 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
             try:
                 API_LATENCY.labels(path='/v1/completions', method='POST', status='200').observe(elapsed)
             except Exception:
-                pass
+                logger.debug("Metrics record failed", exc_info=True)
 
             return jsonify({
                 'id': req_id,
@@ -550,7 +550,7 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
                 from core.metrics import INFER_ERRORS
                 INFER_ERRORS.inc()
             except Exception:
-                pass
+                logger.debug("Metrics error counter failed", exc_info=True)
             return jsonify({'error': str(e)}), 500
 
     @application.route('/v1/chat/completions', methods=['POST'])
@@ -615,7 +615,7 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
                 reserved_tokens = params.get('max_tokens', 250)
                 ledger.consume_credits(user_id, reserved_tokens)
             except Exception:
-                pass
+                logger.debug("Swarm ledger credit consumption failed", exc_info=True)
 
         # Convert messages to prompt
         prompt_parts = []
@@ -641,7 +641,7 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
                 from core.metrics import INFER_REQUESTS, API_LATENCY
                 INFER_REQUESTS.inc()
             except Exception:
-                pass
+                logger.debug("Metrics import failed", exc_info=True)
 
             req_id = "chatcmpl-" + uuid.uuid4().hex[:12]
 
@@ -706,7 +706,7 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
             try:
                 API_LATENCY.labels(path='/v1/chat/completions', method='POST', status='200').observe(elapsed)
             except Exception:
-                pass
+                logger.debug("Metrics record failed", exc_info=True)
 
             return jsonify({
                 'id': req_id,
@@ -734,7 +734,7 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
                 from core.metrics import INFER_ERRORS
                 INFER_ERRORS.inc()
             except Exception:
-                pass
+                logger.debug("Metrics error counter failed", exc_info=True)
             return jsonify({'error': str(e)}), 500
 
     @application.route('/api/infer', methods=['POST'])
@@ -869,7 +869,7 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
                 from core.metrics import INFER_REQUESTS, API_LATENCY
                 INFER_REQUESTS.inc(len(prompts))
             except Exception:
-                pass
+                logger.debug("Metrics import failed", exc_info=True)
 
             req_id = "vrm-batch-" + uuid.uuid4().hex[:12]
             start = time.perf_counter()
@@ -955,7 +955,7 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
                     path='/v1/batch/completions', method='POST', status='200'
                 ).observe(elapsed)
             except Exception:
-                pass
+                logger.debug("Metrics record failed", exc_info=True)
 
             return jsonify({
                 'id': req_id,
@@ -981,7 +981,7 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
                 from core.metrics import INFER_ERRORS
                 INFER_ERRORS.inc()
             except Exception:
-                pass
+                logger.debug("Metrics error counter failed", exc_info=True)
             return jsonify({'error': str(e)}), 500
 
     # ====================================================================
@@ -1280,7 +1280,7 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
                     transport_mode = "vtp"
                     continue
                 except Exception:
-                    pass  # Fallback to HTTP
+                    logger.debug("VTP worker connection failed, falling back to HTTP", exc_info=True)
             workers.append(RemoteWorker(url, token, sl, el))
 
         try:
@@ -1365,7 +1365,7 @@ def main():
             from core.cross_node import stop_vtp_server
             stop_vtp_server()
         except Exception:
-            pass
+            logger.debug("VTP server stop failed", exc_info=True)
         # Drain inference executor
         try:
             if hasattr(app, 'vrm_executor') and app.vrm_executor:
@@ -1380,7 +1380,7 @@ def main():
             if dist.is_initialized():
                 dist.destroy_process_group()
         except Exception:
-            pass
+            logger.debug("Torch distributed cleanup failed", exc_info=True)
         logger.info("Cleanup complete")
 
     atexit.register(_cleanup)

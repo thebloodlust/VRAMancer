@@ -349,7 +349,7 @@ class StreamManager:
                         self.paged_kv.compress_page_bulk(pid)
                         break  # compress one page per cycle to avoid blocking
             except Exception:
-                pass
+                _logger.debug("KV page compression failed", exc_info=True)
 
         with self._lock:
             candidates = [

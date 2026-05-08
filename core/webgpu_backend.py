@@ -125,7 +125,7 @@ class _WorkerConnection:
         try:
             await self.ws.send(struct.pack("B", OP_SHUTDOWN))
         except Exception:
-            pass
+            LoggerAdapter("backend.webgpu").debug("WebSocket shutdown send failed", exc_info=True)
 
     async def rpc_upload_tensor(self, name: str, shape: tuple,
                                 data: bytes,
@@ -376,7 +376,7 @@ class WebGPUBackend(BaseLLMBackend):
                     "gpu": "webgpu",
                 })
             except Exception:
-                pass
+                self.log.debug("Edge device registration failed", exc_info=True)
             try:
                 await ws.wait_closed()
             finally:
@@ -389,7 +389,7 @@ class WebGPUBackend(BaseLLMBackend):
                     with _edge_lock:
                         _edge_registry.pop(device_id, None)
                 except Exception:
-                    pass
+                    self.log.debug("Edge registry cleanup failed", exc_info=True)
                 self.log.info(
                     f"WebGPU worker disconnected: {addr} "
                     f"(ops={worker.ops_done}, "
@@ -436,7 +436,7 @@ class WebGPUBackend(BaseLLMBackend):
                     else:
                         san_entries.append(f"IP:{addr}")
             except Exception:
-                pass
+                LoggerAdapter("backend.webgpu").debug("getaddrinfo failed", exc_info=True)
             # Also try common method to get LAN IP
             try:
                 s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -447,7 +447,7 @@ class WebGPUBackend(BaseLLMBackend):
                 if entry not in san_entries:
                     san_entries.append(entry)
             except Exception:
-                pass
+                LoggerAdapter("backend.webgpu").debug("LAN IP detection failed", exc_info=True)
             # DDNS hostname for WAN access (e.g. jeje1.synology.me)
             ddns_host = os.environ.get("VRM_DDNS_HOST", "")
             if ddns_host:

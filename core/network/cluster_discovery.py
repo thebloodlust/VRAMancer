@@ -130,7 +130,7 @@ def _is_apple_silicon() -> bool:
         if result.returncode == 0 and result.stdout.strip() == "1":
             return True
     except Exception:
-        pass
+        _logger.debug("sysctl arm64 check failed", exc_info=True)
     # Fallback: check arch directly (works when not under Rosetta)
     arch = platform.machine().lower()
     return "arm" in arch or "aarch64" in arch
@@ -184,7 +184,7 @@ def _get_local_ip() -> str:
         s.close()
         return ip
     except Exception:
-        pass
+        _logger.debug("Local IP detection failed", exc_info=True)
     try:
         return socket.gethostbyname(socket.gethostname())
     except Exception:
@@ -639,17 +639,17 @@ class ClusterDiscovery:
                                 s.sendto(msg, (peer_ip, self.port))
                                 s.close()
                             except Exception:
-                                pass
-                                
+                                _logger.debug("UDP heartbeat send failed", exc_info=True)
+
                             # HTTP POST fallback (si UDP est bloqué au niveau firewall)
                             try:
                                 import requests
                                 target_port = os.environ.get("VRM_API_PORT", "8000")
-                                requests.post(f"http://{peer_ip}:{target_port}/api/nodes", 
-                                             json=self._local_info, 
+                                requests.post(f"http://{peer_ip}:{target_port}/api/nodes",
+                                             json=self._local_info,
                                              timeout=1.0)
                             except Exception:
-                                pass
+                                _logger.debug("HTTP heartbeat fallback failed", exc_info=True)
 
                 self._stats["heartbeats_sent"] += 1
             except Exception as exc:

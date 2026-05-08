@@ -84,7 +84,7 @@ class PipelineRegistry:
                 try:
                     self.discovery.stop()
                 except Exception:
-                    pass
+                    _logger.debug("Discovery stop failed", exc_info=True)
 
     # ------------------------------------------------------------------
     # Inference

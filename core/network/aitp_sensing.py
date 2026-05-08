@@ -228,5 +228,5 @@ class AITPSensor:
             try:
                 self.sock.close()
             except Exception:
-                pass
+                logger.debug("Sensing socket close failed", exc_info=True)
         logger.info("[Sensing] Stopped")

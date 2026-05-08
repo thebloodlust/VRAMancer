@@ -115,7 +115,7 @@ class PlacementEngine:
             lvl = decision.get("level", "unknown")
             ORCH_PLACEMENTS.labels(lvl).inc()
         except Exception:
-            pass
+            _logger.debug("Metrics placement counter failed", exc_info=True)
         return decision
 
     # ------------------------------------------------------------------
@@ -241,7 +241,7 @@ class PlacementEngine:
                             max_free = effective_free
                             gpu_id = dev["index"]
             except Exception:
-                pass
+                _logger.debug("GPU memory enumeration failed", exc_info=True)
 
         # Since max_free is degraded by adaptive scoring, if the network is terrible, we fall to L3 instead of L1.
         level = "L1" if max_free >= size_mb * 1024 * 1024 else "L3"
@@ -304,7 +304,7 @@ class PlacementEngine:
                     free_bytes = self.monitor.get_free_memory(idx)
                     free_mb = free_bytes / (1024 * 1024)
                 except Exception:
-                    pass
+                    _logger.debug("GPU free memory query failed", exc_info=True)
 
             if free_mb < size_mb:
                 continue  # Won't fit

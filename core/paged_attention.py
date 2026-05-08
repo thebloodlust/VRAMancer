@@ -315,7 +315,7 @@ class PagedKVCacheManager:
                         )
                         device_pages = max_staging
                 except Exception:
-                    pass  # Fall back to configured device_pages
+                    _logger.debug("CUDA mem_get_info failed, using configured device_pages", exc_info=True)
 
             try:
                 pool = torch.zeros(
