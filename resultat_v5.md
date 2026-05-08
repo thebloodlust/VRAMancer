@@ -151,10 +151,33 @@ Compagnon de [P13]. P13 a montré que le lending pool *peut* réserver de la VRA
 - `benchmarks/results/bench_lending_hetero_real_qwen14b.{json,md}` — preuve d'activation + non-régression sur charge réelle.
 - `benchmarks/results/bench_lending_hetero_real_tinyllama.{json,md}` — smoke-test (pool registry non-zéro, inférence cuDNN-blocked).
 
+### Run pression VRAM réelle — Qwen2.5-32B-Instruct BF16 (62 GB > 40 GB total)
+`benchmarks/results/bench_lending_hetero_real_qwen32b_bf16.{json,md}` — modèle volontairement plus gros que la VRAM combinée pour observer si la lending pool peut faire passer un cas OOM :
+
+| Variant | Status | Pool active | Load (s) | tok/s |
+|---------|--------|-------------|----------|-------|
+| LENDING_OFF | **OOM** | False | 188.3 | — |
+| LENDING_ON  | **OOM** | True  | 185.8 | — |
+
+**Erreur identique dans les deux variantes** : `CUDA out of memory. Tried to allocate 1.45 GiB. GPU 0 (5070 Ti) has 956.62 MiB free` — l'OOM frappe pendant `accelerate` dispatch, GPU0 est rempli par les premières couches alors qu'il restait ~14.4 GB sur le 3090.
+
+**Découverte critique #3 — limite structurelle** : la lending pool ne peut pas, dans son état actuel, sauver un OOM de chargement. Raisons :
+1. **Ordering** : `_init_lending_pool()` s'exécute en étape 13 de `pipeline.load()` (ligne 327 de `inference_pipeline.py`), **après** que `select_backend()` puis `accelerate.dispatch_model()` aient déjà placé les poids. L'OOM du load arrive en étape 11/12 → le pool n'a jamais l'occasion d'agir.
+2. **Layer sémantique** : la pool est conçue pour le **runtime overflow** (spillover KV cache, activations transitoires) — pas pour la placement statique des poids modèle. La placement de poids passe par `accelerate`'s `max_memory` qui, lui, est calculé via `_build_compute_aware_memory_map()` (`backends.py:564`) en utilisant les ratios de VRAM — sans consultation du pool.
+3. Pour qu'un cas OOM-vs-success soit possible, il faudrait soit :
+   - Réordonner : `_init_lending_pool()` **avant** `select_backend()`, et que `_build_compute_aware_memory_map()` interroge le pool pour ajuster `max_memory[gpu_id]` selon les leases planifiés.
+   - Ou wire la pool dans le path `accelerate.cpu_offload` directement (pour spillover dynamique pendant l'inférence).
+
+**Ce que ce run prouve quand même** :
+- ✅ La pool s'active proprement même sous pression VRAM extrême (`pool_active=True` en LENDING_ON, registry visible).
+- ✅ Le chemin de load est bien instrumenté (load_time mesuré identiquement à 186-188s pour les 2 variantes — la pool ne ralentit pas le load).
+- ✅ La diagnostic est clair : c'est une limite **architecturale** documentée, pas un bug.
+
 **Reste à faire (V6 candidat)** :
-1. Fixer le double-reserve dans `core/vram_lending.py:144`.
-2. Démontrer un cas OOM-vs-success : modèle > 39 GB, où LENDING_ON débloque ce que LENDING_OFF refuse.
-3. Phase 3 (différée) : wirer `allocate_on_lease()` → `TransferManager` pour exercer ReBAR+P2P sous lease, et hooker `vram_lending` dans le path KV cache overflow de `paged_attention`.
+1. Fixer le double-reserve dans `core/vram_lending.py:144` (1 ligne).
+2. **Wire la lending pool dans `_build_compute_aware_memory_map()`** : permettre à `max_memory[gpu_id]` d'inclure la capacité empruntable du voisin. Ça transformerait la pool d'un système runtime en un système de placement holistique → débloque le cas Qwen32B BF16 sur ce hardware.
+3. Wirer `allocate_on_lease()` → `TransferManager` pour exercer ReBAR+P2P sous lease au runtime.
+4. Hooker `vram_lending` dans le path KV cache overflow de `paged_attention` (cas d'usage primaire de la pool).
 
 **Fichiers résultats :**
 - `benchmarks/results/bench_deepseek_engram_v5.json`

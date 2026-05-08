@@ -399,13 +399,38 @@ def main() -> int:
                    f"- LENDING_ON : **{on['tok_s']} tok/s** "
                    f"({delta:+.2f} tok/s, {pct:+.1f} %)",
                    ""]
-    elif any(r.get("status") == "OOM" for r in runs):
-        oom = [r["label"] for r in runs if r.get("status") == "OOM"]
-        md += ["## Lending impact", "",
-               f"- OOM in variant(s): {', '.join(oom)} — when LENDING_OFF OOMs "
-               "and LENDING_ON succeeds, that **is** the proof: cooperative "
-               "pooling allows running a model that cannot fit otherwise.",
-               ""]
+    elif len(runs) == 2:
+        off = next((r for r in runs if r["label"] == "LENDING_OFF"), None)
+        on = next((r for r in runs if r["label"] == "LENDING_ON"), None)
+        off_oom = off and off.get("status") == "OOM"
+        on_oom = on and on.get("status") == "OOM"
+        if off_oom and not on_oom and on and on.get("status") == "ok":
+            md += ["## Lending impact", "",
+                   "- **LENDING_OFF OOMed**, **LENDING_ON succeeded** — "
+                   "cooperative VRAM pooling unlocks a model that cannot "
+                   "fit on a static `max_memory` partition.",
+                   ""]
+        elif off_oom and on_oom:
+            same_err = (off.get("error", "")[:80] == on.get("error", "")[:80])
+            md += ["## Lending impact", "",
+                   "- Both LENDING_OFF and LENDING_ON OOMed"
+                   + (" with the same error" if same_err else "") + ".",
+                   "- Diagnosis: the OOM occurred during **model load** "
+                   "(accelerate `device_map='auto'` weight placement). The "
+                   "lending pool initialises *after* `pipe.load()` completes "
+                   "(`inference_pipeline.py:327`, step 13 of init), so a "
+                   "load-time OOM happens before the pool can act. To "
+                   "prevent load-time OOM, the lending policy would need to "
+                   "feed accelerate's `max_memory` budget **before** dispatch "
+                   "— V6 work, not currently wired.",
+                   "- The pool is designed for *runtime* overflow (KV cache "
+                   "spill, activation buffers) — not static weight placement.",
+                   ""]
+        elif any(r.get("status") not in ("ok", "OOM") for r in runs):
+            md += ["## Bench infrastructure note", "",
+                   "- One or both variants exited with a non-OOM error. "
+                   "See per-variant `Error` blocks above.",
+                   ""]
 
     md += ["## What the table is showing", "",
            "- ``Pool active`` reflects whether ``InferencePipeline.lending_pool`` "
