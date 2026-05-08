@@ -361,7 +361,7 @@ def probe_p2p(gpu_a: int, gpu_b: int) -> bool:
         if torch.cuda.can_device_access_peer(gpu_a, gpu_b):
             return True
     except Exception:
-        pass
+        _log.debug("cuda can_device_access_peer query failed", exc_info=True)
 
     # Try enabling peer access explicitly — may succeed even when query said no
     try:
@@ -371,7 +371,7 @@ def probe_p2p(gpu_a: int, gpu_b: int) -> bool:
             _log.debug("P2P GPU %d→%d: enabled via cudaDeviceEnablePeerAccess", gpu_a, gpu_b)
             return True
     except Exception:
-        pass
+        _log.debug("cuda enable_peer_access failed for GPU %d→%d", gpu_a, gpu_b, exc_info=True)
 
     # Authoritative fallback: nvidia-smi topo -p2p r
     # Proxmox P2P shows "OK" here even when CUDA API disagrees.
@@ -399,7 +399,7 @@ def probe_p2p(gpu_a: int, gpu_b: int) -> bool:
                     )
                     return True
     except Exception:
-        pass
+        _log.debug("nvidia-smi topo P2P query failed", exc_info=True)
 
     return False
 

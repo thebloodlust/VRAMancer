@@ -336,7 +336,7 @@ def _find_gpu_pci_bdf(device_index: int) -> str:
         if device_index < len(gpu_bdfs):
             return gpu_bdfs[device_index]
     except Exception:
-        pass
+        log.debug("PCI BDF lookup failed for device %d", device_index, exc_info=True)
 
     return ""
 
@@ -380,7 +380,7 @@ def detect_dmabuf_support() -> Tuple[bool, List[str]]:
                           f"({uname.release}, need ≥ 5.12)")
                 return False, render_nodes
         except Exception:
-            pass
+            log.debug("Kernel version parse for DMA-BUF check failed", exc_info=True)
 
         # Check for both nvidia-drm and amdgpu modules
         has_nvidia_drm = False
@@ -392,7 +392,7 @@ def detect_dmabuf_support() -> Tuple[bool, List[str]]:
                 has_nvidia_drm = "nvidia_drm" in modules
                 has_amdgpu = "amdgpu" in modules
         except Exception:
-            pass
+            log.debug("/proc/modules read failed for DMA-BUF module check", exc_info=True)
 
         supported = has_nvidia_drm and has_amdgpu
         if supported:
@@ -1359,7 +1359,7 @@ class CrossVendorBridge:
                 FASTPATH_LATENCY.labels("xvendor", method_name.lower()).observe(
                     result.duration_s)
             except Exception:
-                pass
+                log.debug("Prometheus metrics update failed for xvendor bridge", exc_info=True)
 
     def stats(self) -> Dict[str, Any]:
         """Return bridge transfer statistics."""
