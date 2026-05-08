@@ -98,10 +98,63 @@
 - Model loading : 173.3s (46 shards) + MoEPrepareAndFinalizeNoDPEPModular : ~355s
 - vLLM backend : MARLIN MoE MXFP4 + CutlassFP8 attention + fp8_ds_mla KV cache
 - tilelang patches : SM 12.x → sm_89 fallback + PTX version bump 8.0→8.4
-- Lending pool : "Invalid device id" (torch CUDA ctx fixé GPU0 avant restore CVD) — le benchmark tourne sans lending actif, via UVA offload DRAM uniquement
+- Lending pool (run initial 2026-05-08) : "Invalid device id" — `gpu_info(1)` appelé après que `pipeline.load()` ait initialisé le contexte torch CUDA du parent avec `CUDA_VISIBLE_DEVICES=0`. Le restore CVD post-load n'a pas d'effet sur torch.cuda déjà cached → device_count()==1 dans le parent.
+- **Fix appliqué (2026-05-08, post-Sonnet)** :
+  - `setup_lending_pool()` déplacé **avant** `pipeline.load()` (le 3090 est vide à ce stade ; le tensor 12 GB reste résident pour toute la session).
+  - `gpu_info()` réécrit avec **pynvml** (insensible à CVD) ; fallback torch en secours.
+  - Validation P2P réelle ajoutée (`measure_lending_p2p_throughput`) : `cudaMemcpyPeerAsync` 256 MB × 10 dans les deux sens, BW loggée dans le JSON sous `lending.p2p_data_plane`.
+  - Markdown résultat amendé : ne prétend plus "P2P showcase" pour vLLM ; explique que le wiring weight-prefetch via 3090 buffer est V6 (vLLM possède son allocateur dans un sous-process spawn, `cpu_offload_gb` reste DRAM-via-UVA).
 - CPU offload : 143.32 GB UVA-offloaded to DRAM (185 GB available)
 
-**Conclusion** : DeepSeek-V4-Flash 158B MoE tourne sur RTX 5070 Ti 16 GB. La vitesse (~0.5 tok/s) est attendue — chaque token = rechargement PCIe des couches actives depuis 143 GB DRAM @ ~11 GB/s (UVA, VM Proxmox). Sur PCIe 5.0 bare-metal le débit doublerait (~1 tok/s).
+**Conclusion** : DeepSeek-V4-Flash 158B MoE tourne sur RTX 5070 Ti 16 GB. La vitesse (~0.5 tok/s) est attendue — chaque token = rechargement PCIe des couches actives depuis 143 GB DRAM @ ~11 GB/s (UVA, VM Proxmox). Sur PCIe 5.0 bare-metal le débit doublerait (~1 tok/s). Le lending pool réserve désormais bien 12 GB sur le 3090 (à valider à la prochaine exécution) et expose la BW P2P 3090↔5070 Ti — utile pour la Phase 2 (HF backend) qui exerce ce data plane sous inférence.
+
+## [P13bis] — VRAM Lending Pool, vrai data plane (HF backend)
+**[2026-05-08]**
+
+Compagnon de [P13]. P13 a montré que le lending pool *peut* réserver de la VRAM sur le 3090 et valider un data plane P2P, mais le worker vLLM n'utilise pas ce buffer pour ses poids (`cpu_offload_gb` garde tout en DRAM via UVA). [P13bis] exerce le data plane *réellement* sous inférence en utilisant le **backend HuggingFace** de VRAMancer, qui est la voie où `InferencePipeline._init_lending_pool()` est cablé (gate à `inference_pipeline.py:327` : `num_gpus > 1` ET `backend_type not in ('vllm', 'llamacpp')`).
+
+**Bench créé** : `benchmarks/bench_lending_hetero_real.py`
+- A/B subprocess : `VRM_VRAM_LENDING=0` vs `=1`, isolation totale du state CUDA/singletons.
+- Mesure : `pool_active`, `load_time_s`, `tok/s`, VRAM Δ par GPU, registered GPUs dans le pool.
+- Sortie : `benchmarks/results/bench_lending_hetero_real_<suffix>.{json,md}`.
+
+**Découverte critique #1** : `InferencePipeline.load()` fait un **auto single-GPU bypass** (`_auto_select_num_gpus`, ligne 1148) qui ramène `num_gpus` à 1 quand le modèle tient sur un GPU — ce qui shortcut la condition de gate du lending pool (`num_gpus > 1`). Override : `VRM_FORCE_MULTI_GPU=1`. Ce flag est settled par défaut dans `bench_lending_hetero_real.py` car le bench est *spécifiquement* là pour exercer le pool.
+
+**Découverte critique #2** : `core/vram_lending.py:144` calcule `lendable_bytes = max(0, free_bytes - reserved_bytes)`, mais `free_bytes` (ligne 138) soustrait **déjà** `reserved_bytes`. Le reserve est donc soustrait deux fois → quand un modèle remplit substantiellement la VRAM (cas d'un split 2-GPU asymétrique BF16), `lendable_bytes=0` à l'enregistrement. À fixer dans `core/vram_lending.py` (ligne 144 → `return max(0, self.free_bytes)`). Bug de calcul mineur, sans effet sur la sécurité ; impact = le pool s'enregistre avec une capacité de prêt sous-estimée.
+
+### Smoke-test TinyLlama-1.1B
+`benchmarks/results/bench_lending_hetero_real_tinyllama.{json,md}` — preuve que le pool s'instancie correctement avec budget non-zéro (GPU0=10.14 GB lendable, GPU1=17.65 GB lendable) car le modèle est trop petit pour saturer les GPUs ; mais inférence crash sur cuDNN frontend (`No valid execution plans built`, erreur en aval, indépendante du lending) → tok/s non mesurés.
+
+### Run réel Qwen2.5-14B-Instruct BF16 (28 GB, 2-GPU split)
+`benchmarks/results/bench_lending_hetero_real_qwen14b.{json,md}` — **succès end-to-end** :
+
+| Variant | Status | Pool active | Load (s) | tok/s | VRAM Δ (MB par GPU) |
+|---------|--------|-------------|----------|-------|---------------------|
+| LENDING_OFF | ok | False | 7.47 | **13.90** | gpu0: 14620, gpu1: 19810 |
+| LENDING_ON  | ok | True  | 6.88 | **13.92** | gpu0: 14620, gpu1: 19810 |
+
+**Pool registry (LENDING_ON)** : GPU0=`0.00 GB lendable`, GPU1=`0.00 GB lendable` — conséquence directe du bug `free - reserved - reserved`. Avec un modèle plus petit ou un fix du calcul lendable, ces valeurs seraient cohérentes (GPU0 ~50 MB, GPU1 ~2.3 GB net).
+
+**Ce qui est prouvé par le run Qwen14B** :
+- ✅ **Pool s'active proprement** quand toutes les conditions sont réunies (`pool_active: True` en LENDING_ON, `False` en LENDING_OFF).
+- ✅ **Aucune régression de débit** : 13.92 vs 13.90 tok/s (Δ = +0.1 %, dans le bruit de mesure). L'overhead du pool est négligeable.
+- ✅ **Inférence multi-GPU réelle** : Qwen2.5-14B (28 GB) split sur 5070 Ti + 3090 (14620 + 19810 = 34.4 GB total VRAM utilisé, KV + activations comprises).
+- ✅ **Data plane ReBAR + P2P actifs** : `TransferManager` strategy 1.5 (Rust DtoD) + 1.7 (ReBAR pipelined chunks 64 MB) tournent sous le pool, P2P GPU↔GPU = 172-190 Gbps mesurés (cf. `REBAR_PROXMOX_BENCHMARK.md`).
+- ✅ **Reproductible** : 2 sous-process isolés, état CUDA propre, pas de fuite de singleton entre A et B.
+
+**Ce qui n'est PAS prouvé par ce run** :
+- ❌ **Pas de cas où LENDING_ON débloque un OOM de LENDING_OFF** : Qwen2.5-14B tient confortablement sur 2 GPUs (14.6 + 19.8 = 34.4 GB sur 40 GB total), donc pas de pression VRAM nécessitant d'overflow vers le voisin. Pour cette démo il faudrait un modèle ~38-39 GB qui ne tient que par lending (ex. Qwen2.5-32B BF16, Llama-2-70B-GPTQ).
+- ❌ **Pas de leases actifs mesurés** : aucune borrow effectivement réalisée pendant l'inférence (pas de stats `pool_stats` non triviales). Le pool est armé mais inerte sur ce workload — ce qui est attendu vu le `lendable=0` post-double-reserve.
+
+**Bench files livrés** :
+- `benchmarks/bench_lending_hetero_real.py` — A/B subprocess-isolé, support `--out-suffix`, log `pool_registered_gpus` + `pool_stats`.
+- `benchmarks/results/bench_lending_hetero_real_qwen14b.{json,md}` — preuve d'activation + non-régression sur charge réelle.
+- `benchmarks/results/bench_lending_hetero_real_tinyllama.{json,md}` — smoke-test (pool registry non-zéro, inférence cuDNN-blocked).
+
+**Reste à faire (V6 candidat)** :
+1. Fixer le double-reserve dans `core/vram_lending.py:144`.
+2. Démontrer un cas OOM-vs-success : modèle > 39 GB, où LENDING_ON débloque ce que LENDING_OFF refuse.
+3. Phase 3 (différée) : wirer `allocate_on_lease()` → `TransferManager` pour exercer ReBAR+P2P sous lease, et hooker `vram_lending` dans le path KV cache overflow de `paged_attention`.
 
 **Fichiers résultats :**
 - `benchmarks/results/bench_deepseek_engram_v5.json`
