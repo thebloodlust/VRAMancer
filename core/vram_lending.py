@@ -636,6 +636,105 @@ class VRAMLendingPool:
                         lease.lease_id, e)
             return None
 
+    def transfer_into_lease(
+        self,
+        lease: VRAMLease,
+        src_tensor: Any,
+    ) -> Optional[Any]:
+        """Copy src_tensor into the leased VRAM buffer using TransferManager.
+
+        Routes through the Rust DtoD bypass (≥ 512 KB) or ReBAR pipelined
+        transport (≥ 64 MB) — see core.transfer_manager. Falls back to
+        torch's tensor.copy_() if no TransferManager was injected.
+
+        Args:
+            lease: Active lease with tensor_ref already allocated
+            src_tensor: Source tensor to copy from
+
+        Returns:
+            Tensor on lender GPU (lease.tensor_ref) after copy, or None on failure
+        """
+        if lease.state != LeaseState.ACTIVE or lease.tensor_ref is None:
+            log.warning(
+                "transfer_into_lease on non-active lease %s (state=%s, tensor_ref=%s)",
+                lease.lease_id,
+                lease.state.name,
+                lease.tensor_ref is not None,
+            )
+            return None
+
+        src_gpu = src_tensor.device.index if hasattr(src_tensor, 'device') else None
+        if src_gpu is None:
+            log.warning("transfer_into_lease: source tensor has no device attribute")
+            return None
+
+        try:
+            # Route via TransferManager if available and cross-GPU
+            if self._transfer_manager is not None and src_gpu != lease.owner_gpu:
+                # TransferManager.send_tensor returns the tensor on target GPU
+                dst = self._transfer_manager.send_tensor(
+                    src_gpu, lease.owner_gpu, src_tensor,
+                )
+                # Copy the result into our pre-allocated lease.tensor_ref
+                lease.tensor_ref.copy_(dst)
+                return lease.tensor_ref
+
+            # Same GPU or no transfer manager: direct copy
+            lease.tensor_ref.copy_(src_tensor)
+            return lease.tensor_ref
+
+        except Exception as e:
+            log.warning(
+                "transfer_into_lease failed for %s: %s",
+                lease.lease_id,
+                e,
+                exc_info=True,
+            )
+            return None
+
+    def transfer_from_lease(
+        self,
+        lease: VRAMLease,
+        dst_gpu: int,
+    ) -> Optional[Any]:
+        """Materialize a copy of the leased buffer on dst_gpu via TransferManager.
+
+        Args:
+            lease: Active lease to read from
+            dst_gpu: Destination GPU index
+
+        Returns:
+            Tensor on dst_gpu, or None on failure
+        """
+        if lease.state != LeaseState.ACTIVE or lease.tensor_ref is None:
+            log.warning(
+                "transfer_from_lease on invalid lease %s (state=%s, tensor_ref=%s)",
+                lease.lease_id,
+                lease.state.name,
+                lease.tensor_ref is not None,
+            )
+            return None
+
+        try:
+            # Route via TransferManager if available and cross-GPU
+            if self._transfer_manager is not None and dst_gpu != lease.owner_gpu:
+                dst = self._transfer_manager.send_tensor(
+                    lease.owner_gpu, dst_gpu, lease.tensor_ref,
+                )
+                return dst
+
+            # Same GPU: just return the tensor
+            return lease.tensor_ref
+
+        except Exception as e:
+            log.warning(
+                "transfer_from_lease failed for %s: %s",
+                lease.lease_id,
+                e,
+                exc_info=True,
+            )
+            return None
+
     # ------------------------------------------------------------------
     # Reclaim (preemptive memory recovery)
     # ------------------------------------------------------------------
