@@ -240,5 +240,5 @@ def _find_cached(repo_id: str, filename: str) -> Optional[str]:
             log.info("GGUF already cached: %s", path)
             return path
     except Exception:
-        pass
+        log.debug("GGUF cache lookup failed", exc_info=True)
     return None

@@ -299,7 +299,7 @@ class RDMATransport:
                 try:
                     res.close()
                 except Exception:
-                    pass
+                    log.debug("RDMA resource close failed", exc_info=True)
         self._connected = False
         log.info("RDMA resources released")
 
@@ -528,16 +528,16 @@ class ZeroCopyTCPTransport:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, self.buf_size)
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, self.buf_size)
         except Exception:
-            pass
+            log.debug("Socket buffer size set failed", exc_info=True)
         try:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_BUSY_POLL, 50)
         except Exception:
-            pass
+            log.debug("SO_BUSY_POLL set failed", exc_info=True)
         try:
             SO_ZEROCOPY = 60
             sock.setsockopt(socket.SOL_SOCKET, SO_ZEROCOPY, 1)
         except Exception:
-            pass
+            log.debug("SO_ZEROCOPY set failed", exc_info=True)
         return sock
 
     def listen(self, port: int = 0) -> int:
@@ -622,7 +622,7 @@ class ZeroCopyTCPTransport:
                 try:
                     s.close()
                 except Exception:
-                    pass
+                    log.debug("Socket close failed", exc_info=True)
         self._conn = None
         self._sock = None
 
@@ -806,10 +806,10 @@ def detect_fast_interfaces() -> List[Dict[str, Any]]:
                     with open(f'/sys/class/net/{n}/speed') as f:
                         speed = int(f.read().strip())
                 except Exception:
-                    pass
+                    log.debug("Network interface speed read failed", exc_info=True)
                 candidates.append({"type": "sfp" if speed >= 10000 else "ethernet", "if": n, "speed_mbps": speed})
     except Exception:
-        pass
+        log.debug("Network interface enumeration failed", exc_info=True)
     prefer_if = os.environ.get('VRM_FASTPATH_IF')
     if prefer_if:
         for i, it in enumerate(candidates):

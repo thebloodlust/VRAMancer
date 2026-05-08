@@ -217,7 +217,7 @@ class LlamaServerBackend:
                     log.info("llama-server ready on port %d", self._port)
                     return
             except Exception:
-                pass
+                log.debug("llama-server health check failed", exc_info=True)
             if self._proc and self._proc.poll() is not None:
                 err = self._proc.stderr.read().decode()[:500]
                 raise RuntimeError(f"llama-server crashed: {err}")
@@ -276,7 +276,7 @@ class LlamaServerBackend:
                     if text:
                         yield text
                 except Exception:
-                    pass
+                    log.debug("Stream chunk parse failed", exc_info=True)
 
     def generate(self, prompt: str, max_new_tokens: int = 512, **kw) -> str:
         r = _requests.post(

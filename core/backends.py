@@ -195,7 +195,7 @@ class KVCacheBlock(_nn.Module if _HAS_TORCH else object):
                     pos_emb = layer.self_attn.rotary_emb(hidden_states, position_ids)
                     layer_kwargs["position_embeddings"] = pos_emb
                 except Exception:
-                    pass
+                    logger.debug("Rotary embedding computation failed", exc_info=True)
 
             # Try calling with KV cache kwargs — singular 'past_key_value' FIRST.
             # Most modern HF layers (Llama, Mistral, Qwen2) use singular + **kwargs,
@@ -786,7 +786,7 @@ class HuggingFaceBackend(BaseLLMBackend):
                         profile = lookup_gpu_profile(props.name)
                         best_arch = profile.architecture if profile else ""
                     except Exception:
-                        pass
+                        logger.debug("GPU profile lookup failed", exc_info=True)
 
             if best_cc >= (12, 0):
                 self.log.info(
@@ -832,7 +832,7 @@ class HuggingFaceBackend(BaseLLMBackend):
                     yield
                 _tmu.no_init_weights = _no_init_weights
         except Exception:
-            pass
+            logger.debug("no_init_weights patch failed", exc_info=True)
 
         # ── Monkey-patch GptqHfQuantizer.__init__ ───────────────────────
         try:
@@ -1987,7 +1987,7 @@ class HuggingFaceBackend(BaseLLMBackend):
                 device = self._get_device()
                 input_ids = input_ids.to(device)
             except Exception:
-                pass
+                logger.debug("Input tensor device transfer failed", exc_info=True)
 
         generated = input_ids
         past_key_values = None

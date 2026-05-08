@@ -424,7 +424,7 @@ class InferencePipeline:
                                         src_idx, dst_idx, tensor
                                     )
                                 except Exception:
-                                    pass  # fall through to .to()
+                                    _logger.debug("P2P tensor send failed, falling through to .to()", exc_info=True)
                 return _orig_send(tensor, device,
                                   non_blocking=non_blocking, skip_keys=skip_keys)
 
@@ -434,7 +434,7 @@ class InferencePipeline:
                 import accelerate.hooks as _hooks
                 _hooks.send_to_device = _p2p_send
             except Exception:
-                pass
+                _logger.debug("Accelerate hooks patch failed", exc_info=True)
             _logger.info(
                 "Accelerate send_to_device patched → Rust P2P (threshold=%d KB)",
                 _P2P_THRESHOLD // 1024,
@@ -1023,7 +1023,7 @@ class InferencePipeline:
                 with torch.cuda.device(i):
                     torch.cuda.empty_cache()
             except Exception:
-                pass
+                _logger.debug("CUDA cache clear failed on device %d", i, exc_info=True)
         _logger.info("OOM recovery: CUDA caches cleared on %d devices",
                      torch.cuda.device_count())
 
@@ -1113,7 +1113,7 @@ class InferencePipeline:
                 model_name, trust_remote_code=_trc, local_files_only=True,
             )
         except Exception:
-            pass
+            _logger.debug("AutoConfig local load failed", exc_info=True)
         # Fallback: quick network fetch (only config.json, small file)
         if config is None:
             try:

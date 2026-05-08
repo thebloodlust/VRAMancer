@@ -618,7 +618,7 @@ class PagedKVCacheManager:
                 v_flat = value.reshape(-1, self.config.head_dim)
                 self._pending_compress.append((page_id, layer_idx, slot, k_flat, v_flat))
             except Exception:
-                pass
+                _logger.debug("KV compression enqueue failed", exc_info=True)
 
     def flush_compression(self) -> None:
         """Batch-compress all pending KV writes in a single kernel launch.
@@ -672,7 +672,7 @@ class PagedKVCacheManager:
                             "k": ck, "v": cv,
                         }
             except Exception:
-                pass
+                _logger.debug("KV flush compression failed", exc_info=True)
 
     def read_kv(
         self,
@@ -1033,7 +1033,7 @@ class PagedKVCacheManager:
                     try:
                         page_data = self._gpu_pool[victim.page_id].cpu().contiguous().numpy().tobytes()
                     except Exception:
-                        pass
+                        _logger.debug("GPU page read failed", exc_info=True)
                 elif victim.page_id in self._compressed_pages:
                     # Use compressed form if available
                     import json
@@ -1093,7 +1093,7 @@ class PagedKVCacheManager:
                     self._lending_pool.release(victim.lease_id)
                 self._lending_leases.pop(victim.lease_id, None)
             except Exception:
-                pass
+                _logger.debug("Lending lease release failed", exc_info=True)
             victim.is_borrowed = False
             victim.lease_id = None
 

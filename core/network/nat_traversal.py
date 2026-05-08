@@ -127,7 +127,7 @@ class NATTraversal:
             if not addr.startswith("fe80") and not addr.startswith("::1"):
                 return addr
         except Exception:
-            pass
+            logger.debug("IPv6 local address detection failed", exc_info=True)
         return None
 
     # ------------------------------------------------------------------
@@ -343,7 +343,7 @@ class NATTraversal:
             sock.close()
             return "direct"
         except Exception:
-            pass
+            logger.debug("Direct UDP send failed", exc_info=True)
 
         # 2. Try punched hole
         if peer_addr in self._punched_peers:
@@ -355,7 +355,7 @@ class NATTraversal:
                 sock.close()
                 return "punched"
             except Exception:
-                pass
+                logger.debug("Punched hole UDP send failed", exc_info=True)
 
         # 3. Relay
         if self._relay_addr and self.send_via_relay(peer_uid, data):

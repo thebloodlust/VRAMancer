@@ -137,7 +137,7 @@ class vLLMBackend(BaseLLMBackend):
                         import torch
                         torch.cuda.empty_cache()
                     except Exception:
-                        pass
+                        logger.debug("CUDA cache clear failed", exc_info=True)
                     # Halve max_tokens — this is the only lever that works
                     # on a live engine (gpu_memory_utilization only affects
                     # engine creation and is a no-op mid-flight).
@@ -201,7 +201,7 @@ class vLLMBackend(BaseLLMBackend):
                         import torch
                         torch.cuda.empty_cache()
                     except Exception:
-                        pass
+                        logger.debug("CUDA cache clear failed", exc_info=True)
                     max_tokens_val = max(1, max_tokens_val // 2)
                     logger.info("[vLLM Stream] Halving max_tokens to %d for OOM retry", max_tokens_val)
                     request_id_retry = str(uuid.uuid4())
