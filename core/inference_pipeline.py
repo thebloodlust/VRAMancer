@@ -230,12 +230,59 @@ class InferencePipeline:
                 _logger.warning("TransferManager init failed: %s", e)
                 self.transfer_manager = None
 
+            # 4b. [V6.B] Pre-init VRAM Lending Pool BEFORE model load.
+            # The pool exposes ``suggest_placement_budget()`` so the backend's
+            # ``_build_compute_aware_memory_map()`` can ask for a smarter
+            # ``max_memory`` distribution at dispatch time. The static 97 %
+            # formula OOMs at load-time on tight-fit models (Qwen2.5-32B BF16
+            # on 16+24 GB). The pool yields the same physical capacity but
+            # carves out runtime headroom + spills to CPU when oversubscribed.
+            #
+            # The pool is registered here with ``model_bytes=0`` (nothing
+            # loaded yet); ``model_bytes`` and ``kv_cache_bytes`` are
+            # refreshed post-load via ``update_gpu_usage()`` for the
+            # runtime side of the pool's responsibilities.
+            _backend_type_for_pool = getattr(self.backend, 'backend_type', 'huggingface')
+            _lending_enabled = (
+                _flags.VRAM_LENDING if _flags
+                else os.environ.get("VRM_VRAM_LENDING", "1").lower()
+                not in ("0", "false", "no")
+            )
+            if (self.num_gpus > 1
+                    and _backend_type_for_pool not in ('vllm', 'llamacpp')
+                    and _lending_enabled):
+                self._init_lending_pool()
+                # Inject pool reference into the backend so its placement
+                # logic can consult ``suggest_placement_budget()``.
+                if hasattr(self.backend, 'lending_pool') or self.backend is not None:
+                    setattr(self.backend, 'lending_pool', self.lending_pool)
+                # Pass the model size estimate too so the backend's
+                # ``_build_compute_aware_memory_map`` can ask the pool
+                # for a budget that targets exactly this footprint.
+                _est_gb = self._estimate_model_vram_gb(model_name, model_kwargs)
+                if _est_gb is not None:
+                    setattr(self.backend, '_estimated_model_size_bytes',
+                            int(_est_gb * (1024 ** 3)))
+
             # 5. Load model via backend
             try:
                 self.backend.load_model(model_name, num_gpus=self.num_gpus, **model_kwargs)
             except Exception as e:
                 _logger.error("Model load failed: %s", e)
                 raise
+
+            # 5b. [V6.B] Refresh pool's model_bytes for each GPU now that
+            # accelerate has finished placement. This is the snapshot used
+            # by runtime decisions (KV cache spillover, lease borrows).
+            if self.lending_pool is not None and _TORCH and torch.cuda.is_available():
+                for i in range(self.num_gpus):
+                    try:
+                        self.lending_pool.update_gpu_usage(
+                            gpu_id=i,
+                            model_bytes=torch.cuda.memory_allocated(i),
+                        )
+                    except Exception as e:
+                        _logger.debug("Pool update_gpu_usage(%d) failed: %s", i, e)
 
             # 6. Inject transfer manager into backend for multi-GPU activation transfer
             if hasattr(self.backend, 'transfer_manager'):
@@ -320,12 +367,10 @@ class InferencePipeline:
             # 12b. Init TurboQuant HF-native KV cache (if compression requested)
             self._init_turboquant_cache()
 
-            # 13. Init VRAM Lending Pool (cooperative GPU memory)
-            # Skip when vLLM/llama.cpp manage their own VRAM
-            # Controlled by VRM_VRAM_LENDING env var (default: enabled for multi-GPU)
-            _lending_enabled = (_flags.VRAM_LENDING if _flags else os.environ.get("VRM_VRAM_LENDING", "1").lower() not in ("0", "false", "no"))
-            if self.num_gpus > 1 and _backend_type not in ('vllm', 'llamacpp') and _lending_enabled:
-                self._init_lending_pool()
+            # 13. VRAM Lending Pool — moved to step 4b (before backend.load_model)
+            # so that backend.lending_pool is available when accelerate
+            # computes max_memory. See [V6.B] block above. The pool's
+            # ``model_bytes`` snapshot was refreshed in step 5b post-load.
 
             # 13b. Init Hierarchical Memory Manager (L1-L6 tiered memory)
             self._init_hierarchical_memory()
@@ -1531,9 +1576,18 @@ class InferencePipeline:
         try:
             from core.vram_lending import get_lending_pool, LendingPolicy
 
+            # [V6.B] buffer_prealloc_ratio=0.0 — the pool used to register at
+            # step 13 (post-load) when GPUs were already filled, so a 100 %
+            # prealloc would size the buffer to whatever was left (often
+            # MBs). With V6.B the pool registers BEFORE the model load, when
+            # GPUs are still empty — a 100 % prealloc would then grab the
+            # entire VRAM, starving accelerate's dispatch and triggering
+            # OOM at load time. Lazy allocation via ``allocate_on_lease()``
+            # is fine for the runtime path; we don't need a pre-baked slab.
             policy = LendingPolicy(
                 max_lend_ratio=(_flags.LEND_RATIO if _flags else float(os.environ.get("VRM_LEND_RATIO", "0.70"))),
                 reclaim_threshold=(_flags.RECLAIM_THRESHOLD if _flags else float(os.environ.get("VRM_RECLAIM_THRESHOLD", "0.80"))),
+                buffer_prealloc_ratio=0.0,
             )
             self.lending_pool = get_lending_pool(
                 policy=policy,

@@ -987,6 +987,94 @@ class VRAMLendingPool:
                 }
             return s
 
+    def suggest_placement_budget(
+        self,
+        model_size_bytes: int,
+        gpu_ids: Optional[List[int]] = None,
+        runtime_headroom_ratio: float = 0.05,
+        cpu_overflow_gb: float = 48.0,
+    ) -> Optional[Dict[Any, str]]:
+        """Suggest an accelerate-compatible ``max_memory`` mapping.
+
+        The static formula in ``backends._build_compute_aware_memory_map``
+        budgets each GPU at 97 % of its free VRAM. For models that fit
+        comfortably this is fine, but when the model is close to or
+        bigger than the combined VRAM, the 3 % margin can be too thin
+        for transient buffers (matmul scratch, activations) — accelerate
+        OOMs *during* dispatch even though the placement looks valid on
+        paper.
+
+        This method asks the lending pool to redistribute the same
+        physical capacity with a fatter runtime headroom, deferring
+        spillover to CPU when the GPUs cannot collectively absorb the
+        weights with their per-GPU safety margins honored.
+
+        Returns ``None`` when no GPU is registered or torch is missing —
+        the caller should then fall back to its static path.
+
+        Args
+        ----
+        model_size_bytes
+            Estimated weight size on disk (BF16 or quantized).
+        gpu_ids
+            Subset of registered GPU ids to consider. Defaults to all.
+        runtime_headroom_ratio
+            Per-GPU fraction reserved on top of ``policy.min_free_ratio``
+            for matmul scratch, activations, KV cache growth.
+        cpu_overflow_gb
+            Hard cap on CPU offload budget, in GiB.
+        """
+        with self._lock:
+            ids = gpu_ids if gpu_ids is not None else list(self._budgets.keys())
+            ids = [i for i in ids if i in self._budgets]
+            if not ids:
+                return None
+
+            per_gpu: List[Tuple[int, int]] = []  # (gpu_id, usable_bytes)
+            total_usable = 0
+            for gid in ids:
+                b = self._budgets[gid]
+                # Usable = total - safety_reserve - runtime_headroom.
+                # We ignore current model_bytes/kv_bytes here because the
+                # pool was registered with model_bytes=0 (pre-load); these
+                # fields are relevant only post-load for runtime decisions.
+                safety = int(b.total_bytes * self.policy.min_free_ratio)
+                runtime = int(b.total_bytes * runtime_headroom_ratio)
+                usable = max(0, b.total_bytes - safety - runtime)
+                per_gpu.append((gid, usable))
+                total_usable += usable
+
+            if total_usable <= 0:
+                return None
+
+            mm: Dict[Any, str] = {}
+
+            if model_size_bytes <= total_usable:
+                # Model fits — distribute proportionally to free VRAM
+                # ratio so the larger GPU absorbs more of the model.
+                # Each GPU gets at most its usable cap.
+                for gid, usable in per_gpu:
+                    share = int(model_size_bytes * (usable / total_usable))
+                    cap = min(share, usable)
+                    mm[gid] = f"{cap / (1024**3):.2f}GiB"
+                # Modest CPU overflow for safety on tight fits.
+                mm["cpu"] = f"{cpu_overflow_gb:.1f}GiB"
+            else:
+                # Oversubscribed — max out each GPU at its physical cap,
+                # spill the rest to CPU. This is exactly the case where
+                # the static 97 % formula trips OOM during dispatch.
+                gpu_total = 0
+                for gid, usable in per_gpu:
+                    mm[gid] = f"{usable / (1024**3):.2f}GiB"
+                    gpu_total += usable
+                overflow = max(0, model_size_bytes - gpu_total)
+                # CPU budget = overflow + small slack for fp32 transient
+                # buffers (embedding/lm_head sometimes promoted to fp32).
+                cpu_need_gb = overflow / (1024**3) + 4.0
+                mm["cpu"] = f"{max(cpu_overflow_gb, cpu_need_gb):.1f}GiB"
+
+            return mm
+
     def on_reclaim(self, callback: Callable[[VRAMLease], None]) -> None:
         """Register a callback for lease reclaim events."""
         self._on_reclaim_callbacks.append(callback)

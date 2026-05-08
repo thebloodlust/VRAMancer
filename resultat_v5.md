@@ -174,10 +174,69 @@ Compagnon de [P13]. P13 a montré que le lending pool *peut* réserver de la VRA
 - ✅ La diagnostic est clair : c'est une limite **architecturale** documentée, pas un bug.
 
 **Reste à faire (V6 candidat)** :
-1. Fixer le double-reserve dans `core/vram_lending.py:144` (1 ligne).
-2. **Wire la lending pool dans `_build_compute_aware_memory_map()`** : permettre à `max_memory[gpu_id]` d'inclure la capacité empruntable du voisin. Ça transformerait la pool d'un système runtime en un système de placement holistique → débloque le cas Qwen32B BF16 sur ce hardware.
-3. Wirer `allocate_on_lease()` → `TransferManager` pour exercer ReBAR+P2P sous lease au runtime.
-4. Hooker `vram_lending` dans le path KV cache overflow de `paged_attention` (cas d'usage primaire de la pool).
+1. Fixer le double-reserve dans `core/vram_lending.py:144` (1 ligne). → **Fait V6.A (74dc904)**
+2. **Wire la lending pool dans `_build_compute_aware_memory_map()`** : permettre à `max_memory[gpu_id]` d'inclure la capacité empruntable du voisin. Ça transformerait la pool d'un système runtime en un système de placement holistique → débloque le cas Qwen32B BF16 sur ce hardware. → **Fait V6.B**
+3. Wirer `allocate_on_lease()` → `TransferManager` pour exercer ReBAR+P2P sous lease au runtime. → **V6.C en attente**
+4. Hooker `vram_lending` dans le path KV cache overflow de `paged_attention` (cas d'usage primaire de la pool). → **V6.D V6 ultérieur**
+
+---
+
+## V6 — Lending pool cooperative placement
+
+### V6.A — Fix double-reserve `lendable_bytes` (commit `74dc904`)
+
+`vram_lending.py:144` faisait `max(0, free_bytes - reserved_bytes)` mais `free_bytes` (ligne 138) soustrayait déjà `reserved_bytes`. Reserve compté deux fois → `lendable_bytes` clampé à 0 quand le modèle remplissait substantiellement la VRAM.
+
+**Fix** : `lendable_bytes = max(0, self.free_bytes)`. Le reserve est honoré exactement une fois (dans `free_bytes`).
+
+**Validation** :
+- 95 tests lending passent (test_vram_lending + test_lending_stress + test_rebar_lending) — y compris `assert budget.lendable_bytes > 0` à `test_rebar_lending.py:160`
+- Re-bench Qwen14B BF16 : GPU1 (3090) lendable passe de 0.00 GB → **2.196 GB**. GPU0 reste à 0 (model + reserve dépasse total = comportement correct désormais)
+- Aucune régression de tok/s
+
+### V6.B — Wire lending pool dans `max_memory` placement (en cours commit)
+
+**Refactor** :
+1. **Nouveau** `VRAMLendingPool.suggest_placement_budget(model_size_bytes, gpu_ids, runtime_headroom_ratio=0.05)` (`vram_lending.py`) — retourne un `max_memory` accelerate-compat qui distribue le modèle proportionnellement à la VRAM utilisable (total - safety - runtime), avec spillover CPU pour les modèles oversubscribed.
+2. **Pool init déplacé** de l'étape 13 → étape 4b (`inference_pipeline.py`), AVANT `backend.load_model()`. Le backend reçoit `lending_pool` + `_estimated_model_size_bytes` injectés.
+3. **`buffer_prealloc_ratio=0.0`** dans `LendingPolicy` à l'init du pipeline — sans ça, le pool greedy pré-allouait 14.7 GB sur GPU0 *avant* le model load, causant OOM. Allocation paresseuse via `allocate_on_lease()` désormais.
+4. **`_build_compute_aware_memory_map()`** (`backends.py:564`) consulte le pool en priorité, fallback sur la formule statique 97 % si pool indisponible.
+
+**Bench Qwen14B BF16 (28 GB, regression check)** — `bench_lending_hetero_real_qwen14b_v6b_fixed.{json,md}` :
+
+| Variant | Status | Pool | tok/s | GPU0 used | GPU1 used |
+|---------|--------|------|-------|-----------|-----------|
+| LENDING_OFF | ok | False | 14.20 | 14620 MB | 19810 MB |
+| LENDING_ON  | ok | True  | 13.72 | **13300 MB** | **21132 MB** |
+
+Le pool a bien **redistribué** : -1320 MB sur 5070 Ti, +1322 MB sur 3090. -3.4 % tok/s = trade-off attendu (moins de calcul sur le GPU le plus rapide). Pas de régression structurelle.
+
+### Bench Qwen2.5-32B BF16 (62 GB > 40 GB total, le test critique) — `bench_lending_hetero_real_qwen32b_v6b_fixed.{json,md}` :
+
+| Variant | Status | Pool | Load (s) | tok/s | VRAM final |
+|---------|--------|------|----------|-------|------------|
+| LENDING_OFF | **OOM** ❌ | False | 184.4 | — | crash mid-load |
+| LENDING_ON  | **ok** ✅ | True  | 215.4 | **0.39** | gpu0=15442, gpu1=22468 |
+
+**Erreur LENDING_OFF identique à V5** : `+1.45 GiB demandé alors que 956 MiB free sur GPU0` — formule statique 97 % laisse trop peu de marge.
+
+**LENDING_ON débloque le cas** : pool budget `13.6 GiB GPU0 + 20.4 GiB GPU1 + 48 GiB CPU` (au lieu de `15.5 + 23.3` static). Les ~4.8 GiB redistribués vers le runtime headroom + cpu_offload permettent à accelerate de placer le modèle sans OOM. Le 5070 Ti finit à 15.4 GB (94.7 % de 16.3 GB) avec marge runtime suffisante.
+
+**Pourquoi 0.39 tok/s** : 62 GB de poids sur 40 GB de VRAM total → ~22 GB en cpu_offload via UVA, chaque token = read PCIe 4 DRAM des couches actives @ ~10-15 GB/s. PCIe 5 bare-metal doublerait probablement (~0.8 tok/s).
+
+**C'est la première démonstration tangible de la lending pool sauvant un OOM** : V5 → les deux variantes OOMaient ; V6.B → LENDING_OFF OOM persiste mais LENDING_ON passe.
+
+**Limites V6.B documentées honnêtement** :
+- Le gain est sur le **placement** (load-time `max_memory` smarter), pas encore sur le **runtime** (les leases ne déplacent pas vraiment de la VRAM cross-GPU à l'inférence — c'est V6.C).
+- Le tok/s est limité par le PCIe DRAM (cpu_offload), pas par les GPUs eux-mêmes.
+- Sur PCIe 5 ou avec un modèle un peu plus petit (~50 GB), tok/s monterait significativement.
+
+**Fichiers livrés en V6.B** :
+- `core/vram_lending.py` — `suggest_placement_budget()` (+90 lignes)
+- `core/inference_pipeline.py` — pool init early + injection backend + `buffer_prealloc_ratio=0.0`
+- `core/backends.py` — `_build_compute_aware_memory_map()` consulte le pool
+- `benchmarks/results/bench_lending_hetero_real_qwen14b_v6b_fixed.{json,md}` — regression check
+- `benchmarks/results/bench_lending_hetero_real_qwen32b_v6b_fixed.{json,md}` — **preuve OOM-débloque**
 
 **Fichiers résultats :**
 - `benchmarks/results/bench_deepseek_engram_v5.json`

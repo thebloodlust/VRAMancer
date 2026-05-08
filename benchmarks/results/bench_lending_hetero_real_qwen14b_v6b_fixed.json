@@ -1,0 +1,177 @@
+{
+  "bench": "bench_lending_hetero_real",
+  "phase": "V5 P13bis (companion to bench_deepseek_engram)",
+  "model": "Qwen/Qwen2.5-14B-Instruct",
+  "num_gpus": 2,
+  "max_new": 32,
+  "warmup": 3,
+  "topology": [
+    {
+      "index": 0,
+      "name": "NVIDIA GeForce RTX 5070 Ti",
+      "sm": "12.0",
+      "total_mb": 16303,
+      "free_mb": 15826,
+      "used_mb": 476
+    },
+    {
+      "index": 1,
+      "name": "NVIDIA GeForce RTX 3090",
+      "sm": "8.6",
+      "total_mb": 24576,
+      "free_mb": 24111,
+      "used_mb": 464
+    }
+  ],
+  "runs": [
+    {
+      "label": "LENDING_OFF",
+      "lending_enabled_env": false,
+      "vram_pre_load": {
+        "gpu0": {
+          "used_mb": 476,
+          "total_mb": 16303
+        },
+        "gpu1": {
+          "used_mb": 464,
+          "total_mb": 24576
+        }
+      },
+      "load_time_s": 28.95,
+      "pool_active": false,
+      "vram_post_load": {
+        "gpu0": {
+          "used_mb": 15054,
+          "total_mb": 16303
+        },
+        "gpu1": {
+          "used_mb": 20252,
+          "total_mb": 24576
+        }
+      },
+      "tok_s": 14.2,
+      "total_tokens": 160,
+      "elapsed_s": 11.27,
+      "vram_post_bench": {
+        "gpu0": {
+          "used_mb": 15096,
+          "total_mb": 16303
+        },
+        "gpu1": {
+          "used_mb": 20274,
+          "total_mb": 24576
+        }
+      },
+      "vram_delta_mb": {
+        "gpu0": 14620,
+        "gpu1": 19810
+      },
+      "status": "ok",
+      "elapsed_subprocess_s": 54.3,
+      "returncode": 0
+    },
+    {
+      "label": "LENDING_ON",
+      "lending_enabled_env": true,
+      "vram_pre_load": {
+        "gpu0": {
+          "used_mb": 476,
+          "total_mb": 16303
+        },
+        "gpu1": {
+          "used_mb": 464,
+          "total_mb": 24576
+        }
+      },
+      "load_time_s": 8.98,
+      "pool_active": true,
+      "pool_registered_gpus": [
+        {
+          "gpu_id": 0,
+          "device_name": "NVIDIA GeForce RTX 5070 Ti",
+          "lendable_bytes": 4033880372
+        },
+        {
+          "gpu_id": 1,
+          "device_name": "NVIDIA GeForce RTX 3090",
+          "lendable_bytes": 4144523674
+        }
+      ],
+      "vram_post_load": {
+        "gpu0": {
+          "used_mb": 13734,
+          "total_mb": 16303
+        },
+        "gpu1": {
+          "used_mb": 21572,
+          "total_mb": 24576
+        }
+      },
+      "tok_s": 13.72,
+      "total_tokens": 160,
+      "elapsed_s": 11.66,
+      "vram_post_bench": {
+        "gpu0": {
+          "used_mb": 13776,
+          "total_mb": 16303
+        },
+        "gpu1": {
+          "used_mb": 21596,
+          "total_mb": 24576
+        }
+      },
+      "vram_delta_mb": {
+        "gpu0": 13300,
+        "gpu1": 21132
+      },
+      "pool_stats": {
+        "total_leases_created": 0,
+        "total_leases_reclaimed": 0,
+        "total_bytes_lent": 0,
+        "total_bytes_reclaimed": 0,
+        "preemptions_graceful": 0,
+        "preemptions_forced": 0,
+        "reclaim_avg_ms": 0.0,
+        "peak_lent_bytes": 0,
+        "total_lendable_bytes": 8178404046,
+        "total_lendable_gb": 8.178404046,
+        "total_lent_bytes": 0,
+        "total_lent_gb": 0.0,
+        "total_borrowed_bytes": 0,
+        "gpu_count": 2,
+        "active_leases": 0,
+        "per_gpu": {
+          "0": {
+            "device": "NVIDIA GeForce RTX 5070 Ti",
+            "total_gb": 16.611278848,
+            "model_gb": 10.916270592,
+            "kv_cache_gb": 0.0,
+            "lent_gb": 0.0,
+            "borrowed_gb": 0.0,
+            "free_gb": 4.033880372,
+            "lendable_gb": 4.033880372,
+            "effective_capacity_gb": 16.611278848,
+            "utilization": 0.7571601555237465,
+            "pcie_gen": 5
+          },
+          "1": {
+            "device": "NVIDIA GeForce RTX 3090",
+            "total_gb": 25.298141184,
+            "model_gb": 18.623803392,
+            "kv_cache_gb": 0.0,
+            "lent_gb": 0.0,
+            "borrowed_gb": 0.0,
+            "free_gb": 4.144523674,
+            "lendable_gb": 4.144523674,
+            "effective_capacity_gb": 25.298141184,
+            "utilization": 0.8361727984733821,
+            "pcie_gen": 4
+          }
+        }
+      },
+      "status": "ok",
+      "elapsed_subprocess_s": 34.4,
+      "returncode": 0
+    }
+  ]
+}

@@ -569,6 +569,14 @@ class HuggingFaceBackend(BaseLLMBackend):
         to place more model layers on the best GPU (e.g. Blackwell 5070 Ti
         gets priority over Ampere 3090).
 
+        [V6.B] If a VRAMLendingPool reference and a model size estimate
+        have been injected by the pipeline, consults the pool first
+        (``suggest_placement_budget``). The pool's distribution carves
+        out a bigger runtime headroom and spills overflow to CPU when
+        the GPUs cannot collectively absorb the weights — preventing
+        the load-time OOM that the static 97 % formula triggers on
+        oversubscribed models (Qwen2.5-32B BF16 on 16 + 24 GB).
+
         Returns None if detection fails or only 1 GPU (let accelerate decide).
         """
         if not _HAS_TORCH or not _torch.cuda.is_available():
@@ -576,6 +584,30 @@ class HuggingFaceBackend(BaseLLMBackend):
         num_gpus = _torch.cuda.device_count()
         if num_gpus < 2:
             return None
+
+        # [V6.B] Pool-aware path: ask the pool to plan the distribution.
+        pool = getattr(self, 'lending_pool', None)
+        estimated = getattr(self, '_estimated_model_size_bytes', None)
+        if pool is not None and estimated is not None and estimated > 0:
+            try:
+                suggestion = pool.suggest_placement_budget(
+                    model_size_bytes=estimated,
+                    gpu_ids=list(range(num_gpus)),
+                )
+                if suggestion:
+                    self.log.info(
+                        "[V6.B] Lending-pool placement: model %.1f GB across "
+                        "%d GPUs → %s",
+                        estimated / (1024 ** 3),
+                        num_gpus,
+                        ", ".join(f"{k}={v}" for k, v in suggestion.items()),
+                    )
+                    return suggestion
+            except Exception as e:
+                self.log.debug(
+                    "Lending pool placement suggestion failed (%s), "
+                    "falling back to static formula", e,
+                )
 
         try:
             from core.hetero_config import auto_configure
