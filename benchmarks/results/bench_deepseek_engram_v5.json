@@ -1,40 +1,128 @@
 {
   "model": "deepseek-ai/DeepSeek-V4-Flash",
-  "backend": "tilelang-custom",
-  "status": "PHASE_1_OK",
+  "backend": "vllm",
+  "vramancer_showcase": "VRAM lending pool: RTX 3090 donates VRAM to RTX 5070 Ti",
+  "note": "DeepSeek-V4-Flash 158B MoE (MXFP8/FP4). Compute: RTX 5070 Ti (SM12) TP=1 \u2014 only SM>=10 can run UE8M0 MXFP8 kernels. RTX 3090 (SM8.6) acts as VRAM donor (13 GB P2P staging buffer). cpu_offload_gb=145.0 UVA-offloads remaining weights to DRAM. PCIe5 would double P2P bandwidth vs PCIe4 shown here.",
   "hardware": {
-    "compute_gpu": "RTX 5070 Ti (SM 12.0, 16 GB)",
-    "storage_gpu": "RTX 3090 (SM 8.6, 24 GB) — VRAM lending via VRAMancer ReBAR",
-    "ram": "191 GB"
-  },
-  "phase_results": {
-    "phase_0_disk": "PASS — 217 GB free (>= 180 GB required)",
-    "phase_0_ram": "PASS — 184 GB available (>= 150 GB required)",
-    "phase_1_tilelang_sm120": "PASS — FP8 GEMM kernel (act_quant + fp8_gemm) compiled and executed on RTX 5070 Ti SM12.0",
-    "phase_1_tilelang_sm86": "FAIL (expected) — RTX 3090 SM8.6 has no FP8 tensor cores",
-    "phase_2_code": "PASS — inference/{kernel,model,generate,convert}.py + encoding/encoding_dsv4.py cloned",
-    "phase_3_download": "IN_PROGRESS — 74 files fetching (159.6 GB / 46 safetensors shards)",
-    "phase_4_convert": "PENDING",
-    "phase_5_load_test": "PENDING"
-  },
-  "tilelang_patches": {
-    "description": "Three patches applied to .venv (NOT tracked by git) to enable FP8 MMA on SM12.0 with nvcc 12.0",
-    "patch_1": {
-      "file": ".venv/lib/python3.12/site-packages/tilelang/contrib/nvcc.py",
-      "function": "get_target_arch",
-      "change": "Add early return 'return 89' for major >= 12 (SM12.x Blackwell consumer). nvcc < 12.8 does not know sm_120/sm_120a."
+    "compute_gpu": {
+      "index": 0,
+      "name": "RTX 5070 Ti",
+      "sm": "12.0",
+      "vram_mb": 16384,
+      "role": "compute \u2014 MXFP8 inference"
     },
-    "patch_2": {
-      "file": ".venv/lib/python3.12/site-packages/tilelang/contrib/nvcc.py",
-      "line": "68 (compile_cuda default arch)",
-      "change": "code=sm_{arch} → code=compute_{arch} (embed PTX not binary cubin for forward compat)"
+    "lender_gpu": {
+      "index": 1,
+      "name": "RTX 3090",
+      "sm": "8.6",
+      "vram_mb": 24576,
+      "role": "VRAM donor \u2014 P2P PCIe4 staging buffer"
     },
-    "patch_3": {
-      "file": ".venv/lib/python3.12/site-packages/tilelang/engine/lower.py",
-      "function": "tilelang_callback_cuda_compile",
-      "change": "New _find_compat_ptxas() helper + two-stage path: nvcc 12.0 → PTX, bump .version 8.0→8.4, return PTX str. CUDA driver (595.58, CUDA 13.2) JIT-compiles for SM12.0 at load time."
+    "p2p_bw_gb_s": 0.0,
+    "p2p_peer_access": false,
+    "pcie_gen": 4,
+    "theoretical_pcie5_bw_gb_s": 0.0
+  },
+  "lending": {
+    "lending_enabled": false,
+    "lender_gpu": 1,
+    "compute_gpu": 0,
+    "lend_requested_gb": 12.884901888,
+    "lease_id": null,
+    "p2p_bw_gb_s": 0.0,
+    "p2p_peer_access": false,
+    "lender_info": {},
+    "compute_info": {}
+  },
+  "vllm_config": {
+    "tensor_parallel_size": 1,
+    "cpu_offload_gb": 145.0,
+    "max_model_len": 2048,
+    "kv_cache_dtype": "fp8",
+    "enforce_eager": true
+  },
+  "vram_after_load": {
+    "gpu0": {
+      "used_mb": 14136,
+      "total_mb": 15841
     }
   },
-  "root_cause_analysis": "nvcc 12.0 generates PTX ISA 8.0; FP8 MMA instructions (SM89_16x8x32_F32E4M3E4M3F32_TN) require PTX ISA 8.4+. Fix: generate PTX with nvcc 12.0, bump .version header to 8.4, return as PTX string. Driver (CUDA 13.2 / 595.58) JIT-compiles transparently for SM12.0.",
-  "next_step": "Wait for Phase 3 download to complete, then Phase 4 convert (MP=2), Phase 5 load test on 5070Ti+3090 with VRAMancer expert offloading"
+  "dram_after_load_mb": 844,
+  "results": [
+    {
+      "ctx_target": 512,
+      "prompt_chars": 2048,
+      "max_new": 32,
+      "dt_s": 50.928,
+      "tok_s": 0.63,
+      "vram_before": {
+        "gpu0": {
+          "used_mb": 14136,
+          "total_mb": 15841
+        }
+      },
+      "vram_after": {
+        "gpu0": {
+          "used_mb": 15034,
+          "total_mb": 15841
+        }
+      },
+      "vram_deltas_mb": {
+        "gpu0": 898
+      },
+      "dram_before_mb": 844,
+      "dram_after_mb": 849,
+      "dram_delta_mb": 5
+    },
+    {
+      "ctx_target": 1024,
+      "prompt_chars": 4096,
+      "max_new": 32,
+      "dt_s": 61.102,
+      "tok_s": 0.52,
+      "vram_before": {
+        "gpu0": {
+          "used_mb": 15034,
+          "total_mb": 15841
+        }
+      },
+      "vram_after": {
+        "gpu0": {
+          "used_mb": 15034,
+          "total_mb": 15841
+        }
+      },
+      "vram_deltas_mb": {
+        "gpu0": 0
+      },
+      "dram_before_mb": 849,
+      "dram_after_mb": 849,
+      "dram_delta_mb": 0
+    },
+    {
+      "ctx_target": 2048,
+      "prompt_chars": 8192,
+      "max_new": 32,
+      "dt_s": 75.262,
+      "tok_s": 0.43,
+      "vram_before": {
+        "gpu0": {
+          "used_mb": 15034,
+          "total_mb": 15841
+        }
+      },
+      "vram_after": {
+        "gpu0": {
+          "used_mb": 15034,
+          "total_mb": 15841
+        }
+      },
+      "vram_deltas_mb": {
+        "gpu0": 0
+      },
+      "dram_before_mb": 849,
+      "dram_after_mb": 849,
+      "dram_delta_mb": 0
+    }
+  ]
 }

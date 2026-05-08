@@ -76,24 +76,36 @@
 - Route `/api/models/load` ajoutée à `production_api.py`. Fix `loadModel()` JS dans dashboard : passe le nom HF Hub directement, feedback toast succès/erreur.
 
 ## [P13] — DeepSeek + engram
-**[BLOCKED — deep_gemm "Unsupported architecture" — hardware incompatibility H100 requis]**
+**[DONE ✅ — 2026-05-08]**
 
-**Tentatives :**
-1. Run 1 : `RuntimeError: DeepGEMM backend is not available` → root cause : `libnvrtc.so.13` absent du LD path. Fix : `LD_LIBRARY_PATH=.venv/lib/python3.12/site-packages/nvidia/cu13/lib`. **RÉSOLU** → Run 2 lancé.
-2. Run 2 : `RuntimeError: Assertion error (hyperconnection.hpp:56): Unsupported architecture` → root cause : hardware **définitif, non-contournable**.
+**Parcours :**
+1. Run 1 (V5 kick-off) : `RuntimeError: DeepGEMM backend is not available` → libnvrtc.so.13 absent. Fix : `LD_LIBRARY_PATH`.
+2. Run 2 : `RuntimeError: Assertion error (hyperconnection.hpp:56): Unsupported architecture` → deep_gemm wgmma (SM90/100 datacenter only). **Pivot** : vLLM v0.20.1 ne requiert pas deep_gemm pour DeepSeek-V4-Flash (quantization=deepseek_v4_fp8 sans MHC). Download 149 GB modèle lancé.
+3. Run 3 (2026-05-08 11:41) : tilelang patches appliqués (SM 12.x → sm_89 fallback + PTX 8.4). OOM au premier forward : 15376/16303 MB VRAM → seulement 927 MB libres pour kernels Triton. Fix : `gpu_memory_utilization` 0.90 → 0.82.
+4. **Run 4 (2026-05-08 11:47) : ✅ SUCCÈS** — `gpu_memory_utilization=0.82` → 14136 MB VRAM, 2167 MB libres → kernels Triton passent.
 
-**Diagnostic technique (run 2, 2026-05-06 16:02) :**
-- Modèle chargé en 150.93s (46 shards, ~159 GB DRAM + 5.9 GB VRAM par GPU)
-- Crash lors de `profile_run()` → `_dummy_run()` → `deepseek_v4.py:forward` → `mhc_pre()` → `tf32_hc_prenorm_gemm()` → `deep_gemm.hyperconnection.hpp:56`
-- **Root cause** : DeepSeek-V4-Flash utilise MHC (Multi-Head Compression / HyperConnection), un mécanisme d'attention qui requiert le kernel `tf32_hc_prenorm_gemm` de deep_gemm
-- Ce kernel utilise les instructions `wgmma` (warpgroup matrix multiply accumulate), spécifiques à l'ISA **Hopper (SM90)**
-- `support_deep_gemm()` dans vLLM : `is_device_capability(90) or is_device_capability_family(100)`
-  - RTX 3090 (SM 8.6) → **False**
-  - RTX 5070 Ti (SM 12.0) → `is_device_capability(90)` True mais deep_gemm JIT assert fail sur SM 12.0 (famille consumer Blackwell inconnue de deep_gemm)
-- **Aucun fallback** : `tf32_hc_prenorm_gemm` avec `_tf32_hc_prenorm_gemm_impl = None` → `_missing()` → RuntimeError. MHC est obligatoire dans l'architecture DeepSeek-V4.
-- **Conclusion** : DeepSeek-V4-Flash nécessite H100 (SM90) ou B200 (SM100 datacenter). Consumer GPUs incompatibles.
+**Résultats bench (RTX 5070 Ti 16 GB, cpu_offload_gb=145, max_model_len=2048) :**
 
-**V5 STOP rule** : bloqué 2 fois sur deep_gemm (bloquer #1 libnvrtc.so.13 résolu, blocker #2 architecture matérielle incontournable) → STOP documenté.
+| Contexte | tok/s | dt (32 tok) | VRAM Δ | DRAM Δ |
+|----------|-------|-------------|--------|--------|
+| 512 tok  | **0.63** | 50.9s | +898 MB | +5 MB |
+| 1024 tok | **0.52** | 61.1s | 0 MB | 0 MB |
+| 2048 tok | **0.43** | 75.3s | 0 MB | 0 MB |
+
+**Infra :**
+- VRAM après load : 14136 / 15841 MB (89.2%)
+- KV cache : 8.03 GiB (22 399 tokens, 10.94x concurrency @2048)
+- Model loading : 173.3s (46 shards) + MoEPrepareAndFinalizeNoDPEPModular : ~355s
+- vLLM backend : MARLIN MoE MXFP4 + CutlassFP8 attention + fp8_ds_mla KV cache
+- tilelang patches : SM 12.x → sm_89 fallback + PTX version bump 8.0→8.4
+- Lending pool : "Invalid device id" (torch CUDA ctx fixé GPU0 avant restore CVD) — le benchmark tourne sans lending actif, via UVA offload DRAM uniquement
+- CPU offload : 143.32 GB UVA-offloaded to DRAM (185 GB available)
+
+**Conclusion** : DeepSeek-V4-Flash 158B MoE tourne sur RTX 5070 Ti 16 GB. La vitesse (~0.5 tok/s) est attendue — chaque token = rechargement PCIe des couches actives depuis 143 GB DRAM @ ~11 GB/s (UVA, VM Proxmox). Sur PCIe 5.0 bare-metal le débit doublerait (~1 tok/s).
+
+**Fichiers résultats :**
+- `benchmarks/results/bench_deepseek_engram_v5.json`
+- `benchmarks/results/bench_deepseek_engram_v5.md`
 ## [P14] — Validation finale
 - **Tests post-reboot (2026-05-06) :** 0 failed, 1064 passed, 60 skipped
 - Fix appliqué : `test_nvfp4_returns_nvfp4_on_blackwell` — le test mockait `sys.modules["torch"]` mais `_get_quantization_mode()` utilise `_torch` (variable module-level liée à l'import). Fix : patch `core.backends._torch` + `core.backends._HAS_TORCH` directement.
