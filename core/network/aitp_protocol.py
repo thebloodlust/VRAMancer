@@ -71,7 +71,7 @@ def _init_aitp_metrics():
             "AITP send latency",
         )
     except Exception:
-        pass
+        logger.debug("AITP Prometheus metric registration failed", exc_info=True)
 
 
 def _get_cluster_secret() -> bytes:

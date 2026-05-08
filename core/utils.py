@@ -6,6 +6,8 @@ Utility helpers for GPU‑aware inference.
 from __future__ import annotations
 import logging
 
+_logger = logging.getLogger(__name__)
+
 import os, sys, re
 from typing import Iterable, Sequence, Optional, List, Dict, Any
 
@@ -313,7 +315,7 @@ def enumerate_devices() -> List[Dict[str, Any]]:
             cuda_devices.sort(key=lambda d: d.get('logical_index', d['index']))
             devices.extend(cuda_devices)
     except Exception:
-        pass
+        _logger.debug("CUDA device listing failed", exc_info=True)
     # Intel XPU
     try:
         if hasattr(torch, 'xpu') and torch.xpu.is_available():
@@ -328,7 +330,7 @@ def enumerate_devices() -> List[Dict[str, Any]]:
                     'vendor': 'intel',
                 })
     except Exception:
-        pass
+        _logger.debug("Intel XPU detection failed", exc_info=True)
     # Huawei NPU
     try:
         if hasattr(torch, 'npu') and torch.npu.is_available():
@@ -343,7 +345,7 @@ def enumerate_devices() -> List[Dict[str, Any]]:
                     'vendor': 'huawei',
                 })
     except Exception:
-        pass
+        _logger.debug("Huawei NPU detection failed", exc_info=True)
     # Google TPU
     try:
         import torch_xla.core.xla_model as xm
@@ -371,7 +373,7 @@ def enumerate_devices() -> List[Dict[str, Any]]:
                 'vendor': 'apple',
             })
     except Exception:
-        pass
+        _logger.debug("Apple/TPU device detection failed", exc_info=True)
     if not devices:  # CPU fallback explicite
         devices.append({
             'id': 'cpu:0',
@@ -408,7 +410,7 @@ def assign_block_to_device(block: torch.nn.Module, idx: int) -> torch.nn.Module:
         try:
             setattr(moved, 'device', device)
         except Exception:
-            pass
+            _logger.debug("setattr device failed", exc_info=True)
     return moved
 
 # ------------------------------------------------------------------

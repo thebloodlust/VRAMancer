@@ -174,7 +174,7 @@ def _get_free_vram_per_gpu(num_gpus: int) -> List[int]:
             pynvml.nvmlShutdown()
             return result
         except Exception:
-            pass
+            _logger.debug("pynvml free memory query failed", exc_info=True)
 
     # torch.cuda fallback
     if torch is not None and torch.cuda.is_available():
@@ -210,7 +210,7 @@ def _get_total_vram_per_gpu(num_gpus: int) -> List[int]:
             pynvml.nvmlShutdown()
             return result
         except Exception:
-            pass
+            _logger.debug("pynvml total memory query failed", exc_info=True)
 
     if torch is not None and torch.cuda.is_available():
         result = []

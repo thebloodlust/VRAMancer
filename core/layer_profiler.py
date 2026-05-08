@@ -413,7 +413,7 @@ class LayerProfiler:
                         expansion = child.out_features / H
                         break
             except Exception:
-                pass
+                _logger.debug("Expansion factor estimation failed", exc_info=True)
             return int(2 * B * S * H * H * expansion * 2)
 
         if layer_type in ("norm", "embedding"):

@@ -50,7 +50,7 @@ def _init_parity_metrics():
             "Parity reconstruction failures (>1 shard lost)",
         )
     except Exception:
-        pass
+        logger.debug("Parity memory metric registration failed", exc_info=True)
 
 
 class ParityKVManager:

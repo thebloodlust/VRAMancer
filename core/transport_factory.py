@@ -243,21 +243,21 @@ class TransportFactory:
             if _transfer_manager:
                 local_tm = _transfer_manager.stats()
         except Exception:
-            pass
+            log.debug("TransferManager stats collection failed", exc_info=True)
 
         net_caps = None
         try:
             if _fastpath_channel:
                 net_caps = _fastpath_channel.capabilities()
         except Exception:
-            pass
+            log.debug("Fastpath channel capabilities failed", exc_info=True)
 
         vtp_stats = None
         try:
             if _vtp_transport:
                 vtp_stats = _vtp_transport.stats()
         except Exception:
-            pass
+            log.debug("VTP transport stats failed", exc_info=True)
 
         return {
             "node_id": self._local_node_id,
@@ -291,7 +291,7 @@ def reset_transport_factory():
         try:
             _vtp_transport.close()
         except Exception:
-            pass
+            log.debug("VTP transport close failed", exc_info=True)
     _factory = None
     _transfer_manager = None
     _fastpath_channel = None

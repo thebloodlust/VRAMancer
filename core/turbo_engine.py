@@ -110,7 +110,7 @@ def _disable_cudnn_gqa():
         torch.backends.cuda.enable_math_sdp(True)
         _GQA_PATCHED = False
     except Exception:
-        pass
+        logger.debug("torch attention backend config failed", exc_info=True)
 
 
 class StaticKVCache:

@@ -151,7 +151,7 @@ def verify_request(secret: Optional[str], method: str, path: str,
                 if user_info and user_info.get("vram_credits", 0) > 0:
                     is_valid = True
             except Exception:
-                pass
+                _log.debug("Ledger token verify failed", exc_info=True)
                 
         # 3. Check if it's a JWT access token
         elif token.count('.') == 2:
@@ -161,7 +161,7 @@ def verify_request(secret: Optional[str], method: str, path: str,
                 if payload and "role" in payload:
                     is_valid = True
             except Exception:
-                pass
+                _log.debug("Access token decode failed", exc_info=True)
                 
         if not is_valid:
             return ("invalid token", 401)
@@ -366,7 +366,7 @@ def install_security(app):
             global _RATE_MAX
             _RATE_MAX = _rm
     except Exception:
-        pass
+        _log.debug("VRM_RATE_MAX parse failed", exc_info=True)
 
     @app.before_request
     def _guard():

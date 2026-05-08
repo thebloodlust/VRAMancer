@@ -58,7 +58,7 @@ def _detect_and_set_cuda_arch():
                     max_nvcc_arch = 86
                 break
     except Exception:
-        pass
+        _logger.debug("nvcc arch detection failed", exc_info=True)
 
     # Collect actual GPU architectures
     archs = set()

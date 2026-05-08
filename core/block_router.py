@@ -420,7 +420,7 @@ class BlockRouter:
                     os.makedirs(self._nvme_cache_path, exist_ok=True)
                     return True
             except Exception:
-                pass
+                _logger.debug("NVMe cache setup failed", exc_info=True)
 
         # Windows: use %TEMP%
         if os.name == "nt":
@@ -431,7 +431,7 @@ class BlockRouter:
                 self._nvme_cache_path = cache_dir
                 return True
             except Exception:
-                pass
+                _logger.debug("NVMe cache path setup failed", exc_info=True)
 
         return False
 

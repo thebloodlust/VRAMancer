@@ -61,7 +61,7 @@ def _init_spec_metrics():
             "Speculative decoding rounds",
         )
     except Exception:
-        pass
+        logger.debug("Speculative decoding metric registration failed", exc_info=True)
 
 
 # ── Draft model mapping ───────────────────────────────────────────────

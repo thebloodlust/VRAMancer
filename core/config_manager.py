@@ -7,11 +7,14 @@ Sources priority (highest first):
 """
 from __future__ import annotations
 
+import logging
 import os
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional
+
+_logger = logging.getLogger(__name__)
 
 
 def _yaml_load(path: Path) -> Dict[str, Any]:
@@ -34,7 +37,7 @@ def _resolve_yaml_path() -> Optional[Path]:
         if p:
             candidates.append(Path(p))
     except Exception:
-        pass
+        _logger.debug("Config path env lookup failed", exc_info=True)
     candidates.append(Path.cwd() / "config.yaml")
     for c in candidates:
         if c.is_file():

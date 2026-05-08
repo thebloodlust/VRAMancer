@@ -225,7 +225,7 @@ class LlamaBackend:
         try:
             del self.llm
         except Exception:
-            pass
+            log.debug("llama_cpp model cleanup failed", exc_info=True)
         gc.collect()
 
 

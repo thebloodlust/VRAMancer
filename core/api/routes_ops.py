@@ -319,7 +319,7 @@ def nodes_info():
                     'count': len(gpu_devs),
                 }
         except Exception:
-            pass
+            logger.debug("GPU info collection failed", exc_info=True)
         discovered = []
         try:
             if _registry_ref:
@@ -327,7 +327,7 @@ def nodes_info():
                 for hostname, info in nodes.items():
                     discovered.append({'hostname': hostname, **info})
         except Exception:
-            pass
+            logger.debug("Node discovery failed", exc_info=True)
         local_node = {
             'host': 'localhost',
             'name': f'VRAMancer-{platform.node()}',

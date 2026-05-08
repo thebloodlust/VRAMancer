@@ -179,4 +179,4 @@ class VLLMBackend:
             torch.cuda.empty_cache()
             gc.collect()
         except Exception:
-            pass
+            log.debug("vLLM model cleanup failed", exc_info=True)
