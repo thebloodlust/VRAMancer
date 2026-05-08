@@ -662,3 +662,160 @@ def test_to_hf_cache_phase3_handles_stage_failure(monkeypatch):
     # Output still produced (degraded path)
     assert pkv is not None
 
+
+# =============================================================================
+# V6.D Phase 4: write path routing (write_kv + from_hf_cache)
+# =============================================================================
+
+def test_write_kv_phase4_routes_borrowed_pages_to_lender(monkeypatch):
+    """V6.D Phase 4: write_kv routes writes to page.borrowed_tensor when
+    the page is borrowed AND VRM_KV_LEND_ATTENTION=1."""
+    pytest.importorskip("torch")
+    import torch
+    from core.paged_attention import PhysicalPage
+
+    monkeypatch.setenv("VRM_KV_LEND_ATTENTION", "1")
+
+    manager = _make_manager_with_pool(num_layers=2, num_kv_heads=4, page_size=8, head_dim=16)
+    # _gpu_pool stays zeros — the borrower-local backing
+    manager._gpu_pool = torch.zeros((3, 2, 2, 4, 8, 16))
+    manager._kv_compressor = None
+    manager._pending_compress = []
+
+    # borrowed_tensor on lender — also zeros, will receive the write
+    borrowed = torch.zeros((2, 2, 4, 8, 16))
+    manager._pages = [
+        PhysicalPage(
+            page_id=0, ref_count=1, allocated=True,
+            is_borrowed=True, lease_id="LW",
+            borrowed_tensor=borrowed,
+        ),
+    ]
+
+    # Write a sentinel key/value to (page=0, layer=1, slot=3)
+    key = torch.full((4, 16), 42.0)
+    val = torch.full((4, 16), -7.0)
+    manager.write_kv("req", layer_idx=1, page_id=0, slot=3, key=key, value=val)
+
+    # Borrowed tensor must now contain the sentinel at the right slot
+    assert torch.all(borrowed[1, 0, :, 3, :] == 42.0)
+    assert torch.all(borrowed[1, 1, :, 3, :] == -7.0)
+    # _gpu_pool must remain untouched (write was routed away)
+    assert torch.all(manager._gpu_pool == 0.0)
+
+
+def test_write_kv_phase4_disabled_by_default():
+    """Without VRM_KV_LEND_ATTENTION=1, borrowed pages still receive
+    writes in _gpu_pool (legacy behavior, data ends up on borrower)."""
+    pytest.importorskip("torch")
+    import torch
+    from core.paged_attention import PhysicalPage
+
+    os.environ.pop("VRM_KV_LEND_ATTENTION", None)
+
+    manager = _make_manager_with_pool(num_layers=1, num_kv_heads=2, page_size=4, head_dim=8)
+    manager._gpu_pool = torch.zeros((1, 1, 2, 2, 4, 8))
+    manager._kv_compressor = None
+    manager._pending_compress = []
+
+    borrowed = torch.zeros((1, 2, 2, 4, 8))
+    manager._pages = [
+        PhysicalPage(
+            page_id=0, ref_count=1, allocated=True,
+            is_borrowed=True, lease_id="LD",
+            borrowed_tensor=borrowed,
+        ),
+    ]
+
+    key = torch.full((2, 8), 9.0)
+    val = torch.full((2, 8), 11.0)
+    manager.write_kv("req", layer_idx=0, page_id=0, slot=2, key=key, value=val)
+
+    # Default-off: writes go to _gpu_pool, NOT to borrowed_tensor
+    assert torch.all(borrowed == 0.0)
+    assert torch.all(manager._gpu_pool[0, 0, 0, :, 2, :] == 9.0)
+    assert torch.all(manager._gpu_pool[0, 0, 1, :, 2, :] == 11.0)
+
+
+def test_write_kv_phase4_local_page_unaffected(monkeypatch):
+    """Local (not borrowed) pages always go to _gpu_pool, even with
+    VRM_KV_LEND_ATTENTION=1."""
+    pytest.importorskip("torch")
+    import torch
+    from core.paged_attention import PhysicalPage
+
+    monkeypatch.setenv("VRM_KV_LEND_ATTENTION", "1")
+
+    manager = _make_manager_with_pool(num_layers=1, num_kv_heads=2, page_size=4, head_dim=8)
+    manager._gpu_pool = torch.zeros((1, 1, 2, 2, 4, 8))
+    manager._kv_compressor = None
+    manager._pending_compress = []
+
+    manager._pages = [
+        PhysicalPage(page_id=0, ref_count=1, allocated=True, is_borrowed=False),
+    ]
+
+    key = torch.full((2, 8), 5.0)
+    val = torch.full((2, 8), 3.0)
+    manager.write_kv("req", layer_idx=0, page_id=0, slot=1, key=key, value=val)
+
+    assert torch.all(manager._gpu_pool[0, 0, 0, :, 1, :] == 5.0)
+    assert torch.all(manager._gpu_pool[0, 0, 1, :, 1, :] == 3.0)
+
+
+def test_phase4_write_phase3_read_round_trip(monkeypatch):
+    """End-to-end: write to a borrowed page (Phase 4), then read back
+    via to_hf_cache (Phase 3 staging). The bytes must round-trip
+    correctly through borrowed_tensor."""
+    pytest.importorskip("torch")
+    import torch
+    from core.paged_attention import PhysicalPage, PageTableEntry
+
+    monkeypatch.setenv("VRM_KV_LEND_ATTENTION", "1")
+
+    manager = _make_manager_with_pool(num_layers=1, num_kv_heads=2, page_size=4, head_dim=8)
+    manager._gpu_pool = torch.zeros((1, 1, 2, 2, 4, 8))
+    manager._kv_compressor = None
+    manager._pending_compress = []
+
+    borrowed = torch.zeros((1, 2, 2, 4, 8))
+    page = PhysicalPage(
+        page_id=0, ref_count=1, allocated=True,
+        is_borrowed=True, lease_id="LRT",
+        borrowed_tensor=borrowed,
+    )
+    manager._pages = [page]
+
+    # Phase 4 writes 4 tokens
+    for slot in range(4):
+        key = torch.full((2, 8), float(100 + slot))
+        val = torch.full((2, 8), float(200 + slot))
+        manager.write_kv("rt", layer_idx=0, page_id=0, slot=slot, key=key, value=val)
+
+    # Phase 3 read: lending pool stages back the borrowed_tensor
+    mock_lease = Mock(lease_id="LRT", owner_gpu=1)
+    manager._lending_leases["LRT"] = mock_lease
+    mock_pool = Mock()
+    # transfer_from_lease returns the same borrowed tensor (simulating a
+    # successful cross-GPU staging where data is preserved)
+    mock_pool.transfer_from_lease.return_value = borrowed
+    manager._lending_pool = mock_pool
+
+    manager._page_tables["rt"] = PageTableEntry(
+        request_id="rt", pages=[0], num_tokens=4,
+    )
+
+    pkv = manager.to_hf_cache("rt")
+
+    assert pkv is not None
+    k_out, v_out = pkv[0]
+    # Shape: [1, num_kv_heads, num_tokens, head_dim] = [1, 2, 4, 8]
+    assert k_out.shape == (1, 2, 4, 8)
+    # Each slot's value: keys 100..103, vals 200..203
+    for slot in range(4):
+        assert torch.all(k_out[0, :, slot, :] == 100 + slot)
+        assert torch.all(v_out[0, :, slot, :] == 200 + slot)
+
+    # Phase 3 counter incremented exactly once (one borrowed page staged)
+    assert manager._phase3_stages == 1
+

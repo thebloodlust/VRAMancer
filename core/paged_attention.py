@@ -578,8 +578,36 @@ class PagedKVCacheManager:
 
         If KV compression is enabled, also stores compressed
         forms in the sidecar for later attention_score() and offload.
+
+        V6.D Phase 4 (gated VRM_KV_LEND_ATTENTION=1): when the target
+        page is borrowed (lives on a lender GPU via VRAMLendingPool)
+        AND has a populated borrowed_tensor (Phase 2 allocation),
+        the write is routed to the lender-resident buffer instead
+        of self._gpu_pool. Cross-device assignment relies on PyTorch's
+        built-in P2P (or implicit host staging if P2P unsupported).
+        Without the env var, writes always go to self._gpu_pool —
+        for borrowed pages this means data lives on the borrower GPU
+        and Phase 3 staging will read stale/zero data from the lender.
         """
-        if self._gpu_pool is not None:
+        # V6.D Phase 4: route writes to borrowed_tensor on lender GPU
+        routed = False
+        if (
+            os.getenv("VRM_KV_LEND_ATTENTION", "0") == "1"
+            and 0 <= page_id < len(self._pages)
+        ):
+            page = self._pages[page_id]
+            if page.is_borrowed and page.borrowed_tensor is not None:
+                try:
+                    page.borrowed_tensor[layer_idx, 0, :, slot, :] = key
+                    page.borrowed_tensor[layer_idx, 1, :, slot, :] = value
+                    routed = True
+                except Exception:
+                    _logger.debug(
+                        "V6.D Phase 4: borrowed_tensor write failed page=%d slot=%d, falling back to _gpu_pool",
+                        page_id, slot, exc_info=True,
+                    )
+
+        if not routed and self._gpu_pool is not None:
             self._gpu_pool[page_id, layer_idx, 0, :, slot, :] = key
             self._gpu_pool[page_id, layer_idx, 1, :, slot, :] = value
 
@@ -735,6 +763,7 @@ class PagedKVCacheManager:
             entry.num_tokens = seq_len
 
         # Vectorized write: one scatter per page instead of per-token
+        phase4 = os.getenv("VRM_KV_LEND_ATTENTION", "0") == "1"
         for layer_idx in range(min(num_layers, self.config.num_layers)):
             if hasattr(past_key_values, 'key_cache'):
                 k = past_key_values.key_cache[layer_idx][0]  # [heads, seq, dim]
@@ -749,9 +778,26 @@ class PagedKVCacheManager:
                 if tok_start >= seq_len:
                     break
                 slot_end = tok_end - tok_start
-                # Write whole page slice at once: [heads, slot_end, dim]
-                self._gpu_pool[page_id, layer_idx, 0, :, :slot_end, :] = k[:, tok_start:tok_end, :]
-                self._gpu_pool[page_id, layer_idx, 1, :, :slot_end, :] = v[:, tok_start:tok_end, :]
+
+                # V6.D Phase 4: route page-slice writes to borrowed_tensor
+                routed = False
+                if phase4 and 0 <= page_id < len(self._pages):
+                    page = self._pages[page_id]
+                    if page.is_borrowed and page.borrowed_tensor is not None:
+                        try:
+                            page.borrowed_tensor[layer_idx, 0, :, :slot_end, :] = k[:, tok_start:tok_end, :]
+                            page.borrowed_tensor[layer_idx, 1, :, :slot_end, :] = v[:, tok_start:tok_end, :]
+                            routed = True
+                        except Exception:
+                            _logger.debug(
+                                "V6.D Phase 4: borrowed_tensor slice write failed page=%d, falling back",
+                                page_id, exc_info=True,
+                            )
+
+                if not routed:
+                    # Write whole page slice at once: [heads, slot_end, dim]
+                    self._gpu_pool[page_id, layer_idx, 0, :, :slot_end, :] = k[:, tok_start:tok_end, :]
+                    self._gpu_pool[page_id, layer_idx, 1, :, :slot_end, :] = v[:, tok_start:tok_end, :]
 
                 # Compression is DEFERRED — raw KV stays in gpu_pool.
                 # Compressed form is built lazily on first read
