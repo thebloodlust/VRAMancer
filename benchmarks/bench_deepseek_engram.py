@@ -282,10 +282,18 @@ def setup_lending_pool(compute_gpu: int, lender_gpu: int, lend_bytes: int) -> di
               f"({'peer-access' if can_peer else 'staged'})")
 
         # Build lending pool
+        # buffer_prealloc_ratio=0.0: do NOT eagerly pre-allocate the full
+        # lending buffer. With prealloc=1.0 (old default), the pool greedy-
+        # allocates ~14 GB on the 5070 Ti (GPU0) AND ~21 GB on the 3090 (GPU1)
+        # at register_gpu time — leaving only ~2 GB free on the 5070 Ti for
+        # vLLM, which OOMs at startup. Same lesson learned in V6.B for the
+        # InferencePipeline pool. The explicit allocate_on_lease() below
+        # falls back to direct torch.zeros() allocation, sized exactly to
+        # LEND_BYTES on the lender GPU only — clean and bounded.
         policy = LendingPolicy(
             min_free_ratio=0.10,        # keep 10% of 3090 VRAM free (2.4 GB)
             max_lend_ratio=0.70,        # lend up to 70% of free VRAM (~16 GB)
-            buffer_prealloc_ratio=1.0,  # pre-alloc full buffer immediately
+            buffer_prealloc_ratio=0.0,
         )
         pool = VRAMLendingPool(policy=policy)
 
@@ -319,24 +327,35 @@ def setup_lending_pool(compute_gpu: int, lender_gpu: int, lend_bytes: int) -> di
             preferred_lender=lender_gpu,
         )
         if lease is not None:
-            # Materialise the buffer on the 3090 — it's now resident in P2P-accessible VRAM
-            staging_tensor = pool.allocate_on_lease(
-                lease,
-                shape=(lend_bytes // 2,),
-                dtype=torch.float16,
-            )
+            # NOTE: we DO NOT materialise a persistent staging tensor on the
+            # 3090. Doing so caused vLLM's spawned EngineCore worker to elect
+            # the 3090 as its compute device (despite UUID-based CVD pointing
+            # to the 5070 Ti) — observed: cuda:0 in the worker reported 23.56
+            # GiB total instead of 15.47 GiB. The exact mechanism by which
+            # the parent's torch.cuda init "leaks" device preference into
+            # vLLM's worker is not pinned down (vLLM uses spawn, env should
+            # be clean). Working theory: pynvml/CUDA driver state cached
+            # per-PID-namespace, vLLM's V1 EngineCore uses NVML directly to
+            # probe init_snapshot (vllm/v1/worker/utils.py:413).
+            #
+            # The bench keeps the lease formally registered (so pool.stats()
+            # shows an active borrow) and the upfront P2P bandwidth probes
+            # remain valid — what we lose is only the resident buffer on the
+            # 3090, which vLLM never used anyway (cpu_offload_gb keeps
+            # weights pinned in DRAM, see V5 P13bis honest claims).
             metrics["lending_enabled"] = True
             metrics["lease_id"] = lease.lease_id
             metrics["lend_actual_gb"] = lease.size_bytes / 1e9
+            metrics["staging_materialized"] = False
             print(f"  [VRAMancer] Lending pool active: "
-                  f"{lease.size_bytes / 1e9:.1f} GB borrowed from GPU {lender_gpu} "
-                  f"(lease {lease.lease_id[:8]}…)")
-            print(f"  [VRAMancer] Staging buffer on 3090 VRAM @ P2P PCIe4 "
-                  f"({bw:.1f} GB/s). PCIe5 would yield ~{bw * 1.9:.0f} GB/s.")
-            # Keep pool + lease alive on the module so they don't get GC'd
+                  f"lease {lease.lease_id[:8]}… registered ({lease.size_bytes / 1e9:.1f} GB "
+                  f"reserved on GPU {lender_gpu}, no persistent allocation)")
+            print(f"  [VRAMancer] P2P bandwidth: {bw:.1f} GB/s "
+                  f"(PCIe5 would yield ~{bw * 1.9:.0f} GB/s)")
+            # Keep pool + lease alive on the module so they don't get GC'd.
             setup_lending_pool._pool = pool
             setup_lending_pool._lease = lease
-            setup_lending_pool._staging = staging_tensor
+            setup_lending_pool._staging = None  # intentionally unmaterialised
         else:
             print("  [VRAMancer] Lending borrow failed (no capacity?) — continuing without.")
 
@@ -384,12 +403,22 @@ def run_bench():
     lending_metrics = setup_lending_pool(COMPUTE_GPU_IDX, LENDER_GPU_IDX, LEND_BYTES)
 
     # Phase 1.3 — exercise the P2P data plane that a real prefetch would use.
-    staging_tensor = getattr(setup_lending_pool, "_staging", None)
-    if staging_tensor is not None:
-        print("  [VRAMancer] Validating lender→compute P2P data plane...")
-        p2p_perf = measure_lending_p2p_throughput(
-            staging_tensor, COMPUTE_GPU_IDX, size_mb=256
-        )
+    # We allocate a transient tensor on the lender, measure round-trip BW,
+    # then explicitly free everything before vLLM spawns. No persistent
+    # VRAM held by the parent past this point.
+    if lending_metrics.get("lending_enabled"):
+        print("  [VRAMancer] Validating lender→compute P2P data plane (transient)...")
+        try:
+            with torch.cuda.device(LENDER_GPU_IDX):
+                transient = torch.zeros(256 * 1024 * 1024 // 2, dtype=torch.float16,
+                                         device=f"cuda:{LENDER_GPU_IDX}")
+            p2p_perf = measure_lending_p2p_throughput(
+                transient, COMPUTE_GPU_IDX, size_mb=256
+            )
+            del transient
+            torch.cuda.empty_cache()
+        except Exception as e:
+            p2p_perf = {"ok": False, "error": str(e)[:200]}
         lending_metrics["p2p_data_plane"] = p2p_perf
         if p2p_perf.get("ok"):
             print(f"  [VRAMancer] Lender→Compute: "
@@ -419,16 +448,31 @@ def run_bench():
           f"(invisible to vLLM worker via CVD=0)")
 
     # CRITICAL: pin CUDA_VISIBLE_DEVICES to the compute GPU *before* pipeline.load()
-    # spawns the vLLM EngineCore subprocess. Without this restriction, vLLM's
-    # internal scheduler may elect the 3090 (NVML-order or FASTEST_FIRST heuristic)
-    # as the active device inside the worker — even with CUDA_DEVICE_ORDER=PCI_BUS_ID
-    # set in the parent env. Consequence: Triton compiles fp8 kernels for SM86
-    # (capability 86 < 89), fp8e4nv is not added to supported_fp8_dtypes → crash.
-    # The spawned worker is a fresh interpreter, so the parent's pre-existing
-    # cuda init (from the lending setup above) does not leak across.
+    # spawns the vLLM EngineCore subprocess.
+    #
+    # We use the GPU's UUID (not its index) because integer indices are
+    # interpreted relative to whatever device order CUDA chooses at the
+    # moment of CVD parsing — and CUDA_DEVICE_ORDER=PCI_BUS_ID does NOT
+    # always propagate cleanly into the spawned vLLM EngineCore worker
+    # (observed: the worker still saw cuda:0 = 3090 even though parent's
+    # PCI_BUS_ID order put the 5070 Ti at cuda:0). UUID-based CVD removes
+    # the ambiguity entirely — there is exactly one GPU with that UUID.
     _orig_cvd = os.environ.get("CUDA_VISIBLE_DEVICES")
-    os.environ["CUDA_VISIBLE_DEVICES"] = str(COMPUTE_GPU_IDX)
-    print(f"  [GPU pin] CUDA_VISIBLE_DEVICES={COMPUTE_GPU_IDX} for vLLM worker spawn")
+    _compute_uuid = None
+    try:
+        pynvml = _nvml()
+        if pynvml is not None:
+            h = pynvml.nvmlDeviceGetHandleByIndex(COMPUTE_GPU_IDX)
+            uuid_raw = pynvml.nvmlDeviceGetUUID(h)
+            _compute_uuid = uuid_raw.decode() if isinstance(uuid_raw, bytes) else uuid_raw
+    except Exception:
+        _compute_uuid = None
+    if _compute_uuid:
+        os.environ["CUDA_VISIBLE_DEVICES"] = _compute_uuid
+        print(f"  [GPU pin] CUDA_VISIBLE_DEVICES={_compute_uuid} (compute GPU UUID)")
+    else:
+        os.environ["CUDA_VISIBLE_DEVICES"] = str(COMPUTE_GPU_IDX)
+        print(f"  [GPU pin] CUDA_VISIBLE_DEVICES={COMPUTE_GPU_IDX} (UUID lookup failed, fallback to index)")
 
     try:
         pipeline = InferencePipeline(
