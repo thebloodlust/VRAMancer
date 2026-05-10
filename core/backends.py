@@ -310,9 +310,33 @@ def _compute_vllm_config(num_gpus: int) -> dict:
         from core.hetero_config import auto_configure
         config = auto_configure(strategy="balanced")
         if config.gpus:
-            # When TP=1, use only the GPU with the most VRAM
+            # When TP=1, default to the GPU with the most VRAM. Caller can
+            # override via VRM_VLLM_TARGET_GPU=<index> when they need to pin
+            # to a specific GPU for compute-capability or quant-kernel reasons
+            # (e.g. V6.D bench: pin to Blackwell sm_120 even if it has less
+            # VRAM than an Ampere donor).
             if result["tensor_parallel_size"] == 1 and len(config.gpus) >= 2:
-                best_gpu = max(config.gpus, key=lambda g: g.total_vram_gb)
+                _override = os.environ.get("VRM_VLLM_TARGET_GPU", "").strip()
+                if _override.isdigit():
+                    target_idx = int(_override)
+                    matched = next(
+                        (g for g in config.gpus if g.index == target_idx),
+                        None,
+                    )
+                    if matched is not None:
+                        best_gpu = matched
+                        logger.info(
+                            f"vLLM TP=1 target overridden by VRM_VLLM_TARGET_GPU"
+                            f" → GPU {best_gpu.index} ({best_gpu.name})"
+                        )
+                    else:
+                        best_gpu = max(config.gpus, key=lambda g: g.total_vram_gb)
+                        logger.warning(
+                            f"VRM_VLLM_TARGET_GPU={_override} did not match any "
+                            f"configured GPU index; falling back to largest VRAM"
+                        )
+                else:
+                    best_gpu = max(config.gpus, key=lambda g: g.total_vram_gb)
                 result["target_gpu"] = best_gpu.index
                 vram_gb = best_gpu.total_vram_gb
                 logger.info(
