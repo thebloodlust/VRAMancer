@@ -1,128 +1,40 @@
 {
   "model": "deepseek-ai/DeepSeek-V4-Flash",
   "backend": "vllm",
-  "vramancer_showcase": "VRAM lending pool: RTX 3090 donates VRAM to RTX 5070 Ti",
-  "note": "DeepSeek-V4-Flash 158B MoE (MXFP8/FP4). Compute: RTX 5070 Ti (SM12) TP=1 \u2014 only SM>=10 can run UE8M0 MXFP8 kernels. RTX 3090 (SM8.6) acts as VRAM donor (13 GB P2P staging buffer). cpu_offload_gb=145.0 UVA-offloads remaining weights to DRAM. PCIe5 would double P2P bandwidth vs PCIe4 shown here.",
-  "hardware": {
-    "compute_gpu": {
-      "index": 0,
-      "name": "RTX 5070 Ti",
-      "sm": "12.0",
-      "vram_mb": 16384,
-      "role": "compute \u2014 MXFP8 inference"
-    },
-    "lender_gpu": {
-      "index": 1,
-      "name": "RTX 3090",
-      "sm": "8.6",
-      "vram_mb": 24576,
-      "role": "VRAM donor \u2014 P2P PCIe4 staging buffer"
-    },
-    "p2p_bw_gb_s": 0.0,
-    "p2p_peer_access": false,
-    "pcie_gen": 4,
-    "theoretical_pcie5_bw_gb_s": 0.0
-  },
+  "note": "FAILED \u2014 vLLM load error",
+  "error": "Engine core initialization failed. See root cause above. Failed core proc(s): {}",
+  "log_path": "benchmarks/results/bench_deepseek_engram_vllm.log",
+  "log_tail": "r/VRAMancer/.venv/lib/python3.12/site-packages/torch/nn/modules/module.py\", line 1790, in _call_impl\n(EngineCore pid=3722572)     return forward_call(*args, **kwargs)\n(EngineCore pid=3722572)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n(EngineCore pid=3722572)   File \"/home/jeremie/VRAMancer/VRAMancer/.venv/lib/python3.12/site-packages/vllm/model_executor/models/deepseek_v4.py\", line 1209, in forward\n(EngineCore pid=3722572)     x = self.attn(positions, x, None)\n(EngineCore pid=3722572)         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n(EngineCore pid=3722572)   File \"/home/jeremie/VRAMancer/VRAMancer/.venv/lib/python3.12/site-packages/torch/nn/modules/module.py\", line 1779, in _wrapped_call_impl\n(EngineCore pid=3722572)     return self._call_impl(*args, **kwargs)\n(EngineCore pid=3722572)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n(EngineCore pid=3722572)   File \"/home/jeremie/VRAMancer/VRAMancer/.venv/lib/python3.12/site-packages/torch/nn/modules/module.py\", line 1790, in _call_impl\n(EngineCore pid=3722572)     return forward_call(*args, **kwargs)\n(EngineCore pid=3722572)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n(EngineCore pid=3722572)   File \"/home/jeremie/VRAMancer/VRAMancer/.venv/lib/python3.12/site-packages/vllm/model_executor/models/deepseek_v4.py\", line 1089, in forward\n(EngineCore pid=3722572)     return self.mla_attn(positions, hidden_states, llama_4_scaling)\n(EngineCore pid=3722572)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n(EngineCore pid=3722572)   File \"/home/jeremie/VRAMancer/VRAMancer/.venv/lib/python3.12/site-packages/torch/nn/modules/module.py\", line 1779, in _wrapped_call_impl\n(EngineCore pid=3722572)     return self._call_impl(*args, **kwargs)\n(EngineCore pid=3722572)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n(EngineCore pid=3722572)   File \"/home/jeremie/VRAMancer/VRAMancer/.venv/lib/python3.12/site-packages/torch/nn/modules/module.py\", line 1790, in _call_impl\n(EngineCore pid=3722572)     return forward_call(*args, **kwargs)\n(EngineCore pid=3722572)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n(EngineCore pid=3722572)   File \"/home/jeremie/VRAMancer/VRAMancer/.venv/lib/python3.12/site-packages/vllm/model_executor/layers/deepseek_v4_attention.py\", line 312, in forward\n(EngineCore pid=3722572)     o_fp8, o_scale = fused_inv_rope_fp8_quant(\n(EngineCore pid=3722572)                      ^^^^^^^^^^^^^^^^^^^^^^^^^\n(EngineCore pid=3722572)   File \"/home/jeremie/VRAMancer/VRAMancer/.venv/lib/python3.12/site-packages/vllm/v1/attention/ops/deepseek_v4_ops/fused_inv_rope_fp8_quant.py\", line 193, in fused_inv_rope_fp8_quant\n(EngineCore pid=3722572)     fp8_buf, scale_buf = torch.ops.vllm.fused_inv_rope_fp8_quant_kernel(\n(EngineCore pid=3722572)                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n(EngineCore pid=3722572)   File \"/home/jeremie/VRAMancer/VRAMancer/.venv/lib/python3.12/site-packages/torch/_ops.py\", line 1269, in __call__\n(EngineCore pid=3722572)     return self._op(*args, **kwargs)\n(EngineCore pid=3722572)            ^^^^^^^^^^^^^^^^^^^^^^^^^\n(EngineCore pid=3722572)   File \"/home/jeremie/VRAMancer/VRAMancer/.venv/lib/python3.12/site-packages/vllm/v1/attention/ops/deepseek_v4_ops/fused_inv_rope_fp8_quant.py\", line 245, in _fused_inv_rope_fp8_quant_kernel_impl\n(EngineCore pid=3722572)     _fused_inv_rope_fp8_quant_per_head[grid](\n(EngineCore pid=3722572)   File \"/home/jeremie/VRAMancer/VRAMancer/.venv/lib/python3.12/site-packages/triton/runtime/jit.py\", line 370, in <lambda>\n(EngineCore pid=3722572)     return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)\n(EngineCore pid=3722572)                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n(EngineCore pid=3722572)   File \"/home/jeremie/VRAMancer/VRAMancer/.venv/lib/python3.12/site-packages/triton/runtime/jit.py\", line 739, in run\n(EngineCore pid=3722572)     kernel = self._do_compile(key, signature, device, constexprs, options, attrs, warmup)\n(EngineCore pid=3722572)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n(EngineCore pid=3722572)   File \"/home/jeremie/VRAMancer/VRAMancer/.venv/lib/python3.12/site-packages/triton/runtime/jit.py\", line 884, in _do_compile\n(EngineCore pid=3722572)     kernel = self.compile(src, target=target, options=options.__dict__)\n(EngineCore pid=3722572)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n(EngineCore pid=3722572)   File \"/home/jeremie/VRAMancer/VRAMancer/.venv/lib/python3.12/site-packages/triton/compiler/compiler.py\", line 307, in compile\n(EngineCore pid=3722572)     module = src.make_ir(target, options, codegen_fns, module_map, context)\n(EngineCore pid=3722572)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n(EngineCore pid=3722572)   File \"/home/jeremie/VRAMancer/VRAMancer/.venv/lib/python3.12/site-packages/triton/compiler/compiler.py\", line 80, in make_ir\n(EngineCore pid=3722572)     return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns,\n(EngineCore pid=3722572)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n(EngineCore pid=3722572) triton.compiler.errors.CompilationError: at 1:0:\n(EngineCore pid=3722572) def _fused_inv_rope_fp8_quant_per_head(\n(EngineCore pid=3722572) ^\n(EngineCore pid=3722572) ValueError(\"type fp8e4nv not supported in this architecture. The supported fp8 dtypes are ('fp8e4b15', 'fp8e5')\")\n[rank0]:[W510 01:02:37.708152536 ProcessGroupNCCL.cpp:1575] Warning: WARNING: destroy_process_group() was not called before program exit, which can leak resources. For more info, please see https://pytorch.org/docs/stable/distributed.html#shutdown (function operator())\n[05/10/26 01:03:00] ERROR    Model load failed: Engine core initialization      \n                             failed. See root cause above. Failed core proc(s): \n                             {}                                                 \n",
   "lending": {
-    "lending_enabled": false,
+    "lending_enabled": true,
     "lender_gpu": 1,
     "compute_gpu": 0,
     "lend_requested_gb": 12.884901888,
-    "lease_id": null,
-    "p2p_bw_gb_s": 0.0,
+    "lease_id": "4a487d9c2dc8",
+    "p2p_bw_gb_s": 11.63,
     "p2p_peer_access": false,
-    "lender_info": {},
-    "compute_info": {}
-  },
-  "vllm_config": {
-    "tensor_parallel_size": 1,
-    "cpu_offload_gb": 145.0,
-    "max_model_len": 2048,
-    "kv_cache_dtype": "fp8",
-    "enforce_eager": true
-  },
-  "vram_after_load": {
-    "gpu0": {
-      "used_mb": 14136,
-      "total_mb": 15841
-    }
-  },
-  "dram_after_load_mb": 844,
-  "results": [
-    {
-      "ctx_target": 512,
-      "prompt_chars": 2048,
-      "max_new": 32,
-      "dt_s": 50.928,
-      "tok_s": 0.63,
-      "vram_before": {
-        "gpu0": {
-          "used_mb": 14136,
-          "total_mb": 15841
-        }
-      },
-      "vram_after": {
-        "gpu0": {
-          "used_mb": 15034,
-          "total_mb": 15841
-        }
-      },
-      "vram_deltas_mb": {
-        "gpu0": 898
-      },
-      "dram_before_mb": 844,
-      "dram_after_mb": 849,
-      "dram_delta_mb": 5
+    "lender_info": {
+      "name": "NVIDIA GeForce RTX 3090",
+      "sm": "8.6",
+      "total_mb": 24576,
+      "free_mb": 24111,
+      "used_mb": 464
     },
-    {
-      "ctx_target": 1024,
-      "prompt_chars": 4096,
-      "max_new": 32,
-      "dt_s": 61.102,
-      "tok_s": 0.52,
-      "vram_before": {
-        "gpu0": {
-          "used_mb": 15034,
-          "total_mb": 15841
-        }
-      },
-      "vram_after": {
-        "gpu0": {
-          "used_mb": 15034,
-          "total_mb": 15841
-        }
-      },
-      "vram_deltas_mb": {
-        "gpu0": 0
-      },
-      "dram_before_mb": 849,
-      "dram_after_mb": 849,
-      "dram_delta_mb": 0
+    "compute_info": {
+      "name": "NVIDIA GeForce RTX 5070 Ti",
+      "sm": "12.0",
+      "total_mb": 16303,
+      "free_mb": 15826,
+      "used_mb": 476
     },
-    {
-      "ctx_target": 2048,
-      "prompt_chars": 8192,
-      "max_new": 32,
-      "dt_s": 75.262,
-      "tok_s": 0.43,
-      "vram_before": {
-        "gpu0": {
-          "used_mb": 15034,
-          "total_mb": 15841
-        }
-      },
-      "vram_after": {
-        "gpu0": {
-          "used_mb": 15034,
-          "total_mb": 15841
-        }
-      },
-      "vram_deltas_mb": {
-        "gpu0": 0
-      },
-      "dram_before_mb": 849,
-      "dram_after_mb": 849,
-      "dram_delta_mb": 0
+    "lend_actual_gb": 12.884901888,
+    "staging_materialized": false,
+    "p2p_data_plane": {
+      "lender_to_compute_gb_s": 11.68,
+      "compute_to_lender_gb_s": 11.75,
+      "iterations": 10,
+      "size_mb": 256,
+      "ok": true
     }
-  ]
+  }
 }

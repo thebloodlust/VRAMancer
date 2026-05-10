@@ -474,6 +474,21 @@ def run_bench():
         os.environ["CUDA_VISIBLE_DEVICES"] = str(COMPUTE_GPU_IDX)
         print(f"  [GPU pin] CUDA_VISIBLE_DEVICES={COMPUTE_GPU_IDX} (UUID lookup failed, fallback to index)")
 
+    # Capture vLLM EngineCore stdout+stderr at the fd level so the spawned
+    # worker subprocess inherits the redirection (Python-level sys.stderr
+    # patching does NOT propagate across multiprocessing.spawn).
+    log_path = OUT_JSON.parent / "bench_deepseek_engram_vllm.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_fd = os.open(str(log_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+    sys.stdout.flush(); sys.stderr.flush()
+    saved_stdout_fd = os.dup(1)
+    saved_stderr_fd = os.dup(2)
+    os.dup2(log_fd, 1)
+    os.dup2(log_fd, 2)
+    os.close(log_fd)
+    print(f"  [vLLM stdio captured to {log_path}]", file=os.fdopen(saved_stderr_fd, "w", closefd=False))
+
+    load_exc: Exception | None = None
     try:
         pipeline = InferencePipeline(
             backend_name="vllm", enable_metrics=False, enable_discovery=False
@@ -489,23 +504,44 @@ def run_bench():
             enforce_eager=True,
         )
     except Exception as e:
-        msg = str(e)
+        load_exc = e
+    finally:
+        sys.stdout.flush(); sys.stderr.flush()
+        os.dup2(saved_stdout_fd, 1)
+        os.dup2(saved_stderr_fd, 2)
+        os.close(saved_stdout_fd)
+        os.close(saved_stderr_fd)
+        if _orig_cvd is None:
+            os.environ.pop("CUDA_VISIBLE_DEVICES", None)
+        else:
+            os.environ["CUDA_VISIBLE_DEVICES"] = _orig_cvd
+        print(f"  [GPU pin] CUDA_VISIBLE_DEVICES restored for main process")
+
+    if load_exc is not None:
+        msg = str(load_exc)
+        log_tail = ""
+        try:
+            with open(log_path, "rb") as fh:
+                fh.seek(0, 2)
+                size = fh.tell()
+                fh.seek(max(0, size - 8000))
+                log_tail = fh.read().decode("utf-8", errors="replace")
+        except Exception:
+            pass
         print(f"[FAILED@P13 — model load failed: {msg[:400]}]")
+        print(f"[log tail from {log_path}:]")
+        print(log_tail[-4000:])
         OUT_JSON.parent.mkdir(parents=True, exist_ok=True)
         OUT_JSON.write_text(json.dumps({
             "model": HF_MODEL_ID,
             "backend": "vllm",
             "note": "FAILED — vLLM load error",
             "error": msg[:800],
+            "log_path": str(log_path),
+            "log_tail": log_tail[-6000:],
             "lending": lending_metrics,
         }, indent=2))
         return
-    finally:
-        if _orig_cvd is None:
-            os.environ.pop("CUDA_VISIBLE_DEVICES", None)
-        else:
-            os.environ["CUDA_VISIBLE_DEVICES"] = _orig_cvd
-        print(f"  [GPU pin] CUDA_VISIBLE_DEVICES restored for main process")
 
     vram_loaded = measure_vram_per_gpu()
     dram_loaded = measure_dram_used()
