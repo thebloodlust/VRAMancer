@@ -49,13 +49,37 @@ mod cuda_ffi {
 
     type CUresult = i32;
 
-    static CUDA_LIB: OnceLock<libloading::Library> = OnceLock::new();
+    static CUDA_LIB: OnceLock<Option<libloading::Library>> = OnceLock::new();
+
+    /// Try to load libcuda.so.1 (Linux) / nvcuda.dll (Windows).
+    /// Returns None when CUDA is unavailable, instead of panicking.
+    fn try_lib() -> Option<&'static libloading::Library> {
+        CUDA_LIB
+            .get_or_init(|| unsafe {
+                #[cfg(unix)]
+                let names = ["libcuda.so.1", "libcuda.so"];
+                #[cfg(windows)]
+                let names = ["nvcuda.dll"];
+                for n in names.iter() {
+                    if let Ok(l) = libloading::Library::new(n) {
+                        return Some(l);
+                    }
+                }
+                None
+            })
+            .as_ref()
+    }
 
     fn lib() -> &'static libloading::Library {
-        CUDA_LIB.get_or_init(|| unsafe {
-            libloading::Library::new("libcuda.so.1")
-                .expect("Cannot load libcuda.so.1")
-        })
+        try_lib().expect(
+            "libcuda not loadable — cuda feature requested but no driver found. \
+             Use cuda_available() before calling CUDA APIs.",
+        )
+    }
+
+    /// True if libcuda.so.1 / nvcuda.dll is loadable on the current system.
+    pub fn cuda_available() -> bool {
+        try_lib().is_some()
     }
 
     /// cuInit(0) — initialize CUDA driver. Safe to call multiple times.
@@ -2051,7 +2075,19 @@ fn vramancer_rust(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(batch_tokenize_fast, m)?)?;
     m.add_function(wrap_pyfunction!(tokenize_fast, m)?)?;
     m.add_function(wrap_pyfunction!(tokenizer_vocab_size, m)?)?;
+    m.add_function(wrap_pyfunction!(cuda_available, m)?)?;
     Ok(())
+}
+
+/// Returns True iff libcuda.so.1 / nvcuda.dll is loadable on this host.
+/// Always available; returns False when the crate was built without
+/// the `cuda` feature.
+#[pyfunction]
+fn cuda_available() -> bool {
+    #[cfg(feature = "cuda")]
+    { cuda_ffi::cuda_available() }
+    #[cfg(not(feature = "cuda"))]
+    { false }
 }
 
 /// Injecte un buffer CPU directement dans la VRAM via cuMemcpyHtoD (GIL released)

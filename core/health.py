@@ -126,9 +126,9 @@ def gpu_detailed_health() -> Dict[str, Any]:
                     logging.debug(f"Failed to get NVML handle for GPU {i}", exc_info=True)
             return handles
 
-        result = _call_with_timeout(_init_nvml_handles)
-        if result is not None:
-            nvml_handles = result
+        nvml_result = _call_with_timeout(_init_nvml_handles)
+        if nvml_result is not None:
+            nvml_handles = nvml_result
     except ImportError:
         pass
 

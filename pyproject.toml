@@ -85,6 +85,7 @@ version = {attr = "core.__version__"}
 
 [tool.setuptools.packages.find]
 include = ["core*", "vramancer*", "dashboard*"]
+exclude = ["_deprecated*", "tests*", "benchmarks*", "rust_core*", "csrc*", "docs*"]
 
 [project.urls]
 Homepage = "https://github.com/thebloodlust/VRAMancer"

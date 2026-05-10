@@ -369,6 +369,11 @@ def install_security(app):
         _log.debug("VRM_RATE_MAX parse failed", exc_info=True)
 
     @app.before_request
+    def _audit_start():
+        from flask import g
+        g._vrm_audit_start = time.time()
+
+    @app.before_request
     def _guard():
         from flask import request
 
@@ -422,6 +427,45 @@ def install_security(app):
         live_secret = os.environ.get("VRM_API_TOKEN", initial_secret)
         _maybe_rotate(live_secret)
         return {"ok": True, "rotated": True}
+
+    @app.after_request
+    def _audit_record(resp):
+        """Write one audit_log row per request (best-effort, never raises)."""
+        try:
+            from core.security.audit_log import get_audit_log
+            al = get_audit_log()
+            if al is None:
+                return resp
+            from flask import g, request as _req
+            start = getattr(g, "_vrm_audit_start", None)
+            latency_ms = (time.time() - start) * 1000.0 if start else None
+            tok = _req.headers.get("X-API-TOKEN") or ""
+            authz = _req.headers.get("Authorization") or ""
+            if not tok and authz.startswith("Bearer "):
+                tok = authz[7:]
+            status = resp.status_code
+            if status < 400:
+                result, reason = "allow", None
+            else:
+                result = "deny"
+                reason = resp.get_data(as_text=True)[:200] if status < 500 else "server_error"
+            live_secret = os.environ.get("VRM_API_TOKEN", initial_secret)
+            role = _resolve_role(_req, live_secret) if tok else "anon"
+            al.record(
+                method=_req.method,
+                path=_req.path,
+                status=status,
+                ip=_req.remote_addr,
+                user_agent=_req.headers.get("User-Agent"),
+                token=tok or None,
+                role=role,
+                result=result,
+                reason=reason,
+                latency_ms=latency_ms,
+            )
+        except Exception:
+            logger.debug("audit_log after_request failed", exc_info=True)
+        return resp
 
     @app.after_request
     def _cors_headers(resp):

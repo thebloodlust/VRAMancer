@@ -953,6 +953,19 @@ class HuggingFaceBackend(BaseLLMBackend):
         int8: ~1.0 bytes/param (LLM.int8() via BnB), CC >= 7.5.
         """
         quant = os.environ.get("VRM_QUANTIZATION", "").lower()
+        if quant == "auto":
+            try:
+                from core.auto_detect import recommend_quantization
+                reco = recommend_quantization()
+                # Map reco -> supported BnB/torchao modes (drop bf16/gguf).
+                quant = reco if reco in ("nvfp4", "nf4", "int8") else ""
+                if quant:
+                    self.log.info(
+                        "VRM_QUANTIZATION=auto resolved to %s via auto_detect", quant
+                    )
+            except Exception as exc:  # pragma: no cover - defensive
+                self.log.debug("auto-detect failed: %s", exc)
+                quant = ""
         if quant not in ("nvfp4", "nf4", "int8"):
             return ""
         if not _HAS_TORCH or not _torch.cuda.is_available():

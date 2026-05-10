@@ -1,24 +1,28 @@
 """Cross-Vendor GPU Bridge — AMD (ROCm) ↔ NVIDIA (CUDA) high-performance transfers.
 
-Enables cache sharing between heterogeneous GPU vendors (e.g. AMD RX 7900 XTX
-tier-1 cache → NVIDIA RTX 4090 tier-0 primary) using the fastest available
-transport, bypassing or minimizing CPU involvement.
+Enables cache sharing between heterogeneous GPU vendors using the fastest
+available transport. **Honest status (2026-05): only PipelinedTransport (Strategy 2)
+is fully production-tested. Strategies 0 and 1 are partially implemented — see
+notes below.**
 
-Transfer strategies (ordered by performance):
+Transfer strategies (ordered by *theoretical* performance):
 
-  Strategy 0: DMA-BUF Zero-Copy (Linux ≥5.12, best case)
-    - Export GPU buffer as DMA-BUF fd via DRM ioctl (nvidia-drm / amdgpu)
-    - Import fd on the other GPU's driver
-    - Kernel handles cross-device PCIe DMA — true zero-copy, no CPU data path
-    - Throughput: raw PCIe bandwidth (~32 GB/s PCIe 4.0 x16)
-    - Requires: /dev/dri/renderD* access, both DRM drivers loaded
+  Strategy 0: DMA-BUF (Linux ≥5.12) — **PARTIAL / EXPERIMENTAL**
+    - csrc/dmabuf_bridge.c implements drmPrimeHandleToFD/FDToHandle + probe.
+    - The destination-side mmap write is NOT implemented (see
+      csrc/dmabuf_bridge.c header). The actual transfer falls back to CUDA
+      IPC + pinned staging, NOT a true zero-copy DRM path.
+    - The "zero-copy" name is preserved in the API for forward-compat once
+      the kernel write path is finished. Today it does not deliver zero-copy.
+    - Requires: /dev/dri/renderD* access, both DRM drivers loaded.
 
-  Strategy 1: ReBAR Accelerated Mapping
-    - With Resizable BAR enabled, full VRAM is exposed as a PCIe BAR
-    - mmap the target GPU's VRAM BAR, DMA directly from source GPU
-    - No user-space buffer copy — kernel page-fault handler does PCIe reads
-    - Throughput: ~80% of raw PCIe (~26 GB/s PCIe 4.0 x16)
-    - Requires: ReBAR/SAM enabled in BIOS + driver support
+  Strategy 1: ReBAR Accelerated Mapping — **DETECTION ONLY**
+    - With Resizable BAR enabled, full VRAM exposed as a PCIe BAR.
+    - csrc/rebar_mmap.c does sysfs detection + BAR0 mmap, but the actual
+      cross-GPU transfer logic is not wired (see file header).
+    - The Python TransferManager Strategy 1.7 ("REBAR_PIPELINE") attempts to
+      use this; succeeds in detection, falls back to Strategy 2 in practice.
+    - Requires: ReBAR/SAM enabled in BIOS + driver support.
 
   Strategy 2: Async Double-Buffered Pipeline (always available, recommended)
     - Two pinned memory buffers used in alternating pattern
@@ -829,15 +833,17 @@ class DMABufTransport:
     def transfer(
         self, source_gpu: int, target_gpu: int, tensor: Any,
     ) -> Optional[Tuple[Any, CrossVendorResult]]:
-        """Attempt a DMA-BUF zero-copy transfer.
+        """Attempt a DMA-BUF transfer.
 
-        Returns None if DMA-BUF is not available or transfer fails.
-        The caller should fall back to the next strategy.
+        **HONEST STATUS (2026-05):** the destination-side write path is not
+        implemented in csrc/dmabuf_bridge.c. This method probes DRM availability
+        and, when both GPUs are NVIDIA, falls back to CUDA IPC + pinned staging
+        (NOT a true zero-copy kernel path). Returns None if even that fallback
+        cannot run, so the caller can move to Strategy 2 (PipelinedTransport).
 
-        When the native C extension (libvrm_dmabuf.so) is available, uses
-        DRM PRIME ioctls for true zero-copy cross-vendor GPU transfer.
-        Without the extension, attempts CUDA cuMemExportToShareableHandle
-        (CUDA 11.7+) for DMA-BUF fd export when both GPUs are NVIDIA.
+        The "zero-copy" name is preserved for API forward-compat once the
+        kernel write path lands — it does NOT mean the current code skips the
+        CPU/staging buffer.
         """
         if not self.available or not _TORCH:
             return None

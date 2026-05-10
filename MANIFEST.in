@@ -1,0 +1,26 @@
+# Exclude legacy / WIP / dev-only paths from sdist as well.
+# Wheels already exclude these via [tool.setuptools.packages.find] in
+# pyproject.toml, but `python -m build --sdist` defaults to "include
+# everything not gitignored", so list them here explicitly.
+
+prune _deprecated
+prune tests
+prune benchmarks
+prune docs
+prune monitoring
+prune .github
+prune third_party
+prune scripts
+prune web
+prune _archive
+prune .venv
+prune .venv_vllm
+
+global-exclude *.pyc
+global-exclude __pycache__
+global-exclude .DS_Store
+global-exclude *.so
+global-exclude *.dylib
+
+include README.md LICENSE CHANGELOG.md pyproject.toml
+include requirements*.txt

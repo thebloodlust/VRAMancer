@@ -269,6 +269,27 @@ vramancer split Qwen/Qwen2.5-14B-Instruct --gpus 2  # Preview model split
 
 > **Tip:** GGUF models are auto-detected and use llama.cpp automatically. For HuggingFace models, add `--backend llamacpp` isn't needed — just use a GGUF repo name.
 
+### Compatibility matrix
+
+| Backend / Feature | Linux x86_64 | macOS (arm64) | Windows | NVIDIA (CUDA) | AMD (ROCm) | Apple Silicon (MPS) | CPU-only |
+|---|---|---|---|---|---|---|---|
+| huggingface | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ (slow) |
+| llamacpp (GGUF) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ (Metal) | ✅ |
+| vllm | ✅ | ❌ | ⚠️ WSL2 | ✅ | ⚠️ exp. | ❌ | ❌ |
+| ollama | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| NVFP4 (Blackwell FP4) | ✅ | ❌ | ✅ | ✅ SM ≥10.0 | ❌ | ❌ | ❌ |
+| NF4 / INT8 (bitsandbytes) | ✅ | ⚠️ | ✅ | ✅ | ⚠️ | ❌ | ❌ |
+| TurboQuant KV (PolarQuant+QJL) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Multi-GPU pipeline parallel | ✅ | N/A | ✅ | ✅ | ✅ | N/A | N/A |
+| Multi-GPU tensor parallel (NCCL) | ✅ | ❌ | ⚠️ | ✅ | ⚠️ | ❌ | ❌ |
+| VRAM Lending Pool | ✅ | N/A | ✅ | ✅ (P2P or ReBAR) | ⚠️ | N/A | N/A |
+| Rust P2P bypass (CUDA FFI) | ✅ | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ |
+| Continuous batcher | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+
+Legend: ✅ supported & tested · ⚠️ partial / experimental · ❌ not supported · N/A not applicable.
+
+> BnB (NF4/INT8) multi-GPU has an upstream bug in `accelerate 1.13 + transformers 5.3` — VRAMancer forces single-GPU for BnB. Use NVFP4 or GGUF Q4_K_M for multi-GPU quantized inference.
+
 ## Configuration
 
 VRAMancer is configured via environment variables (`VRM_*`), not config files:

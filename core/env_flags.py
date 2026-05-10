@@ -438,3 +438,257 @@ class _Flags:
 
 
 flags = _Flags()
+
+
+# ---------------------------------------------------------------------------
+# Registry of every VRM_* env var read across the codebase.
+#
+# Keep alphabetical. The set is the single source of truth for:
+#   - dump_flags()      → Markdown documentation generator
+#   - unknown_env_flags() → CI helper to catch typos / undocumented flags
+#
+# When you add a new ``VRM_*`` env var anywhere in core/, also add it here
+# (and ideally a typed property on _Flags above).
+# ---------------------------------------------------------------------------
+
+_KNOWN_FLAGS: dict[str, tuple[str, str]] = {
+    # name : (category, description)
+
+    # ---- modes / test -----------------------------------------------------
+    "VRM_MINIMAL_TEST":         ("test", "Stub-mode for CI without GPU/torch."),
+    "VRM_TEST_MODE":            ("test", "Generic test mode, relaxes runtime checks."),
+    "VRM_TEST_RELAX_SECURITY":  ("test", "Skip strict security validators in tests."),
+    "VRM_TEST_ALL_OPEN":        ("test", "Auth-bypass for ALL endpoints (tests only)."),
+    "VRM_TEST_BYPASS_HA":       ("test", "Skip HA peer sync inside tests."),
+    "VRM_DISABLE_RATE_LIMIT":   ("test", "Disable rate limiting (CI/dev)."),
+    "VRM_BACKEND_ALLOW_STUB":   ("test", "Return stub when backend dep missing."),
+    "VRM_STRICT_IMPORT":        ("test", "Crash on missing optional dep instead of degrade."),
+    "VRM_PRODUCTION":           ("mode", "Production hardening (token+secret required)."),
+    "VRM_READ_ONLY":            ("mode", "Block all mutating endpoints."),
+    "VRM_DEBUG":                ("mode", "Generic debug toggle."),
+
+    # ---- security ---------------------------------------------------------
+    "VRM_API_TOKEN":            ("security", "Bearer token required by API auth."),
+    "VRM_AUTH_SECRET":          ("security", "JWT signing secret (production-required)."),
+    "VRM_AUTH_EXP":             ("security", "JWT access-token lifetime (s)."),
+    "VRM_AUTH_REFRESH_EXP":     ("security", "JWT refresh-token lifetime (s)."),
+    "VRM_DEFAULT_ADMIN_PASS":   ("security", "Override dev default admin password."),
+    "VRM_DISABLE_SECRET_ROTATION": ("security", "Disable periodic JWT secret rotation."),
+    "VRM_RATE_MAX":             ("security", "Per-IP+path rate limit per minute."),
+    "VRM_CORS_ORIGINS":         ("security", "Allowed CORS origins (CSV)."),
+    "VRM_TRANSPORT_INSECURE":   ("security", "Allow plaintext transport (dev only)."),
+    "VRM_HA_SECRET":            ("security", "HA cluster shared secret."),
+    "VRM_CLUSTER_SECRET":       ("security", "Cluster discovery shared secret."),
+
+    # ---- API / server -----------------------------------------------------
+    "VRM_API_HOST":             ("api", "Flask bind host."),
+    "VRM_API_PORT":             ("api", "Flask bind port."),
+    "VRM_API_BASE":             ("api", "Public base URL (clients)."),
+    "VRM_API_DEBUG":            ("api", "Flask debug flag."),
+    "VRM_WORKERS":              ("api", "Gunicorn worker count."),
+    "VRM_THREADS":              ("api", "Gunicorn threads/worker."),
+    "VRM_GUNICORN_TIMEOUT":     ("api", "Gunicorn worker timeout (s)."),
+    "VRM_GENERATE_TIMEOUT":     ("api", "Continuous-batcher request timeout (s)."),
+    "VRM_INFERENCE_TIMEOUT":    ("api", "Generic per-inference timeout (s)."),
+    "VRM_SSE_TIMEOUT":          ("api", "SSE keepalive timeout (s)."),
+    "VRM_MAX_PROMPT_LENGTH":    ("api", "Max prompt size (chars)."),
+    "VRM_MAX_BODY":             ("api", "Max request body (bytes)."),
+    "VRM_MAX_BATCH_SIZE":       ("api", "Continuous-batcher waiting queue cap."),
+    "VRM_MAX_CONCURRENT":       ("api", "Concurrent in-flight cap."),
+    "VRM_MAX_QUEUE_SIZE":       ("api", "Request queue cap (backpressure)."),
+    "VRM_DASHBOARD_MINIMAL":    ("api", "Minimal dashboard renderer."),
+    "VRM_DISABLE_SOCKETIO":     ("api", "Disable Socket.IO heartbeat."),
+    "VRM_CB_FAILURE_THRESHOLD": ("api", "Circuit breaker fail count → open."),
+    "VRM_CB_RECOVERY_TIMEOUT":  ("api", "Circuit breaker HALF_OPEN interval (s)."),
+    "VRM_PYNVML_TIMEOUT":       ("api", "pynvml call timeout (s)."),
+    "VRM_SHARED_QUEUE":         ("api", "Shared queue backend URL."),
+
+    # ---- backend / model --------------------------------------------------
+    "VRM_BACKEND":              ("backend", "Forced backend (huggingface|vllm|llama_cpp|...)."),
+    "VRM_MODEL":                ("backend", "Default model id."),
+    "VRM_QUANTIZATION":         ("backend", "Quantization mode (nvfp4|nf4|int8|gptq|awq|empty)."),
+    "VRM_TRUST_REMOTE_CODE":    ("backend", "Pass trust_remote_code=True to HF."),
+    "VRM_DRAFT_MODEL":          ("backend", "Speculative decoding draft model id."),
+    "VRM_FORCE_BASIC_TOKENIZER": ("backend", "Use BasicTokenizer fallback."),
+    "VRM_TOKENIZER_WORKERS":    ("backend", "Tokenizer thread pool size."),
+    "VRM_DISABLE_ONNX":         ("backend", "Disable ONNX export pathway."),
+    "VRM_DISABLE_TURBO":        ("backend", "Disable TurboEngine CUDA Graph decode."),
+    "VRM_TURBO_MAX_SEQ":        ("backend", "TurboEngine static KV max seq."),
+    "VRM_TURBOQUANT_WORKER":    ("backend", "Run TurboQuant on GPU dispatch worker."),
+    "VRM_FORCE_MULTI_GPU":      ("backend", "Force multi-GPU split."),
+    "VRM_GPU_ORDER":            ("backend", "Mirror of CUDA_DEVICE_ORDER."),
+    "VRM_VLLM_TARGET_GPU":      ("backend", "vLLM compute device when lending."),
+    "VRM_HETERO_STRATEGY":      ("backend", "Placement: profiled|vram|balanced."),
+    "VRM_PARALLEL_MODE":        ("backend", "pp (pipeline) | tp (tensor)."),
+    "VRM_SPLIT_RATIOS":         ("backend", "Manual VRAM split ratios (CSV)."),
+    "VRM_PREFILL_CHUNK":        ("backend", "Chunked prefill chunk size."),
+    "VRM_CONTINUOUS_BATCHING":  ("backend", "Enable continuous batcher."),
+    "VRM_LLAMA_SERVER_PORT":    ("backend", "llama.cpp server port."),
+    "VRM_CUDA_GRAPH":           ("backend", "Persistent CUDA Graph decode."),
+    "VRM_CUDA_GRAPH_CACHE":     ("backend", "CUDA Graph cache count or path."),
+    "VRM_CUDA_GRAPH_WARMUP":    ("backend", "Warmup iters before graph capture."),
+    "VRM_SPEC_GAMMA":           ("backend", "Speculative draft length γ."),
+    "VRM_SPEC_WINDOW":          ("backend", "Speculative rolling window."),
+    "VRM_SPEC_ADAPTIVE":        ("backend", "Adaptive γ on accept rate."),
+    "VRM_DEBUG_SAMPLING":       ("backend", "Per-branch sampling counters."),
+
+    # ---- transfer ---------------------------------------------------------
+    "VRM_TRANSFER_METHOD":      ("transfer", "Force strategy (0..4|auto)."),
+    "VRM_TRANSFER_P2P":         ("transfer", "Allow P2P CUDA transfers."),
+    "VRM_TRANSFER_OVERLAP":     ("transfer", "CUDA stream overlap for P2P."),
+    "VRM_TRANSFER_ASYNC":       ("transfer", "Async double-buffered cross-vendor."),
+    "VRM_FASTPATH_IF":          ("transfer", "Fastpath network interface."),
+    "VRM_FASTPATH_BENCH_TTL":   ("transfer", "Fastpath bench cache TTL (s)."),
+    "VRM_TRANSPORT_TIMEOUT":    ("transfer", "Generic transport timeout (s)."),
+
+    # ---- KV / compression -------------------------------------------------
+    "VRM_KV_COMPRESSION":       ("kv", "KV cache codec (turboquant|fp8)."),
+    "VRM_KV_COMPRESSION_BITS":  ("kv", "Bits per polar angle."),
+    "VRM_SPARSE_V_RATIO":       ("kv", "Top-k fraction for V decompress."),
+    "VRM_KV_CACHE_RESIDUAL":    ("kv", "Residual layer count for reconstruction."),
+    "VRM_KV_DRAM_LIMIT_GB":     ("kv", "DRAM cap for KV offload (GB)."),
+    "VRM_KV_LEND":              ("kv", "Allow KV cache to use lending pool."),
+    "VRM_KV_LEND_ATTENTION":    ("kv", "Lend KV during attention compute."),
+    "VRM_KV_OFFLOAD_ENGRAM":    ("kv", "Offload cold KV pages to NVMe."),
+
+    # ---- VRAM lending -----------------------------------------------------
+    "VRM_VRAM_LENDING":         ("lending", "Enable lending pool."),
+    "VRM_LEND_RATIO":           ("lending", "Max lendable free-VRAM ratio."),
+    "VRM_LEND_RATIO_GPU":       ("lending", "Per-GPU override (idx:ratio CSV)."),
+    "VRM_RECLAIM_THRESHOLD":    ("lending", "Util triggering reclaim."),
+    "VRM_LENDING_INTERVAL":     ("lending", "Lending monitor poll (s)."),
+    "VRM_REBALANCE_INTERVAL":   ("lending", "Block rebalancer interval (s)."),
+    "VRM_EP_STAGING_MODE":      ("lending", "Expert pinning: stream_every|warmup|mirror_only."),
+
+    # ---- cluster / HA -----------------------------------------------------
+    "VRM_NODE_ID":              ("cluster", "Override node identifier."),
+    "VRM_CLUSTER_AUTO_DISCOVER": ("cluster", "Auto-start mDNS+UDP discovery."),
+    "VRM_CLUSTER_L1_THRESHOLD": ("cluster", "L1 cluster threshold."),
+    "VRM_PEER_IPS":             ("cluster", "Static peer IPs (CSV)."),
+    "VRM_SAME_RACK_NODES":      ("cluster", "Same-rack node IDs (CSV)."),
+    "VRM_HA_PEERS":             ("cluster", "HA peer URLs (CSV)."),
+    "VRM_HA_JOURNAL":           ("cluster", "HA journal path."),
+    "VRM_HA_JOURNAL_MAX":       ("cluster", "HA journal max entries."),
+    "VRM_DDNS_HOST":            ("cluster", "Dynamic DNS hostname."),
+    "VRM_MEMBERSHIP_LOG":       ("cluster", "Cluster membership JSONL."),
+    "VRM_MC_ADDR":              ("cluster", "Cluster multicast IPv4."),
+    "VRM_MC_PORT":              ("cluster", "Cluster multicast UDP port."),
+    "VRM_EDGE_MAX_AGE":         ("cluster", "Edge node TTL (s)."),
+    "VRM_SENSING_HEARTBEAT":    ("cluster", "AITP sensing heartbeat (s)."),
+    "VRM_SENSING_PEER_TTL":     ("cluster", "Peer TTL before evict (s)."),
+    "VRM_WOI_MAC_":             ("cluster", "Wake-on-LAN MAC env prefix."),
+
+    # ---- AITP -------------------------------------------------------------
+    "VRM_FEATURE_AITP":         ("aitp", "Enable AITP networking stack."),
+    "VRM_AITP_PORT":            ("aitp", "AITP UDP port."),
+    "VRM_AITP_MAX_QUEUE":       ("aitp", "AITP recv queue size."),
+    "VRM_AITP_STAGING_MB":      ("aitp", "AITP staging buffer (MB)."),
+    "VRM_ANYCAST_GROUP":        ("aitp", "IPv6 anycast multicast group."),
+    "VRM_ANYCAST_STRATEGY":     ("aitp", "weighted|least_latency|round_robin."),
+    "VRM_ANYCAST_MIN_STRENGTH": ("aitp", "Min synapse strength for routing."),
+    "VRM_RAID_DATA_SHARDS":     ("aitp", "RAID-RS data shards."),
+    "VRM_RAID_PARITY_SHARDS":   ("aitp", "RAID-RS parity shards."),
+    "VRM_RAID_PARALLEL":        ("aitp", "Parallel shard send."),
+    "VRM_RAID_TIMEOUT":         ("aitp", "RAID send timeout (s)."),
+
+    # ---- VTP --------------------------------------------------------------
+    "VRM_VTP_ENABLED":          ("vtp", "Enable VRAMancer Tensor Protocol."),
+    "VRM_VTP_PORT":             ("vtp", "VTP TCP port."),
+    "VRM_VTP_WORKER_PORT":      ("vtp", "VTP worker port."),
+    "VRM_VTP_CHUNK_MB":         ("vtp", "VTP chunk size (MB)."),
+    "VRM_VTP_CREDITS":          ("vtp", "VTP flow control credits."),
+    "VRM_VTP_MAX_INFLIGHT":     ("vtp", "VTP max in-flight tensors."),
+
+    # ---- WebGPU (experimental) -------------------------------------------
+    "VRM_WEBGPU_HTTP_PORT":     ("webgpu", "WebGPU dashboard HTTP port."),
+    "VRM_WEBGPU_WS_PORT":       ("webgpu", "WebGPU WebSocket port."),
+    "VRM_WEBGPU_NO_SSL":        ("webgpu", "Disable SSL on WebGPU WS."),
+    "VRM_WEBGPU_TIMEOUT":       ("webgpu", "WebGPU task timeout (s)."),
+
+    # ---- observability ----------------------------------------------------
+    "VRM_LOG_JSON":             ("observability", "Structured JSON logs."),
+    "VRM_LOG_FILE":             ("observability", "Log file path (empty = stderr)."),
+    "VRM_TRACING":              ("observability", "Enable OpenTelemetry."),
+    "VRM_TRACING_ATTRS":        ("observability", "Extra OTEL resource attrs."),
+    "VRM_METRICS_BIND":         ("observability", "Prometheus bind address."),
+    "VRM_METRICS_PORT":         ("observability", "Prometheus port."),
+
+    # ---- persistence / data ----------------------------------------------
+    "VRM_SQLITE_PATH":          ("misc", "SQLite persistence path."),
+    "VRM_DATA_DIR":             ("misc", "VRAMancer data directory."),
+    "VRM_CACHE_DIR":            ("misc", "Model/cache directory."),
+    "VRM_AUTOSAVE_INTERVAL":    ("misc", "Autosave interval (s)."),
+    "VRM_AUTOSAVE_MEMORY":      ("misc", "Hierarchical memory autosave."),
+}
+
+
+_CATEGORY_ORDER = [
+    "mode", "test", "security", "api", "backend", "transfer",
+    "kv", "lending", "cluster", "aitp", "vtp", "webgpu",
+    "observability", "misc",
+]
+
+
+def known_flag(name: str) -> bool:
+    """Return True if ``name`` is registered in :data:`_KNOWN_FLAGS`."""
+    return name in _KNOWN_FLAGS
+
+
+def unknown_env_flags() -> list[str]:
+    """Return ``VRM_*`` env vars that are set in the process but NOT registered.
+
+    Useful in CI to detect typos / undocumented flags. Empty list = all good.
+    """
+    return sorted(
+        n for n in os.environ
+        if n.startswith("VRM_") and n not in _KNOWN_FLAGS
+        and not any(n.startswith(p) for p in ("VRM_WOI_MAC_",))
+    )
+
+
+def dump_flags() -> str:
+    """Return a Markdown table grouping every registered flag by category."""
+    by_cat: dict[str, list[tuple[str, str]]] = {}
+    for name, (cat, desc) in _KNOWN_FLAGS.items():
+        by_cat.setdefault(cat, []).append((name, desc))
+
+    lines = ["# VRAMancer environment flags",
+             "",
+             f"_{len(_KNOWN_FLAGS)} flags registered._",
+             ""]
+    seen_cats = set(by_cat.keys())
+    ordered = [c for c in _CATEGORY_ORDER if c in seen_cats]
+    ordered += sorted(seen_cats - set(_CATEGORY_ORDER))
+    for cat in ordered:
+        rows = sorted(by_cat[cat])
+        lines.append(f"## {cat}")
+        lines.append("")
+        lines.append("| Flag | Description |")
+        lines.append("|------|-------------|")
+        for name, desc in rows:
+            lines.append(f"| `{name}` | {desc.replace('|', '\\|')} |")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def dump_active() -> dict[str, str]:
+    """Return registered ``VRM_*`` env vars whose value is currently set."""
+    return {n: os.environ[n] for n in _KNOWN_FLAGS if n in os.environ}
+
+
+__all__ = [
+    "flags", "_Flags",
+    "known_flag", "unknown_env_flags", "dump_flags", "dump_active",
+]
+
+
+if __name__ == "__main__":  # pragma: no cover - manual CLI use
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "active":
+        import json
+        print(json.dumps(dump_active(), indent=2))
+    elif len(sys.argv) > 1 and sys.argv[1] == "unknown":
+        for n in unknown_env_flags():
+            print(n)
+    else:
+        print(dump_flags())

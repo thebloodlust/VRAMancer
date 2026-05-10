@@ -88,3 +88,7 @@ models/
 /test_results.txt
 /test_output.log
 /cache_base.txt
+
+# Local agent/IDE config
+.claude/
+TODO.old.md

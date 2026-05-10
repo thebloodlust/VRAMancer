@@ -72,6 +72,31 @@ class CircuitBreaker:
         self._failure_count = 0
         self._success_count = 0
         self._last_failure_time: float = 0.0
+        self._publish_state()
+
+    # ------------------------------------------------------------------
+    # Metrics
+    # ------------------------------------------------------------------
+
+    def _publish_state(self) -> None:
+        """Publish current state to Prometheus (best-effort, never raises)."""
+        try:
+            from core.metrics import CIRCUIT_BREAKER_STATE
+            value = {
+                CircuitState.CLOSED: 0,
+                CircuitState.HALF_OPEN: 1,
+                CircuitState.OPEN: 2,
+            }[self._state]
+            CIRCUIT_BREAKER_STATE.labels(name=self.name).set(value)
+        except Exception:
+            pass
+
+    def _record_trip(self) -> None:
+        try:
+            from core.metrics import CIRCUIT_BREAKER_TRIPS
+            CIRCUIT_BREAKER_TRIPS.labels(name=self.name).inc()
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Public API
@@ -101,6 +126,7 @@ class CircuitBreaker:
                     self._state = CircuitState.CLOSED
                     self._failure_count = 0
                     self._success_count = 0
+                    self._publish_state()
                     logger.info("CircuitBreaker[%s]: CLOSED (recovered)", self.name)
             else:
                 self._failure_count = 0
@@ -112,9 +138,13 @@ class CircuitBreaker:
             self._success_count = 0
             if self._state == CircuitState.HALF_OPEN:
                 self._state = CircuitState.OPEN
+                self._publish_state()
+                self._record_trip()
                 logger.warning("CircuitBreaker[%s]: OPEN (half-open probe failed)", self.name)
             elif self._failure_count >= self.failure_threshold:
                 self._state = CircuitState.OPEN
+                self._publish_state()
+                self._record_trip()
                 logger.warning(
                     "CircuitBreaker[%s]: OPEN after %d consecutive failures",
                     self.name, self._failure_count,
@@ -168,6 +198,7 @@ class CircuitBreaker:
             if elapsed >= self.recovery_timeout:
                 self._state = CircuitState.HALF_OPEN
                 self._success_count = 0
+                self._publish_state()
                 logger.info("CircuitBreaker[%s]: HALF_OPEN (probing)", self.name)
 
 

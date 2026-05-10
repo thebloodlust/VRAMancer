@@ -65,6 +65,19 @@ PAGED_KV_USED_PAGES = Gauge("vramancer_paged_kv_used_pages", "Used KV cache page
 PAGED_KV_FREE_PAGES = Gauge("vramancer_paged_kv_free_pages", "Free KV cache pages", ["device"])
 PAGED_KV_BORROWED_PAGES = Gauge("vramancer_paged_kv_borrowed_pages", "Borrowed overflow pages from lending pool")
 
+# Circuit breaker metrics (per breaker name)
+# state: 0=CLOSED, 1=HALF_OPEN, 2=OPEN
+CIRCUIT_BREAKER_STATE = Gauge(
+    "vramancer_circuit_breaker_state",
+    "Circuit breaker state (0=CLOSED, 1=HALF_OPEN, 2=OPEN)",
+    ["name"],
+)
+CIRCUIT_BREAKER_TRIPS = Counter(
+    "vramancer_circuit_breaker_trips_total",
+    "Number of times the circuit breaker has opened",
+    ["name"],
+)
+
 _started = False
 
 # All labeled Gauge metrics that accumulate stale label sets on pipeline reset
@@ -96,7 +109,7 @@ def metrics_server_start(port: int | None = None):
 # Register gauges for lifecycle tracking
 for _g in [GPU_MEMORY_USED, TASKS_PER_RESOURCE, DEVICE_INFO, BLOCK_HOTNESS,
            TASK_PCT, FASTPATH_IF_LATENCY, PAGED_KV_USED_PAGES,
-           PAGED_KV_FREE_PAGES]:
+           PAGED_KV_FREE_PAGES, CIRCUIT_BREAKER_STATE]:
     _register_gauge(_g, labeled=True)
 
 for _g in [TASKS_RUNNING, LENDING_ACTIVE_LEASES, LENDING_BYTES_LENT,
@@ -170,6 +183,8 @@ __all__ = [
     "PAGED_KV_USED_PAGES",
     "PAGED_KV_FREE_PAGES",
     "PAGED_KV_BORROWED_PAGES",
+    "CIRCUIT_BREAKER_STATE",
+    "CIRCUIT_BREAKER_TRIPS",
     "WEBGPU_CONNECTED_CLIENTS",
     "WEBGPU_FLOPS_TOTAL",
 ]

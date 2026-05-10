@@ -167,9 +167,15 @@ class TransferManager:
         self._stub_mode = os.environ.get("VRM_MINIMAL_TEST", "0") == "1"
 
         # Force-disable P2P via env var (useful in VMs where IOMMU blocks P2P)
-        self._p2p_forced_off = os.environ.get(
-            "VRM_TRANSFER_P2P", ""
-        ).lower() in ("0", "false", "no")
+        # Falls back to auto-detect: if running under Proxmox/VMware/Hyper-V/KVM
+        # without an explicit override, disable P2P proactively.
+        try:
+            from core.auto_detect import should_disable_p2p
+            self._p2p_forced_off = should_disable_p2p()
+        except Exception:
+            self._p2p_forced_off = os.environ.get(
+                "VRM_TRANSFER_P2P", ""
+            ).lower() in ("0", "false", "no")
 
         # Persistent Rust GpuPipeline instances (lazy, per GPU pair)
         self._gpu_pipelines: Dict[Tuple[int, int], Any] = {}

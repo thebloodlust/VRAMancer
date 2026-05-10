@@ -221,12 +221,32 @@ def detect_device_backend(device_index: int) -> str:
 
 
 _LOGICAL_MAPPING: Optional[Dict[int, int]] = None
+_LOGICAL_MAPPING_DEVICE_COUNT: int = -1  # last seen torch.cuda.device_count()
+
 
 def _get_logical_mapping() -> Dict[int, int]:
-    global _LOGICAL_MAPPING
+    """Return cached logical→physical GPU mapping.
+
+    Cache is invalidated automatically if ``torch.cuda.device_count()``
+    changes (new GPU plugged, GPU lost, ``CUDA_VISIBLE_DEVICES`` reset by
+    a worker fork). Use :func:`invalidate_device_cache` to force a refresh
+    explicitly.
+    """
+    global _LOGICAL_MAPPING, _LOGICAL_MAPPING_DEVICE_COUNT
+
+    # Auto-invalidate on count change (cheap probe).
+    try:
+        if torch.cuda.is_available():
+            current_count = torch.cuda.device_count()
+            if current_count != _LOGICAL_MAPPING_DEVICE_COUNT:
+                _LOGICAL_MAPPING = None
+                _LOGICAL_MAPPING_DEVICE_COUNT = current_count
+    except Exception:
+        pass
+
     if _LOGICAL_MAPPING is not None:
         return _LOGICAL_MAPPING
-    
+
     mapping = {}
     backend = detect_backend()
     if backend in ('cuda', 'rocm') and torch.cuda.is_available():
@@ -251,6 +271,16 @@ def _get_logical_mapping() -> Dict[int, int]:
             
     _LOGICAL_MAPPING = mapping
     return mapping
+
+
+def invalidate_device_cache() -> None:
+    """Force re-detection on next call to :func:`_get_logical_mapping` /
+    :func:`enumerate_devices`. Useful after GPU hot-plug/unplug or
+    ``CUDA_VISIBLE_DEVICES`` change.
+    """
+    global _LOGICAL_MAPPING, _LOGICAL_MAPPING_DEVICE_COUNT
+    _LOGICAL_MAPPING = None
+    _LOGICAL_MAPPING_DEVICE_COUNT = -1
 
 def get_device_type(idx: int) -> torch.device:
     """Retourne un objet torch.device cohérent pour un index.
@@ -441,6 +471,7 @@ __all__ = [
     'detect_backend',
     'detect_device_backend',
     'enumerate_devices',
+    'invalidate_device_cache',
     'assign_block_to_device',
     'serialize_tensors',
     'deserialize_tensors',

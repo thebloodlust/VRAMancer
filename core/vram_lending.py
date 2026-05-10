@@ -636,6 +636,148 @@ class VRAMLendingPool:
                         lease.lease_id, e)
             return None
 
+    # ------------------------------------------------------------------
+    # Persistent staging buffer (V6.E expert pinning)
+    # ------------------------------------------------------------------
+
+    def materialize_lease(
+        self,
+        lease: VRAMLease,
+        total_bytes: Optional[int] = None,
+    ) -> Any:
+        """Materialize a flat ``uint8`` staging buffer on the lender GPU.
+
+        Used by V6.E expert pinning to host cold-expert weights on the lender
+        GPU. Unlike ``allocate_on_lease`` (which slices from a pre-allocated
+        global lending_buffer), this allocates a fresh contiguous arena sized
+        exactly to the lease and stores it in ``lease.tensor_ref``.
+
+        Idempotent: if ``lease.tensor_ref`` already exists with at least the
+        requested size, returns it as-is.
+
+        Args:
+            lease: Active lease.
+            total_bytes: Size to allocate (defaults to ``lease.size_bytes``).
+
+        Returns:
+            ``torch.Tensor`` of dtype uint8, shape ``(N,)``, on the lender GPU
+            — or None if torch is unavailable / lease inactive.
+        """
+        if not _TORCH or _MINIMAL:
+            return None
+        if lease.state != LeaseState.ACTIVE:
+            log.warning(
+                "materialize_lease: lease %s not ACTIVE (state=%s)",
+                lease.lease_id, lease.state.name,
+            )
+            return None
+
+        n = int(total_bytes if total_bytes is not None else lease.size_bytes)
+        if n <= 0:
+            log.warning("materialize_lease: invalid size=%d", n)
+            return None
+
+        existing = lease.tensor_ref
+        if (
+            existing is not None
+            and hasattr(existing, "numel")
+            and existing.numel() >= n
+            and getattr(existing, "device", None) is not None
+            and existing.device.index == lease.owner_gpu
+        ):
+            lease.metadata["staging_materialized"] = True
+            return existing
+
+        try:
+            buf = torch.empty(n, dtype=torch.uint8, device=f"cuda:{lease.owner_gpu}")
+        except Exception as e:
+            log.warning("materialize_lease: torch.empty(%d) failed: %s", n, e)
+            return None
+
+        lease.tensor_ref = buf
+        lease.metadata["staging_materialized"] = True
+        # Reset the per-lease offset map used by slice_for_expert.
+        lease.metadata.setdefault("expert_offsets", {})
+        lease.metadata["staging_cursor"] = 0
+        log.info(
+            "materialize_lease: allocated %.2f GB on cuda:%d for lease %s",
+            n / 1e9, lease.owner_gpu, lease.lease_id,
+        )
+        return buf
+
+    def slice_for_expert(
+        self,
+        lease: VRAMLease,
+        layer_idx: int,
+        expert_local_idx: int,
+        kind: str,
+        shape: Tuple[int, ...],
+        dtype: Any,
+    ) -> Any:
+        """Carve a typed view of the lease staging buffer for one expert tensor.
+
+        Maintains an internal append-only offset map keyed by
+        ``(layer_idx, expert_local_idx, kind)`` so successive calls with the
+        same key return the same view (idempotent). New keys advance the
+        cursor.
+
+        Args:
+            lease: Lease whose ``tensor_ref`` was set up by ``materialize_lease``.
+            layer_idx: Physical layer index.
+            expert_local_idx: Row index within the cold-experts subset for the
+                layer (NOT the global expert id).
+            kind: Identifier for the weight family (``"w13"``, ``"w2"``,
+                ``"w13_scale"``, ``"w2_scale"``, ``"w13_qzeros"``,
+                ``"w2_qzeros"`` …). Free-form, used as part of the offset key.
+            shape: Per-expert tensor shape (excluding leading expert dim).
+            dtype: Tensor dtype.
+
+        Returns:
+            ``torch.Tensor`` view of the staging buffer, or None on failure.
+        """
+        if not _TORCH or _MINIMAL:
+            return None
+        buf = lease.tensor_ref
+        if buf is None or not hasattr(buf, "numel"):
+            log.warning(
+                "slice_for_expert: lease %s not materialized (call materialize_lease first)",
+                lease.lease_id,
+            )
+            return None
+
+        elem_size = torch.tensor([], dtype=dtype).element_size()
+        numel = 1
+        for d in shape:
+            numel *= int(d)
+        n_bytes = numel * elem_size
+
+        offsets: Dict[Any, int] = lease.metadata.setdefault("expert_offsets", {})
+        key = (int(layer_idx), int(expert_local_idx), str(kind))
+
+        if key in offsets:
+            start = offsets[key]
+        else:
+            start = int(lease.metadata.get("staging_cursor", 0))
+            end = start + n_bytes
+            if end > buf.numel():
+                log.warning(
+                    "slice_for_expert: lease %s OOM (need %d bytes, %d remaining)",
+                    lease.lease_id, n_bytes, buf.numel() - start,
+                )
+                return None
+            offsets[key] = start
+            lease.metadata["staging_cursor"] = end
+
+        try:
+            view = buf[start:start + n_bytes].view(dtype).reshape(shape)
+            return view
+        except Exception as e:
+            log.warning(
+                "slice_for_expert: reinterpret %s→%s failed: %s",
+                buf.dtype, dtype, e,
+            )
+            return None
+
     def transfer_into_lease(
         self,
         lease: VRAMLease,
