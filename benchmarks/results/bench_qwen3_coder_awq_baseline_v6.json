@@ -1,0 +1,114 @@
+{
+  "model": "QuantTrio/Qwen3-Coder-30B-A3B-Instruct-AWQ",
+  "backend": "vllm",
+  "scope": "Single-GPU AWQ Int4 baseline on Blackwell sm_120. NO lending pool, NO cpu_offload. Goal: ceiling for what the 5070 Ti can achieve standalone, to quantify what V6.D lending + V6.E expert prefetch buy back when running larger / higher-precision variants of the same model family.",
+  "compute_gpu": {
+    "index": 0,
+    "name": "NVIDIA GeForce RTX 5070 Ti",
+    "sm": "12.0",
+    "vram_mb": 16303
+  },
+  "vllm_config": {
+    "tensor_parallel_size": 1,
+    "max_model_len": 4096,
+    "gpu_memory_utilization": 0.92,
+    "enforce_eager": false,
+    "cpu_offload_gb": 4.0,
+    "quantization": "awq (auto-detected)"
+  },
+  "load_seconds": 174.05,
+  "vram_after_load": {
+    "gpu0": {
+      "used_mb": 15305,
+      "total_mb": 16303
+    },
+    "gpu1": {
+      "used_mb": 730,
+      "total_mb": 24576
+    }
+  },
+  "dram_after_load_mb": 1419,
+  "results": [
+    {
+      "ctx_target": 512,
+      "prompt_chars": 2048,
+      "max_new": 32,
+      "dt_s": 1.119,
+      "tok_s": 28.59,
+      "vram_before": {
+        "gpu0": {
+          "used_mb": 15305,
+          "total_mb": 16303
+        },
+        "gpu1": {
+          "used_mb": 730,
+          "total_mb": 24576
+        }
+      },
+      "vram_after": {
+        "gpu0": {
+          "used_mb": 15305,
+          "total_mb": 16303
+        },
+        "gpu1": {
+          "used_mb": 730,
+          "total_mb": 24576
+        }
+      }
+    },
+    {
+      "ctx_target": 1024,
+      "prompt_chars": 4096,
+      "max_new": 32,
+      "dt_s": 0.849,
+      "tok_s": 37.68,
+      "vram_before": {
+        "gpu0": {
+          "used_mb": 15305,
+          "total_mb": 16303
+        },
+        "gpu1": {
+          "used_mb": 730,
+          "total_mb": 24576
+        }
+      },
+      "vram_after": {
+        "gpu0": {
+          "used_mb": 15305,
+          "total_mb": 16303
+        },
+        "gpu1": {
+          "used_mb": 730,
+          "total_mb": 24576
+        }
+      }
+    },
+    {
+      "ctx_target": 2048,
+      "prompt_chars": 8192,
+      "max_new": 32,
+      "dt_s": 1.046,
+      "tok_s": 30.6,
+      "vram_before": {
+        "gpu0": {
+          "used_mb": 15305,
+          "total_mb": 16303
+        },
+        "gpu1": {
+          "used_mb": 730,
+          "total_mb": 24576
+        }
+      },
+      "vram_after": {
+        "gpu0": {
+          "used_mb": 15305,
+          "total_mb": 16303
+        },
+        "gpu1": {
+          "used_mb": 730,
+          "total_mb": 24576
+        }
+      }
+    }
+  ]
+}
