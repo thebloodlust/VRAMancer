@@ -1101,16 +1101,29 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
 
     @application.route('/api/swarm/awaken', methods=['POST'])
     def swarm_awaken():
+        """Wake known cluster nodes via Wake-on-LAN and return their status.
+
+        Sends WoL magic packets to registered nodes (if any) and reports how
+        many were pinged. Returns real counts from the discovery layer rather
+        than fabricated figures.
         """
-        SWARM ATTENTION: Wake up the organic network.
-        Forces the WebGPU Swarm Node Manager to simulate a massive context offload,
-        bringing the UI neural network to life.
-        """
+        nodes = []
+        try:
+            disco = getattr(_registry, 'discovery', None)
+            if disco is not None and hasattr(disco, 'get_nodes'):
+                nodes = list(disco.get_nodes() or [])
+        except Exception:
+            logger.debug("swarm_awaken: discovery unavailable", exc_info=True)
+        woke = 0
+        try:
+            from core.wake_on_inference import get_woi_manager
+            woke = get_woi_manager().wake_all() or 0
+        except Exception:
+            logger.debug("swarm_awaken: WoL unavailable", exc_info=True)
         return jsonify({
-            "status": "Awakening Swarm Attention...",
-            "message": "Envoi asynchrone des requetes Tensor vers le reseau L7 Edge.",
-            "tflops_allocated": 14.3,
-            "nodes_pinged": 15
+            "status": "ok",
+            "nodes_known": len(nodes),
+            "nodes_woken": int(woke),
         })
 
     # ====================================================================

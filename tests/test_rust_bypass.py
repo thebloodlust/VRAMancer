@@ -62,7 +62,8 @@ class TestRustCoreFunctions:
         assert hasattr(vr, 'detect_best_transport')
         assert hasattr(vr, 'sign_payload_fast')
         assert hasattr(vr, 'verify_hmac_fast')
-        assert hasattr(vr, 'generate_holographic_parity')
+        assert hasattr(vr, 'generate_xor_parity')
+        assert hasattr(vr, 'repair_xor_shard')
 
     @needs_rust
     def test_detect_best_transport(self):
@@ -92,21 +93,29 @@ class TestRustCoreFunctions:
         assert results == [True, True, False]
 
     @needs_rust
-    def test_holographic_parity(self):
+    def test_xor_parity(self):
         shard_a = b"\x01\x02\x03\x04"
         shard_b = b"\x05\x06\x07\x08"
-        parity = vr.generate_holographic_parity([shard_a, shard_b])
+        parity = vr.generate_xor_parity([shard_a, shard_b])
         assert isinstance(parity, bytes)
         assert len(parity) == 4
 
         # Reconstruct shard_b from shard_a + parity
-        healed = vr.heal_holograph([shard_a], parity)
+        healed = vr.repair_xor_shard([shard_a], parity)
         assert healed == shard_b
 
     @needs_rust
-    def test_holographic_empty(self):
-        parity = vr.generate_holographic_parity([])
+    def test_xor_parity_empty(self):
+        parity = vr.generate_xor_parity([])
         assert parity == b""
+
+    @needs_rust
+    def test_parity_deprecated_aliases(self):
+        """Old names must still work (backward compat)."""
+        shard_a = b"\x01\x02\x03\x04"
+        shard_b = b"\x05\x06\x07\x08"
+        parity = vr.generate_holographic_parity([shard_a, shard_b])
+        assert vr.heal_holograph([shard_a], parity) == shard_b
 
     @needs_rust
     def test_staged_gpu_transfer_registered(self):

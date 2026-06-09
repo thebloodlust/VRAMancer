@@ -484,9 +484,9 @@ class HierarchicalMemoryManager:
         try:
             import vtp_core
             self._vtp_backend = vtp_core
-            self.log.info("VTP (C++ fast path) chargé avec succès ✅")
+            self.log.info("VTP C++ fast path loaded")
         except ImportError:
-            self.log.warning("Extension C++ 'vtp_core' non disponible. Fallback sur Python pur 🐢")
+            self.log.warning("C++ extension 'vtp_core' unavailable, using pure-Python fallback")
 
     def schedule_prefetch(self, block_ids: list[str], target_tier: Tier = "L1"):
         """Schedule un prefetch anticipé utilisant le fast path C++ si possible."""

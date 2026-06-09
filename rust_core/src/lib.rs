@@ -994,9 +994,10 @@ fn cxl_direct_memory_load(py: Python, path: String, ptr: usize, num_bytes: usize
     })
 }
 
-/// Fast XOR for Holographic Parity (bypassing GIL)
+/// Fast XOR parity over N data shards (releases the GIL).
+/// Single-fault-tolerance erasure coding (RAID-5 style).
 #[pyfunction]
-fn generate_holographic_parity(py: Python, shards: Vec<&[u8]>) -> PyResult<Py<PyBytes>> {
+fn generate_xor_parity(py: Python, shards: Vec<&[u8]>) -> PyResult<Py<PyBytes>> {
     // We can confidently release the GIL because we only have immutable slices.
     let (parity, max_len) = py.allow_threads(|| {
         let max_len = shards.iter().map(|s| s.len()).max().unwrap_or(0);
@@ -1021,9 +1022,15 @@ fn generate_holographic_parity(py: Python, shards: Vec<&[u8]>) -> PyResult<Py<Py
     Ok(PyBytes::new(py, &parity).into())
 }
 
-/// Reconstructs a missing tensor chunk from Parity
+/// Deprecated alias for ``generate_xor_parity`` (kept for backward compat).
 #[pyfunction]
-fn heal_holograph(py: Python, valid_shards: Vec<&[u8]>, parity: &[u8]) -> PyResult<Py<PyBytes>> {
+fn generate_holographic_parity(py: Python, shards: Vec<&[u8]>) -> PyResult<Py<PyBytes>> {
+    generate_xor_parity(py, shards)
+}
+
+/// Reconstruct a single missing data shard from the remaining shards + parity.
+#[pyfunction]
+fn repair_xor_shard(py: Python, valid_shards: Vec<&[u8]>, parity: &[u8]) -> PyResult<Py<PyBytes>> {
     let reconstructed = py.allow_threads(|| {
         let mut rec_buf = parity.to_vec();
         for shard in valid_shards {
@@ -1035,6 +1042,12 @@ fn heal_holograph(py: Python, valid_shards: Vec<&[u8]>, parity: &[u8]) -> PyResu
     });
     
     Ok(PyBytes::new(py, &reconstructed).into())
+}
+
+/// Deprecated alias for ``repair_xor_shard`` (kept for backward compat).
+#[pyfunction]
+fn heal_holograph(py: Python, valid_shards: Vec<&[u8]>, parity: &[u8]) -> PyResult<Py<PyBytes>> {
+    repair_xor_shard(py, valid_shards, parity)
 }
 
 /// C'est ici que l'on déclare officiellement notre module Python.
@@ -2080,6 +2093,9 @@ fn vramancer_rust(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(receive_tensor_chunked, m)?)?;
     m.add_function(wrap_pyfunction!(cxl_direct_memory_dump, m)?)?;
     m.add_function(wrap_pyfunction!(cxl_direct_memory_load, m)?)?;
+    m.add_function(wrap_pyfunction!(generate_xor_parity, m)?)?;
+    m.add_function(wrap_pyfunction!(repair_xor_shard, m)?)?;
+    // Deprecated aliases (backward compat):
     m.add_function(wrap_pyfunction!(generate_holographic_parity, m)?)?;
     m.add_function(wrap_pyfunction!(heal_holograph, m)?)?;
     m.add_function(wrap_pyfunction!(inject_to_vram_ptr, m)?)?;

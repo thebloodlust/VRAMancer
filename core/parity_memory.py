@@ -107,7 +107,9 @@ class ParityKVManager:
 
         # Generate parity
         if self._use_native and self.native_core is not None:
-            parity = self.native_core.generate_holographic_parity(padded_shards)
+            _gen = getattr(self.native_core, "generate_xor_parity", None) or \
+                self.native_core.generate_holographic_parity
+            parity = _gen(padded_shards)
         else:
             parity = bytearray(max_len)
             for shard in padded_shards:
@@ -150,7 +152,9 @@ class ParityKVManager:
                 s for i, s in enumerate(shards)
                 if i != missing_index and s is not None
             ]
-            reconstructed_shard = self.native_core.heal_holograph(
+            _repair = getattr(self.native_core, "repair_xor_shard", None) or \
+                self.native_core.heal_holograph
+            reconstructed_shard = _repair(
                 valid_shards, parity,
             )
         else:
