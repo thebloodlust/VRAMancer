@@ -22,7 +22,7 @@ Phase B-1 PoC scope:
   free the cuda:0 cold rows once the staging is confirmed deterministic.
 - Only the FP8 path (``Fp8MoEMethod``) is patched — AWQ MoE comes in B-3.
 
-See ``PLAN_V6E_EXPERT_PINNING.md`` sections A, B, C (strategy 2), D for the
+See ``docs/history/PLAN_V6E_EXPERT_PINNING.md`` sections A, B, C (strategy 2), D for the
 design rationale.
 
 Metrics gotcha (B-2 warmup mode)
