@@ -577,7 +577,18 @@ impl GpuPipeline {
     ///   chunk_mb: chunk size in MiB (default 16)
     #[new]
     fn new(src_gpu: i32, dst_gpu: i32, chunk_mb: Option<usize>) -> PyResult<Self> {
-        let chunk_bytes = chunk_mb.unwrap_or(16) * 1024 * 1024;
+        let chunk_mb = chunk_mb.unwrap_or(16);
+        // Guard against absurd chunk sizes: the 3rd arg is MEGABYTES, not bytes.
+        // A common misuse is passing 1<<20 (intending "1 MB" in bytes), which
+        // would request 1 TiB per buffer × triple-buffering → a cryptic
+        // `cuMemAllocHost returned 2` (CUDA_ERROR_OUT_OF_MEMORY). Fail clearly.
+        if chunk_mb == 0 || chunk_mb > 4096 {
+            return Err(PyValueError::new_err(format!(
+                "GpuPipeline chunk_mb={chunk_mb} is out of range (1..=4096 MiB). \
+                 Note: the 3rd argument is the chunk size in MEGABYTES, not bytes."
+            )));
+        }
+        let chunk_bytes = chunk_mb * 1024 * 1024;
         let n_bufs = 3usize;  // Triple-buffering for full overlap
 
         let src_ctx = cuda_ffi::device_primary_ctx_retain(src_gpu)

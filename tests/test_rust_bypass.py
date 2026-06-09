@@ -22,6 +22,17 @@ try:
 except ImportError:
     _RUST_AVAILABLE = False
 
+# When VRM_REQUIRE_RUST=1 (set by the GPU CI job), a missing/uncompiled Rust
+# module is a HARD FAILURE rather than a silent skip — this prevents shipping
+# or demoing without the CUDA bypass actually loaded into the interpreter.
+_REQUIRE_RUST = os.environ.get("VRM_REQUIRE_RUST", "") in ("1", "true", "yes")
+if _REQUIRE_RUST and not _RUST_AVAILABLE:
+    raise RuntimeError(
+        "VRM_REQUIRE_RUST=1 but `import vramancer_rust` failed. "
+        "Build it with: cd rust_core && CUDA_PATH=/usr maturin develop "
+        "--release --features cuda"
+    )
+
 try:
     import torch
     _TORCH_AVAILABLE = torch.cuda.is_available() and torch.cuda.device_count() >= 2
@@ -30,6 +41,13 @@ except Exception:
 
 needs_rust = pytest.mark.skipif(not _RUST_AVAILABLE, reason="vramancer_rust not compiled")
 needs_gpu = pytest.mark.skipif(not _TORCH_AVAILABLE, reason="Need >=2 CUDA GPUs")
+
+
+@pytest.mark.skipif(not _REQUIRE_RUST, reason="enforcement only when VRM_REQUIRE_RUST=1")
+def test_rust_required_when_enforced():
+    """Hard gate: when VRM_REQUIRE_RUST=1, Rust must import AND expose CUDA FFI."""
+    assert _RUST_AVAILABLE, "vramancer_rust must be importable when VRM_REQUIRE_RUST=1"
+    assert vr.cuda_available(), "vramancer_rust CUDA FFI must be available"
 
 
 # ---------------------------------------------------------------------------
