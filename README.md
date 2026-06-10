@@ -92,8 +92,7 @@ python -m venv .venv && source .venv/bin/activate
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 
 # VRAMancer + dependencies
-pip install -e .
-pip install -r requirements.txt
+pip install -e .[gpu]
 
 # Verify
 python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}, GPUs: {torch.cuda.device_count()}')"
@@ -131,7 +130,6 @@ pip install torch torchvision
 
 # VRAMancer + dependencies
 pip install -e .
-pip install -r requirements-lite.txt
 
 # Verify MPS backend
 python -c "import torch; print(f'MPS: {torch.backends.mps.is_available()}')"
@@ -174,8 +172,7 @@ python -m venv .venv && .venv\Scripts\activate
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 
 # VRAMancer + dependencies
-pip install -e .
-pip install -r requirements-windows.txt
+pip install -e .[windows]
 
 # Verify
 python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}')"

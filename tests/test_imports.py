@@ -2,7 +2,7 @@
 
 This test runs in CI with VRM_MINIMAL_TEST=1 and no GPU/CUDA.
 It ensures the package is importable on a minimal Python install
-(only requirements-lite.txt).
+(only the base pyproject.toml dependencies, `pip install -e .`).
 """
 import importlib
 import pytest
