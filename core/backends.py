@@ -609,10 +609,15 @@ class HuggingFaceBackend(BaseLLMBackend):
         if num_gpus < 2:
             return None
 
+        # T7.6 auto-heal (point c): a load-time OOM retry sets this to ask
+        # for extra headroom on top of the normal reserve ratio. Forces the
+        # static formula below (skips the pool suggestion).
+        extra_reserve = getattr(self, '_extra_load_reserve', 0.0)
+
         # [V6.B] Pool-aware path: ask the pool to plan the distribution.
         pool = getattr(self, 'lending_pool', None)
         estimated = getattr(self, '_estimated_model_size_bytes', None)
-        if pool is not None and estimated is not None and estimated > 0:
+        if extra_reserve <= 0 and pool is not None and estimated is not None and estimated > 0:
             try:
                 suggestion = pool.suggest_placement_budget(
                     model_size_bytes=estimated,
@@ -656,6 +661,7 @@ class HuggingFaceBackend(BaseLLMBackend):
                     reserve = 0.85
                 else:
                     reserve = 0.97
+                reserve = max(0.10, reserve - extra_reserve)
                 budget_gb = max(2.0, base_vram * reserve)
                 max_memory[gpu.index] = f"{budget_gb:.1f}GiB"
 

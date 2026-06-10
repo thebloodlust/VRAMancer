@@ -128,6 +128,12 @@ class InferencePipeline:
         self.tp_model: Optional[Any] = None  # Tensor Parallel model wrapper
         self._turboquant_cache_factory: Optional[Any] = None  # HF-native TurboQuant cache
 
+        # T7.6 auto-heal state — survives across requests for the lifetime
+        # of this pipeline instance (process never dies on OOM).
+        self.degraded: bool = False
+        self.degraded_reason: Optional[str] = None
+        self._max_new_tokens_scale: float = 1.0  # persistent context reduction (point b)
+
         # Dynamic rebalancing
         self._rebalance_thread: Optional[threading.Thread] = None
         self._rebalancing = False
@@ -264,12 +270,57 @@ class InferencePipeline:
                     setattr(self.backend, '_estimated_model_size_bytes',
                             int(_est_gb * (1024 ** 3)))
 
-            # 5. Load model via backend
+            # 5. Load model via backend, with T7.6 auto-heal load-time
+            # OOM recovery ladder:
+            #   (c) retry once with +10% extra VRAM reserve margin per GPU
+            #   (d) last resort: reload in NF4 (sets self.degraded)
             try:
                 self.backend.load_model(model_name, num_gpus=self.num_gpus, **model_kwargs)
             except Exception as e:
-                _logger.error("Model load failed: %s", e)
-                raise
+                if not (_TORCH and "out of memory" in str(e).lower()):
+                    _logger.error("Model load failed: %s", e)
+                    raise
+
+                _logger.warning(
+                    "Load-time OOM — auto-heal (c): retrying with +10%% "
+                    "VRAM reserve margin per GPU"
+                )
+                if torch.cuda.is_available():
+                    for i in range(torch.cuda.device_count()):
+                        with torch.cuda.device(i):
+                            torch.cuda.empty_cache()
+                # Force the static placement formula (skip the lending pool
+                # suggestion, which doesn't account for this margin) and
+                # reserve an extra 10% of each GPU's budget.
+                setattr(self.backend, '_extra_load_reserve', 0.10)
+                prev_pool = getattr(self.backend, 'lending_pool', None)
+                setattr(self.backend, 'lending_pool', None)
+                try:
+                    self.backend.load_model(model_name, num_gpus=self.num_gpus, **model_kwargs)
+                    _logger.info("Load-time OOM auto-heal (c) succeeded with +10%% margin")
+                except Exception as e2:
+                    if not (_TORCH and "out of memory" in str(e2).lower()):
+                        _logger.error("Model load failed on retry: %s", e2)
+                        raise
+                    _logger.warning(
+                        "Load-time OOM persists — auto-heal (d): reloading "
+                        "in NF4 (last resort, model will be marked degraded)"
+                    )
+                    if torch.cuda.is_available():
+                        for i in range(torch.cuda.device_count()):
+                            with torch.cuda.device(i):
+                                torch.cuda.empty_cache()
+                    os.environ["VRM_QUANTIZATION"] = "nf4"
+                    nf4_kwargs = {k: v for k, v in model_kwargs.items()
+                                  if k != "quantization_config"}
+                    self.backend.load_model(model_name, num_gpus=self.num_gpus, **nf4_kwargs)
+                    self.degraded = True
+                    self.degraded_reason = "oom_fallback_nf4"
+                    _logger.warning("Load-time OOM auto-heal (d) succeeded — pipeline degraded (NF4)")
+                finally:
+                    setattr(self.backend, '_extra_load_reserve', 0.0)
+                    if not self.degraded:
+                        setattr(self.backend, 'lending_pool', prev_pool)
 
             # 5b. [V6.B] Refresh pool's model_bytes for each GPU now that
             # accelerate has finished placement. This is the snapshot used
@@ -482,6 +533,12 @@ class InferencePipeline:
             Generated text.
         """
         self._ensure_loaded()
+
+        # T7.6 auto-heal (point b): a prior generation-time OOM persistently
+        # reduces the accepted context for ALL subsequent requests, not just
+        # the one that triggered recovery. Resets only on process restart.
+        if self._max_new_tokens_scale < 1.0:
+            max_new_tokens = max(16, int(max_new_tokens * self._max_new_tokens_scale))
 
         # Wake on Inference - Dynamically pull nodes from sleep
         try:
@@ -1012,10 +1069,25 @@ class InferencePipeline:
           2. Evict borrowed KV pages (lending pool)
           3. Retry with halved max_new_tokens (minimum 16)
 
+        T7.6 (point b): also persistently shrinks ``_max_new_tokens_scale``
+        by 25% (floor 0.1) so that EVERY subsequent request — not just the
+        one being retried here — requests a smaller context budget. This
+        makes the degradation durable across requests, as required by the
+        auto-heal spec, without needing to reload or resplit the model.
+
         Returns generated text on success, None on failure.
         """
         if not _TORCH or not torch.cuda.is_available():
             return None
+
+        # Persist degradation for future requests (point b)
+        self._max_new_tokens_scale = max(0.1, self._max_new_tokens_scale * 0.75)
+        self.degraded = True
+        self.degraded_reason = "oom_context_reduced"
+        _logger.warning(
+            "OOM recovery: persistent max_new_tokens scale now %.2f "
+            "(applies to all future requests)", self._max_new_tokens_scale,
+        )
 
         # Step 1: flush CUDA cache
         for i in range(torch.cuda.device_count()):
@@ -1068,6 +1140,9 @@ class InferencePipeline:
             "fault_tolerance": self.fault_manager is not None,
             "tensor_parallel": self.tp_model is not None,
             "parallel_mode": "tp" if self.tp_model is not None else "pp",
+            "degraded": self.degraded,
+            "degraded_reason": self.degraded_reason,
+            "max_new_tokens_scale": self._max_new_tokens_scale,
             "gpus": self.scheduler.get_available_gpus() if self.scheduler else [],
             "transfer_stats": (
                 self.transfer_manager.stats()

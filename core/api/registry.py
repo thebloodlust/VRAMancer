@@ -49,6 +49,17 @@ class PipelineRegistry:
         with self._lock:
             return self._pipeline is not None and self._pipeline.is_loaded()
 
+    def health_extra(self) -> dict:
+        """T7.6 auto-heal state, surfaced by /health (degraded / reason)."""
+        with self._lock:
+            p = self._pipeline
+        if p is None:
+            return {"degraded": False, "degraded_reason": None}
+        return {
+            "degraded": getattr(p, "degraded", False),
+            "degraded_reason": getattr(p, "degraded_reason", None),
+        }
+
     def load(self, model_name: str, backend: str = "auto", num_gpus: Optional[int] = None, verbose: bool = False, **kwargs):
         """Load a model, shutting down any existing pipeline first."""
         with self._lock:

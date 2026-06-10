@@ -71,6 +71,15 @@ def health():
     checks['pipeline_loaded'] = _registry_ref.is_loaded() if _registry_ref else False
     if not all(checks.get(k, False) for k in ('monitor', 'config')):
         overall = 'degraded'
+
+    # T7.6 auto-heal: surface persistent OOM-recovery state (e.g. NF4
+    # fallback reload, or a persistently reduced context budget).
+    extra = _registry_ref.health_extra() if _registry_ref else {"degraded": False, "degraded_reason": None}
+    if extra.get('degraded'):
+        overall = 'degraded'
+        checks['autoheal_degraded'] = True
+        checks['autoheal_reason'] = extra.get('degraded_reason')
+
     return jsonify({
         'status': overall, 'service': 'vramancer-api',
         'version': version, 'checks': checks,
