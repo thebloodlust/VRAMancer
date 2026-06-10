@@ -82,7 +82,6 @@ non testées hors du périmètre cœur (inférence single-node multi-GPU) ou san
 - **RDMA Transport** — RDMA verbs (ibverbs/RoCE), GPUDirect RDMA si nvidia_peermem, zero-copy TCP (`experimental/fibre_fastpath.py`)
 - **NAT Traversal** — STUN RFC 5389, UDP hole punch, relay, ULA IPv6 (`experimental/nat_traversal.py`)
 - **Transport Factory** — Sélection automatique NCCL (même nœud) ou RDMA/TCP (réseau) selon localité (`transport_factory.py`)
-- **AITP Protocol** — AI Transport Protocol UDP/IPv6 avec FEC Reed-Solomon (`experimental/aitp_protocol.py`, `experimental/aitp_fec.py`)
 - **Wake-on-Inference** — Réveil de nœuds dormants via WoL magic packets (`experimental/wake_on_inference.py`)
 
 ## Extension Rust (vramancer_rust)

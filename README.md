@@ -192,17 +192,6 @@ python scripts/bench_rtx4060.py
 
 Tests GPT-2 FP16, TinyLlama 1.1B FP16, Qwen2.5-7B NF4 (~5 GB), and GGUF via llama.cpp.
 
-### Network / multi-node testing
-
-To test cluster discovery and AITP protocol across machines on the same LAN:
-
-```bash
-# Run on EACH machine simultaneously
-python scripts/test_network_lan.py
-```
-
-Tests mDNS + UDP broadcast discovery, AITP protocol (UDP + HMAC-SHA256 + FEC), peer heartbeat sensing, and TCP connectivity between nodes.
-
 ## Usage
 
 ### One-command inference (recommended)
