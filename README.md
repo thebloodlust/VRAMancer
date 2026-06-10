@@ -6,7 +6,7 @@ Run LLM models that don't fit on a single GPU, across heterogeneous GPUs, in one
 # Load a 14B model across a RTX 3090 + RTX 5070 Ti (neither alone has enough VRAM)
 vramancer run Qwen/Qwen2.5-14B-Instruct
 
-# With 4-bit quantization (fits on a single GPU, 75% faster)
+# With 4-bit quantization (fits on a single GPU, ~70% less VRAM)
 vramancer run Qwen/Qwen2.5-14B-Instruct -q nf4
 
 # One-shot generation
@@ -21,8 +21,8 @@ VRAMancer auto-detects all GPUs, splits the model proportionally to available VR
 
 | Model | Params | VRAM | tok/s | Notes |
 |-------|--------|------|-------|-------|
-| Qwen2.5-14B BF16 | 14B | 28 GB | **6.0** | 2-GPU pipeline-parallel |
-| Qwen2.5-14B NF4 | 14B | 10.8 GB | **10.5** | 1 GPU, bitsandbytes |
+| Qwen2.5-14B BF16 | 14B | 35.9 GB | **16.1** | 2-GPU, OOMs on either GPU alone |
+| Qwen2.5-14B NF4 | 14B | 10.8 GB | **10.5** | 1 GPU, bitsandbytes, ~70% less VRAM but 35% slower than BF16 2-GPU |
 | **Qwen3-Coder-Next Q3** | **80B (3B active)** | **38 GB** | **~60** | GGUF Q3_K_XL, 2-GPU tensor split, MoE |
 | Qwen2.5-7B GGUF Q4_K_M | 7B | 4.5 GB | **106.8** | llama.cpp, 1 GPU |
 
@@ -145,7 +145,7 @@ This tests:
 - MPS backend detection (`detect_backend()` returns `mps`)
 - GPT-2 124M inference on MPS
 - TinyLlama 1.1B inference on MPS (~4 GB unified memory)
-- Full stub test suite (957 tests)
+- Full stub test suite (`VRM_MINIMAL_TEST=1 pytest tests/ -m "not gpu and not real_torch and not heavy and not chaos"`)
 
 **Run models:**
 ```bash
@@ -304,8 +304,11 @@ Full list: [.github/copilot-instructions.md](.github/copilot-instructions.md#var
 ## Development
 
 ```bash
-# Tests (901 passed, works without GPU)
-VRM_MINIMAL_TEST=1 VRM_DISABLE_RATE_LIMIT=1 pytest tests/ -q
+# Stub tests (no GPU required)
+VRM_MINIMAL_TEST=1 VRM_DISABLE_RATE_LIMIT=1 pytest tests/ -m "not gpu and not real_torch and not heavy and not chaos" -q
+
+# GPU integration tests (requires CUDA/ROCm/MPS)
+VRM_MINIMAL_TEST=1 VRM_DISABLE_RATE_LIMIT=1 pytest tests/ -m "gpu or real_torch" -q
 
 # Lint
 flake8 core/ tests/

@@ -468,7 +468,7 @@ Pipeline-parallel split across two heterogeneous GPUs: RTX 3090 (24 GB, Ampere C
 1. **Bi-GPU BF16 = 26.1 tok/s** — roughly half of single 3090 speed (48.9 tok/s). This is expected for a 7B model: it fits on one GPU, so the pipeline-parallel overhead (inter-GPU transfers via CPU staging) outweighs the benefit of additional compute.
 2. **TurboQuant bi-GPU = 4.6 tok/s** vs 0.75 tok/s single-GPU (+6.1x). The CPU bottleneck benefits from parallel KV operations across 2 GPUs, but remains the primary bottleneck.
 3. **Sparse V OOM on bi-GPU**: PagedKVCache allocates buffers on both GPUs. With Sparse V decompression buffers on top of the model split, total VRAM exceeds both GPUs (15.47 GB + 23.56 GB = 39 GB).
-4. **Multi-GPU is for models that don't fit**: Qwen-7B BF16 fits on a single 3090 (19 GB). Splitting it across 2 GPUs adds transfer overhead for zero capacity benefit. The real multi-GPU win is Qwen-14B (35.9 GB, doesn't fit on any single GPU → 6.0 tok/s bi-GPU).
+4. **Multi-GPU is for models that don't fit**: Qwen-7B BF16 fits on a single 3090 (19 GB). Splitting it across 2 GPUs adds transfer overhead for zero capacity benefit. The real multi-GPU win is Qwen-14B (35.9 GB, doesn't fit on any single GPU → 16.1 tok/s bi-GPU, see "Heterogeneous Multi-GPU — The Proof" above).
 
 ### NVFP4 + TurboQuant Combined (RTX 5070 Ti)
 

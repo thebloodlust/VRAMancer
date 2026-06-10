@@ -26,7 +26,7 @@
 ## Quantization
 
 - **BF16** — Précision par défaut
-- **NF4** — 4-bit NormalFloat via BitsAndBytes. **75% plus rapide** que BF16 pour 14B (modèle tient sur 1 GPU)
+- **NF4** — 4-bit NormalFloat via BitsAndBytes. **~70% de VRAM en moins** que BF16 pour un 14B (tient sur 1 seul GPU), au prix d'un débit ~35% plus lent que BF16 2-GPU
 - **INT8** — LLM.int8 via BitsAndBytes
 - **NVFP4 Blackwell** — Quantization native FP4 via torchao sur CC≥10.0 (RTX 5070 Ti). Kernel cublas `_scaled_mm` avec `float4_e2m1fn_x2`
 - **DirectFP4 Bypass** — Remplace les NVFP4Tensor par des plain buffers + `_scaled_mm` direct, éliminant le overhead `__torch_dispatch__`. **+7% vs torchao**, 0 VRAM extra (`nvfp4_direct.py`)
@@ -104,10 +104,12 @@ Chaîne de stratégies (fallback automatique) :
 
 | Test | Résultat |
 |------|----------|
-| Qwen2.5-14B 2-GPU (impossible sur 1 GPU) | **6.0 tok/s** |
-| Qwen2.5-14B NF4 single GPU | **10.5 tok/s** (+75% vs BF16 2-GPU) |
+| Qwen2.5-14B 2-GPU (impossible sur 1 GPU) | **16.1 tok/s** |
+| Qwen2.5-14B NF4 single GPU | **10.5 tok/s** (-35% vs BF16 2-GPU, mais -70% VRAM) |
 | GGUF Q4_K_M 7B (llama.cpp) | **106.8 tok/s** |
 | DirectFP4 vs torchao NVFP4 | **+7% speedup**, 0 VRAM extra |
 | CUDA kernel PagedAttention | **8.8x** vs PyTorch @ctx64 |
 | TurboQuant KV compression | **~4.6x** reduction, ~3.5 bits/dim |
-| Tests | **853 passed**, 38 skipped, 0 failed |
+| Tests | voir `pytest tests/ -m "not gpu and not real_torch and not heavy and not chaos"` (suite stub, sans GPU) |
+
+Détails et méthodologie : [benchmarks/BENCHMARK_RESULTS.md](benchmarks/BENCHMARK_RESULTS.md)
