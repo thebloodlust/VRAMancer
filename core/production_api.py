@@ -1116,7 +1116,7 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
             logger.debug("swarm_awaken: discovery unavailable", exc_info=True)
         woke = 0
         try:
-            from core.wake_on_inference import get_woi_manager
+            from experimental.wake_on_inference import get_woi_manager
             woke = get_woi_manager().wake_all() or 0
         except Exception:
             logger.debug("swarm_awaken: WoL unavailable", exc_info=True)
@@ -1451,9 +1451,30 @@ def run_server(host: str = None, port: int = None):
     """Start the API server with gunicorn (production) or Werkzeug (fallback).
 
     Called from main() and from vramancer CLI 'serve' command.
+
+    Set ``VRM_NO_GUNICORN=1`` to force the single-process Werkzeug server.
+    This is required when a GPU model is pre-loaded in this process: gunicorn
+    forks worker processes, and CUDA cannot be re-initialised in a fork
+    ("Cannot re-initialize CUDA in forked subprocess"). The single-process
+    server keeps the loaded CUDA context usable.
     """
     host = host or API_HOST
     port = port or API_PORT
+
+    # Force single-process server (no fork) — mandatory with a pre-loaded
+    # CUDA model, and convenient for local single-user serving.
+    if os.environ.get('VRM_NO_GUNICORN', '').strip() in ('1', 'true', 'yes'):
+        logger.info("VRM_NO_GUNICORN set — using single-process Werkzeug server")
+        try:
+            app.run(host=host, port=port, debug=False,
+                    use_reloader=False, threaded=True)
+        except KeyboardInterrupt:
+            logger.info("Shutdown requested by user")
+        except Exception as e:
+            logger.critical("Fatal error: %s", e, exc_info=True)
+            sys.exit(1)
+        return
+
     try:
         from gunicorn.app.base import BaseApplication
 
