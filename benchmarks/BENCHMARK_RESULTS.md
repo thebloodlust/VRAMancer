@@ -517,6 +517,30 @@ The remaining 53x gap requires fusing the ~80 kernel launches per compress() cal
 | Custom CUDA kernel (fused WHT + polar encode + QJL) | 10-50x | High — recursive polar encode maps poorly to SIMT |
 | Reduce compression frequency (compress every N tokens) | N× | Medium — trades memory savings for speed |
 
+## Rust extension (`vramancer_rust`) — A/B vs CPU-staged Python (10 June 2026)
+
+`bench_kv_migration.py` measures the operation `vramancer_rust` actually accelerates:
+KV-cache page migration GPU 1 → GPU 0 during VRAM Lending Pool preemption (Strategy 1.5,
+`cuMemcpyPeerAsync` via PyO3, vs the pure-Python pinned-memory CPU-staged path).
+Hardware: RTX 3090 + RTX 5070 Ti, Proxmox VM (`can_device_access_peer` reports `False`,
+i.e. driver-level P2P claimed but unconfirmed by CUDA — see ReBAR section below).
+
+| Scenario | CPU-staged (Python) | Rust P2P | Speedup |
+|---|---|---|---|
+| 10 pages (30 MB) | 3.1 ms | 2.4 ms | +24.1% |
+| 50 pages (150 MB) | 11.5 ms | 7.2 ms | +37.4% |
+| 100 pages (300 MB) | 23.0 ms | 13.2 ms | +42.5% |
+| 300 pages (900 MB) | 69.7 ms | 37.1 ms | +46.7% |
+| 500 pages (1.5 GB) | 115.7 ms | 61.1 ms | **+47.2%** |
+
+**Decision (T2.2): Rust stays in core.** Every scenario clears the 10% threshold, and the
+gain grows with transfer size (24% → 47%) — exactly the regime that matters for lending-pool
+reclaim under long-context KV pressure. `rust_core/` and `core/transfer_manager.py` Strategy 1.5
+remain in the core package; `vramancer_rust` stays an optional build (maturin), with a
+pure-Python fallback when the wheel/extension isn't present (`core/rust_bridge.py`).
+
+Reproduce: `python benchmarks/bench_kv_migration.py` (requires 2 GPUs + `vramancer_rust` built).
+
 ## Reproduction
 
 ```bash
