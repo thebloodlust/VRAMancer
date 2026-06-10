@@ -1,0 +1,183 @@
+{
+  "gpu_topology": [
+    {
+      "index": 0,
+      "name": "NVIDIA GeForce RTX 3090",
+      "total_mb": 24576
+    },
+    {
+      "index": 1,
+      "name": "NVIDIA GeForce RTX 5070 Ti",
+      "total_mb": 16303
+    }
+  ],
+  "model": "Qwen/Qwen2.5-14B-Instruct",
+  "variants": [
+    {
+      "label": "baseline",
+      "kv_compression": "none",
+      "vram_pre_load": {
+        "gpu0": {
+          "used_mb": 464,
+          "total_mb": 24576
+        },
+        "gpu1": {
+          "used_mb": 476,
+          "total_mb": 16303
+        }
+      },
+      "load_time_s": 31.31,
+      "pool_active": true,
+      "pool_registered_gpus": [
+        {
+          "gpu_id": 0,
+          "device_name": "NVIDIA GeForce RTX 3090",
+          "lendable_bytes": 9099369370
+        },
+        {
+          "gpu_id": 1,
+          "device_name": "NVIDIA GeForce RTX 5070 Ti",
+          "lendable_bytes": 2838329140
+        }
+      ],
+      "stats_pre": {
+        "total_leases_created": 0,
+        "total_leases_reclaimed": 0,
+        "total_bytes_lent": 0,
+        "total_bytes_reclaimed": 0,
+        "preemptions_graceful": 0,
+        "preemptions_forced": 0,
+        "reclaim_avg_ms": 0.0,
+        "peak_lent_bytes": 0
+      },
+      "turboquant_active": false,
+      "vram_post_load": {
+        "gpu0": {
+          "used_mb": 19192,
+          "total_mb": 24576
+        },
+        "gpu1": {
+          "used_mb": 14314,
+          "total_mb": 16303
+        }
+      },
+      "tok_s": 2.47,
+      "total_tokens": 800,
+      "elapsed_s": 324.19,
+      "vram_post_gen": {
+        "gpu0": {
+          "used_mb": 20724,
+          "total_mb": 24576
+        },
+        "gpu1": {
+          "used_mb": 14334,
+          "total_mb": 16303
+        }
+      },
+      "stats_post": {
+        "total_leases_created": 0,
+        "total_leases_reclaimed": 0,
+        "total_bytes_lent": 0,
+        "total_bytes_reclaimed": 0,
+        "preemptions_graceful": 0,
+        "preemptions_forced": 0,
+        "reclaim_avg_ms": 0.0,
+        "peak_lent_bytes": 0
+      },
+      "pool_lendable_post": [
+        {
+          "gpu_id": 0,
+          "lendable_bytes": 9099369370
+        },
+        {
+          "gpu_id": 1,
+          "lendable_bytes": 2838329140
+        }
+      ],
+      "ok": true
+    },
+    {
+      "label": "turboquant",
+      "kv_compression": "turboquant",
+      "vram_pre_load": {
+        "gpu0": {
+          "used_mb": 464,
+          "total_mb": 24576
+        },
+        "gpu1": {
+          "used_mb": 476,
+          "total_mb": 16303
+        }
+      },
+      "load_time_s": 31.11,
+      "pool_active": true,
+      "pool_registered_gpus": [
+        {
+          "gpu_id": 0,
+          "device_name": "NVIDIA GeForce RTX 3090",
+          "lendable_bytes": 9099369370
+        },
+        {
+          "gpu_id": 1,
+          "device_name": "NVIDIA GeForce RTX 5070 Ti",
+          "lendable_bytes": 2838329140
+        }
+      ],
+      "stats_pre": {
+        "total_leases_created": 0,
+        "total_leases_reclaimed": 0,
+        "total_bytes_lent": 0,
+        "total_bytes_reclaimed": 0,
+        "preemptions_graceful": 0,
+        "preemptions_forced": 0,
+        "reclaim_avg_ms": 0.0,
+        "peak_lent_bytes": 0
+      },
+      "turboquant_active": true,
+      "vram_post_load": {
+        "gpu0": {
+          "used_mb": 15112,
+          "total_mb": 24576
+        },
+        "gpu1": {
+          "used_mb": 12794,
+          "total_mb": 16303
+        }
+      },
+      "tok_s": 2.42,
+      "total_tokens": 800,
+      "elapsed_s": 330.57,
+      "vram_post_gen": {
+        "gpu0": {
+          "used_mb": 16624,
+          "total_mb": 24576
+        },
+        "gpu1": {
+          "used_mb": 12814,
+          "total_mb": 16303
+        }
+      },
+      "stats_post": {
+        "total_leases_created": 0,
+        "total_leases_reclaimed": 0,
+        "total_bytes_lent": 0,
+        "total_bytes_reclaimed": 0,
+        "preemptions_graceful": 0,
+        "preemptions_forced": 0,
+        "reclaim_avg_ms": 0.0,
+        "peak_lent_bytes": 0
+      },
+      "pool_lendable_post": [
+        {
+          "gpu_id": 0,
+          "lendable_bytes": 9099369370
+        },
+        {
+          "gpu_id": 1,
+          "lendable_bytes": 2838329140
+        }
+      ],
+      "ok": true
+    }
+  ]
+}
