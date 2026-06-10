@@ -1462,6 +1462,14 @@ class InferencePipeline:
             self.paged_kv = None
 
         try:
+            _cb_backend_type = getattr(self.backend, 'backend_type', 'huggingface')
+            if _cb_backend_type in ('vllm', 'ollama', 'llamacpp'):
+                raise RuntimeError(
+                    f"ContinuousBatcher requires a HF-style model "
+                    f"(__call__(input_ids, past_key_values=..., use_cache=True)); "
+                    f"backend_type={_cb_backend_type!r} isn't compatible."
+                )
+
             from core.continuous_batcher import ContinuousBatcher
 
             model = self.backend.model if self.backend else None

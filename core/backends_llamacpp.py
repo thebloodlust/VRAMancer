@@ -187,6 +187,7 @@ class LlamaCppBackend(BaseLLMBackend):
             top_p=top_p,
             top_k=top_k,
             repeat_penalty=repeat_penalty,
+            stop=kwargs.get("stop"),
             echo=False,
         )
 
@@ -218,6 +219,7 @@ class LlamaCppBackend(BaseLLMBackend):
             top_p=top_p,
             top_k=top_k,
             repeat_penalty=repeat_penalty,
+            stop=kwargs.get("stop"),
             echo=False,
             stream=True,
         ):

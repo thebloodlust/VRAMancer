@@ -426,6 +426,12 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
         _registry.load(model_name)
         return None
 
+    @application.route('/chat', methods=['GET'])
+    def code_chat_ui():
+        """Minimal code/chat UI — single static page, talks to /v1/chat/completions."""
+        chat_html = Path(__file__).parent.parent / "dashboard" / "templates" / "code_chat.html"
+        return Response(chat_html.read_text(), mimetype="text/html")
+
     @application.route('/v1/completions', methods=['POST'])
     @application.route('/api/generate', methods=['POST'])
     def generate():
@@ -652,6 +658,7 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
                         max_new_tokens=params['max_tokens'],
                         temperature=params['temperature'],
                         top_p=params['top_p'],
+                        stop=["\nUser:", "\nSystem:"],
                     ):
                         chunk = {
                             "id": req_id,
@@ -691,6 +698,7 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
                     max_new_tokens=params['max_tokens'],
                     temperature=params['temperature'],
                     top_p=params['top_p'],
+                    stop=["\nUser:", "\nSystem:"],
                 )
 
             text, queue_err = _run_with_timeout(_do_chat)

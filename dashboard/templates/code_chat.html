@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>VRAMancer — Code Chat</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; height: 100vh; display: flex; flex-direction: column;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    background: #0d0d12; color: #e6e6e6;
+  }
+  header {
+    padding: 10px 16px; background: #15151c; border-bottom: 1px solid #2a2a35;
+    display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;
+  }
+  header .title { font-weight: 600; }
+  header .title span { color: #00d2ff; }
+  #status { font-family: monospace; font-size: 12px; color: #8a8a99; }
+  #messages {
+    flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px;
+  }
+  .msg { max-width: 85%; padding: 10px 14px; border-radius: 8px; white-space: pre-wrap; word-wrap: break-word; }
+  .msg.user { align-self: flex-end; background: rgba(0,210,255,0.10); border-left: 3px solid #00d2ff; }
+  .msg.assistant { align-self: flex-start; background: rgba(78,205,196,0.08); border-left: 3px solid #4ecdc4; }
+  .msg.system { align-self: center; color: #8a8a99; font-size: 12px; font-style: italic; }
+  .msg pre {
+    background: #0a0a0e; border: 1px solid #2a2a35; border-radius: 6px;
+    padding: 10px; overflow-x: auto; font-family: 'Cascadia Code', Consolas, monospace; font-size: 13px;
+  }
+  .msg code { font-family: 'Cascadia Code', Consolas, monospace; }
+  footer {
+    padding: 12px; background: #15151c; border-top: 1px solid #2a2a35;
+    display: flex; gap: 8px;
+  }
+  #prompt {
+    flex: 1; resize: vertical; min-height: 44px; max-height: 200px;
+    background: #0a0a0e; color: #e6e6e6; border: 1px solid #333; border-radius: 6px;
+    padding: 10px; font-family: 'Cascadia Code', Consolas, monospace; font-size: 14px;
+  }
+  #prompt:focus { outline: none; border-color: #00d2ff; }
+  button {
+    background: linear-gradient(135deg, #00d2ff, #3a7bd5); color: #06060a; border: none;
+    border-radius: 6px; padding: 0 20px; font-weight: 700; cursor: pointer;
+  }
+  button:disabled { opacity: 0.5; cursor: default; }
+  button.secondary { background: #2a2a35; color: #ccc; padding: 0 14px; }
+</style>
+</head>
+<body>
+  <header>
+    <div class="title"><span>VRAMancer</span> — Code Chat</div>
+    <div id="status">connecting…</div>
+    <button class="secondary" onclick="clearChat()">Clear</button>
+  </header>
+  <div id="messages"></div>
+  <footer>
+    <textarea id="prompt" placeholder="Ask for code, explanations, refactors… (Shift+Enter for newline)"></textarea>
+    <button id="send" onclick="send()">Send</button>
+  </footer>
+
+<script>
+const messagesEl = document.getElementById('messages');
+const promptEl = document.getElementById('prompt');
+const sendBtn = document.getElementById('send');
+const statusEl = document.getElementById('status');
+
+let history = [];
+let modelName = null;
+
+async function init() {
+  try {
+    const r = await fetch('/v1/models');
+    const data = await r.json();
+    if (data.data && data.data.length > 0) {
+      modelName = data.data[0].id;
+      statusEl.textContent = `model: ${modelName}`;
+    } else {
+      statusEl.textContent = 'no model loaded';
+    }
+  } catch (e) {
+    statusEl.textContent = 'API unreachable';
+  }
+}
+
+function escapeHtml(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// Render fenced ```code blocks``` as <pre><code>, rest as plain text.
+function renderContent(text) {
+  const parts = text.split(/```(\w*\n[\s\S]*?|[\s\S]*?)```/g);
+  let html = '';
+  parts.forEach((part, i) => {
+    if (i % 2 === 0) {
+      html += escapeHtml(part);
+    } else {
+      const firstNewline = part.indexOf('\n');
+      const code = firstNewline >= 0 ? part.slice(firstNewline + 1) : part;
+      html += `<pre><code>${escapeHtml(code)}</code></pre>`;
+    }
+  });
+  return html;
+}
+
+function addMessage(role, text) {
+  const div = document.createElement('div');
+  div.className = 'msg ' + role;
+  div.innerHTML = renderContent(text);
+  messagesEl.appendChild(div);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+  return div;
+}
+
+function clearChat() {
+  history = [];
+  messagesEl.innerHTML = '';
+  addMessage('system', 'Conversation cleared.');
+}
+
+async function send() {
+  const text = promptEl.value.trim();
+  if (!text) return;
+  promptEl.value = '';
+  sendBtn.disabled = true;
+  statusEl.textContent = 'generating…';
+
+  addMessage('user', text);
+  history.push({ role: 'user', content: text });
+
+  const replyDiv = addMessage('assistant', '…');
+
+  const t0 = performance.now();
+  try {
+    const r = await fetch('/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: modelName,
+        messages: history,
+        max_tokens: 1024,
+        temperature: 0.3,
+      }),
+    });
+    const data = await r.json();
+    if (data.error) throw new Error(data.error);
+    const reply = data.choices[0].message.content;
+    replyDiv.innerHTML = renderContent(reply);
+    history.push({ role: 'assistant', content: reply });
+
+    const dt = (performance.now() - t0) / 1000;
+    const tokens = data.usage?.completion_tokens;
+    statusEl.textContent = tokens
+      ? `model: ${modelName} | ${(tokens / dt).toFixed(1)} tok/s`
+      : `model: ${modelName}`;
+  } catch (e) {
+    replyDiv.innerHTML = `<span style="color:#ff6b6b">Error: ${escapeHtml(e.message)}</span>`;
+    statusEl.textContent = `model: ${modelName || '?'} | error`;
+  } finally {
+    sendBtn.disabled = false;
+  }
+}
+
+promptEl.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    send();
+  }
+});
+
+init();
+</script>
+</body>
+</html>
