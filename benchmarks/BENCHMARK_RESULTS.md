@@ -541,6 +541,35 @@ pure-Python fallback when the wheel/extension isn't present (`core/rust_bridge.p
 
 Reproduce: `python benchmarks/bench_kv_migration.py` (requires 2 GPUs + `vramancer_rust` built).
 
+## ReBAR + transfer strategies — A/B (10 June 2026)
+
+`bench_transfer_strategies.py` measures Strategy 4 (plain CPU-staged), Strategy 2
+(`PipelinedTransport`, double-buffered pinned memory) and Strategy 1.7 (`ReBarTransport`,
+BAR-optimal chunks) for GPU 1 → GPU 0, on the same RTX 3090 + RTX 5070 Ti Proxmox VM.
+
+| Size | CPU-staged | Pipelined (Strategy 2) | ReBAR (Strategy 1.7) |
+|---|---|---|---|
+| 1 MB | 0.4 Gbps | 5.5 Gbps | n/a |
+| 4 MB | 25.4 Gbps | 38.6 Gbps | n/a |
+| 16 MB | 30.1 Gbps | 127.3 Gbps | n/a |
+| 64 MB | 16.3 Gbps | 162.6 Gbps | n/a |
+| 256 MB | 16.2 Gbps | 174.3 Gbps | n/a |
+| 1024 MB | 16.2 Gbps | **178.0 Gbps** | n/a |
+
+`ReBarTransport.available = False` on this run: `detect_rebar()` reports BAR0 = 8 MB
+(GPU0) / 16 MB (GPU1) — legacy windows, below the 4 GB full-window threshold.
+
+**Decision (T2.3): ReBAR stays in `experimental/`.** `docs/reports/REBAR_PROXMOX_BENCHMARK.md`
+(May 2026) recorded BAR1 ≥ VRAM (32 GB / 16 GB) on a different Proxmox configuration and
+measured ~21-24 GB/s — but that configuration is not the one currently running, and
+`ReBarTransport` cannot be exercised here. Status: "designed, validated once under a
+different VM config, awaiting re-validation" per Fable T2.3. Note that `PipelinedTransport`
+(Strategy 2, same file) IS active and validated on this machine — it's the actual fallback
+`core/transfer_manager.py` uses when P2P/Rust/ReBAR aren't available, and explains most of
+the gap vs naive CPU-staged (178 vs 16 Gbps, +1000% at 1 GB).
+
+Reproduce: `VRM_EXPERIMENTAL=1 python benchmarks/bench_transfer_strategies.py`.
+
 ## Reproduction
 
 ```bash
