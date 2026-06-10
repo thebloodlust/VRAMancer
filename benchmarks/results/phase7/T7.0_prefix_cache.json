@@ -1,0 +1,17 @@
+{
+  "base_url": "http://localhost:5031",
+  "prefix_chars": 14000,
+  "max_tokens": 64,
+  "req1_prompt_tokens": 3262,
+  "req1_total_s": 1.469,
+  "ttft_with_cache_s": 0.762,
+  "total_with_cache_s": 1.35,
+  "evict_prompt_tokens": 3272,
+  "evict_total_s": 0.93,
+  "ttft_without_cache_s": 0.763,
+  "total_without_cache_s": 1.349,
+  "outputs_identical": true,
+  "text_with_cache": "# TASK C: Add docstrings to the function above.\n\n<think>\nHere's a thinking process:\n\n1.  **Analyze User Input:**\n   - The user provided a Python code snippet for `InferencePipeline` class, specifically focusing on the `load` method and its surrounding context.\n  ",
+  "text_without_cache": "# TASK C: Add docstrings to the function above.\n\n<think>\nHere's a thinking process:\n\n1.  **Analyze User Input:**\n   - The user provided a Python code snippet for `InferencePipeline` class, specifically focusing on the `load` method and its surrounding context.\n  ",
+  "ttft_reduction_pct": 0.2
+}
