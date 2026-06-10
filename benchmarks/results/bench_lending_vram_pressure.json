@@ -1,0 +1,98 @@
+{
+  "gpu_topology": [
+    {
+      "index": 0,
+      "name": "NVIDIA GeForce RTX 3090",
+      "total_mb": 24576
+    },
+    {
+      "index": 1,
+      "name": "NVIDIA GeForce RTX 5070 Ti",
+      "total_mb": 16303
+    }
+  ],
+  "model": "Qwen/Qwen2.5-14B-Instruct",
+  "variants": [
+    {
+      "label": "LENDING_ON",
+      "lending_enabled": true,
+      "filler_gpu": 1,
+      "filler_mb": 10000,
+      "vram_pre_filler": {
+        "gpu0": {
+          "used_mb": 464,
+          "total_mb": 24576
+        },
+        "gpu1": {
+          "used_mb": 476,
+          "total_mb": 16303
+        }
+      },
+      "vram_post_filler": {
+        "gpu0": {
+          "used_mb": 728,
+          "total_mb": 24576
+        },
+        "gpu1": {
+          "used_mb": 10706,
+          "total_mb": 16303
+        }
+      },
+      "ok": false,
+      "error": "CUDA out of memory. Tried to allocate 11.28 GiB. GPU 1 has a total capacity of 15.47 GiB of which 5.46 GiB is free. Including non-PyTorch memory, this process has 9.98 GiB memory in use. Of the allocated memory 9.77 GiB is allocated by PyTorch, and 2.00 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)",
+      "traceback": "Traceback (most recent call last):\n  File \"<string>\", line 77, in <module>\n  File \"/home/jeremie/VRAMancer/VRAMancer/core/inference_pipeline.py\", line 269, in load\n    self.backend.load_model(model_name, num_gpus=self.num_gpus, **model_kwargs)\n  File \"/home/jeremie/VRAMancer/VRAMancer/core/backends.py\", line 1380, in load_model\n    self.model = AutoModelForCausalLM.from_pretrained(model_name, **kwargs)\n                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/jeremie/VRAMancer/VRAMancer/.venv/lib/python3.12/site-packages/transformers/models/auto/auto_factory.py\", line 405, in from_pretrained\n    return model_class.from_pretrained(\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/jeremie/VRAMancer/VRAMancer/.venv/lib/python3.12/site-packages/transformers/modeling_utils.py\", line 4245, in from_pretrained\n    loading_info, disk_offload_index = cls._load_pretrained_model(model, state_dict, checkpoint_files, load_config)\n                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/jeremie/VRAMancer/VRAMancer/.venv/lib/python3.12/site-packages/transformers/modeling_utils.py\", line 4326, in _load_pretrained_model\n    caching_allocator_warmup(model, expanded_device_map, load_config.hf_quantizer)\n  File \"/home/jeremie/VRAMancer/VRAMancer/.venv/lib/python3.12/site-packages/transformers/modeling_utils.py\", line 4980, in caching_allocator_warmup\n    _ = torch.empty(int(byte_count // 2), dtype=torch.float16, device=device, requires_grad=False)\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\ntorch.OutOfMemoryError: CUDA out of memory. Tried to allocate 11.28 GiB. GPU 1 has a total capacity of 15.47 GiB of which 5.46 GiB is free. Including non-PyTorch memory, this process has 9.98 GiB memory in use. Of the allocated memory 9.77 GiB is allocated by PyTorch, and 2.00 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)\n"
+    },
+    {
+      "label": "LENDING_OFF",
+      "lending_enabled": false,
+      "filler_gpu": 1,
+      "filler_mb": 10000,
+      "vram_pre_filler": {
+        "gpu0": {
+          "used_mb": 464,
+          "total_mb": 24576
+        },
+        "gpu1": {
+          "used_mb": 476,
+          "total_mb": 16303
+        }
+      },
+      "vram_post_filler": {
+        "gpu0": {
+          "used_mb": 728,
+          "total_mb": 24576
+        },
+        "gpu1": {
+          "used_mb": 10706,
+          "total_mb": 16303
+        }
+      },
+      "load_time_s": 73.97,
+      "pool_active": false,
+      "vram_post_load": {
+        "gpu0": {
+          "used_mb": 19192,
+          "total_mb": 24576
+        },
+        "gpu1": {
+          "used_mb": 16154,
+          "total_mb": 16303
+        }
+      },
+      "tok_s": 1.03,
+      "total_tokens": 800,
+      "elapsed_s": 773.78,
+      "vram_post_gen": {
+        "gpu0": {
+          "used_mb": 20728,
+          "total_mb": 24576
+        },
+        "gpu1": {
+          "used_mb": 16188,
+          "total_mb": 16303
+        }
+      },
+      "ok": true
+    }
+  ]
+}
