@@ -443,7 +443,7 @@ class HierarchicalMemoryManager:
             self.log.info("VRAMLendingPool injected (L1↔L2 cooperative lending active)")
             return
         try:
-            from core.vram_lending import get_lending_pool
+            from experimental.vram_lending import get_lending_pool
             self._lending_pool = get_lending_pool()
             self.log.info("VRAMLendingPool connected (L1↔L2 cooperative lending active)")
         except Exception as e:

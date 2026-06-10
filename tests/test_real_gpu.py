@@ -101,7 +101,7 @@ class TestRealTensorOps:
 
     def test_hierarchical_memory_real_block(self):
         """HierarchicalMemory should track real tensor blocks."""
-        from core.hierarchical_memory import HierarchicalMemory
+        from experimental.hierarchical_memory import HierarchicalMemory
         hm = HierarchicalMemory(verbose=False)
 
         class FakeBlock:

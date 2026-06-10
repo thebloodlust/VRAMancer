@@ -534,7 +534,7 @@ class VRAMLendingPool:
                 score *= (1.0 - self.policy.cross_vendor_penalty)
                 # Bonus for ReBAR-capable cross-vendor GPUs (faster transfers)
                 try:
-                    from core.cross_vendor_bridge import detect_rebar
+                    from experimental.cross_vendor_bridge import detect_rebar
                     rebar_lender, _ = detect_rebar(gpu_id)
                     rebar_borrower, _ = detect_rebar(borrower_gpu)
                     if rebar_lender or rebar_borrower:

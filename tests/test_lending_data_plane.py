@@ -8,7 +8,7 @@ import os
 import pytest
 from unittest.mock import Mock, MagicMock, patch
 
-from core.vram_lending import VRAMLendingPool, VRAMLease, LeaseState, LendingPolicy
+from experimental.vram_lending import VRAMLendingPool, VRAMLease, LeaseState, LendingPolicy
 
 # Check if we're in minimal test mode
 _MINIMAL = os.environ.get('VRM_MINIMAL_TEST', '0') == '1'

@@ -239,7 +239,7 @@ class TestBlockReplicator:
 
 class TestWakeOnInference:
     def test_register_and_unregister(self):
-        from core.wake_on_inference import WakeOnInferenceManager
+        from experimental.wake_on_inference import WakeOnInferenceManager
         woi = WakeOnInferenceManager()
         woi.register_node("AA:BB:CC:DD:EE:FF")
         assert len(woi.known_macs) == 1
@@ -247,20 +247,20 @@ class TestWakeOnInference:
         assert len(woi.known_macs) == 0
 
     def test_wake_all_empty(self):
-        from core.wake_on_inference import WakeOnInferenceManager
+        from experimental.wake_on_inference import WakeOnInferenceManager
         woi = WakeOnInferenceManager()
         count = woi.wake_all()
         assert count == 0
 
     def test_stats(self):
-        from core.wake_on_inference import WakeOnInferenceManager
+        from experimental.wake_on_inference import WakeOnInferenceManager
         woi = WakeOnInferenceManager()
         woi.register_node("11:22:33:44:55:66")
         s = woi.stats
         assert s["registered_macs"] == 1
 
     def test_singleton(self):
-        from core.wake_on_inference import get_woi_manager
+        from experimental.wake_on_inference import get_woi_manager
         m1 = get_woi_manager()
         m2 = get_woi_manager()
         assert m1 is m2

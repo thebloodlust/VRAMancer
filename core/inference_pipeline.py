@@ -485,7 +485,7 @@ class InferencePipeline:
 
         # Wake on Inference - Dynamically pull nodes from sleep
         try:
-            from core.wake_on_inference import get_woi_manager
+            from experimental.wake_on_inference import get_woi_manager
             get_woi_manager().wake_all()
         except Exception as e:
             _logger.debug(f"Exception silencieuse dans l'exécution: {e}", exc_info=True)
@@ -1248,7 +1248,7 @@ class InferencePipeline:
     def _start_discovery(self):
         """Start cluster discovery in background."""
         try:
-            from core.network.cluster_discovery import ClusterDiscovery
+            from experimental.cluster_discovery import ClusterDiscovery
             self.discovery = ClusterDiscovery(heartbeat_interval=5)
             self.discovery.start()
             _logger.info("Cluster discovery started")
@@ -1574,7 +1574,7 @@ class InferencePipeline:
         to lend free VRAM as KV cache overflow to busy GPUs.
         """
         try:
-            from core.vram_lending import get_lending_pool, LendingPolicy
+            from experimental.vram_lending import get_lending_pool, LendingPolicy
 
             # [V6.B] buffer_prealloc_ratio=0.0 — the pool used to register at
             # step 13 (post-load) when GPUs were already filled, so a 100 %
@@ -1633,7 +1633,7 @@ class InferencePipeline:
         L1↔L2 GPU memory lending with auto-reclaim.
         """
         try:
-            from core.hierarchical_memory import HierarchicalMemoryManager
+            from experimental.hierarchical_memory import HierarchicalMemoryManager
             self.hierarchical_memory = HierarchicalMemoryManager(
                 lending_pool=self.lending_pool,
             )

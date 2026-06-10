@@ -45,16 +45,26 @@ CORE_MODULES = [
     "core.benchmark",
     "core.continuous_batcher",
     "core.paged_attention",
-    "core.vram_lending",
-    "core.hierarchical_memory",
     "core.hetero_config",
-    "core.cross_vendor_bridge",
     "core.cross_node",
     "core.speculative_decoding",
-    "core.wake_on_inference",
     "core.transport_factory",
     "core.webgpu_backend",
     "core.production_api",
+]
+
+# Modules in experimental/: unvalidated on real hardware, unstable APIs.
+# Must still import cleanly (with VRM_EXPERIMENTAL=1 to silence the warning).
+EXPERIMENTAL_MODULES = [
+    "experimental.vram_lending",
+    "experimental.hierarchical_memory",
+    "experimental.cross_vendor_bridge",
+    "experimental.wake_on_inference",
+    "experimental.aitp_protocol",
+    "experimental.aitp_fec",
+    "experimental.nat_traversal",
+    "experimental.fibre_fastpath",
+    "experimental.cluster_discovery",
 ]
 
 NETWORK_MODULES = [
@@ -69,6 +79,14 @@ SECURITY_MODULES = [
 @pytest.mark.parametrize("module", CORE_MODULES)
 def test_core_import(module):
     """Each core module must import without raising."""
+    mod = importlib.import_module(module)
+    assert mod is not None
+
+
+@pytest.mark.parametrize("module", EXPERIMENTAL_MODULES)
+def test_experimental_import(module, monkeypatch):
+    """Experimental modules must still import cleanly behind the flag."""
+    monkeypatch.setenv("VRM_EXPERIMENTAL", "1")
     mod = importlib.import_module(module)
     assert mod is not None
 

@@ -236,7 +236,7 @@ def setup_pinning(compute_gpu: int, lender_gpu: int, lend_bytes: int) -> dict:
 
     # 3. Lending pool (no preallocation — manual materialise on the lender only).
     try:
-        from core.vram_lending import VRAMLendingPool, LendingPolicy
+        from experimental.vram_lending import VRAMLendingPool, LendingPolicy
     except Exception as e:
         print(f"  [V6.E] Cannot import VRAMLendingPool: {e}")
         return metrics

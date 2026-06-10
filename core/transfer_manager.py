@@ -51,7 +51,7 @@ except Exception:
 
 # Cross-vendor bridge (AMD ↔ NVIDIA)
 try:
-    from core.cross_vendor_bridge import (
+    from experimental.cross_vendor_bridge import (
         CrossVendorBridge, CrossVendorMethod, CrossVendorResult,
         detect_gpu_vendor, GPUVendor, is_consumer_gpu as _xv_is_consumer,
         get_cross_vendor_bridge,
@@ -215,7 +215,7 @@ class TransferManager:
             # Initialize ReBAR full-window transport (BAR > 4 GB)
             if _XVENDOR_AVAILABLE:
                 try:
-                    from core.cross_vendor_bridge import ReBarTransport
+                    from experimental.cross_vendor_bridge import ReBarTransport
                     self._rebar_transport = ReBarTransport()
                     if self._rebar_transport.available:
                         rebar_info = self._rebar_transport.info()
@@ -633,7 +633,7 @@ class TransferManager:
         # sequential CPU staging (~26 GB/s vs ~12 GB/s measured).
         if not self._can_p2p(source_gpu, target_gpu):
             try:
-                from core.cross_vendor_bridge import PipelinedTransport
+                from experimental.cross_vendor_bridge import PipelinedTransport
                 chunk = 8 * 1024 * 1024  # 8 MB default (no ReBAR)
                 pipeline = PipelinedTransport(chunk_bytes=chunk)
                 output, xv_result = pipeline.transfer(

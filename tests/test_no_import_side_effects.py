@@ -23,7 +23,7 @@ def _count_threads_named(prefix: str) -> int:
 
 def test_registry_import_starts_no_discovery():
     for m in list(sys.modules):
-        if m.startswith("core.api.registry") or m.startswith("core.network.cluster_discovery"):
+        if m.startswith("core.api.registry") or m.startswith("experimental.cluster_discovery"):
             sys.modules.pop(m, None)
     from core.api.registry import PipelineRegistry
     r = PipelineRegistry()

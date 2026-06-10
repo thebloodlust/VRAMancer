@@ -14,7 +14,7 @@ Strategies:
 Integrates with:
   - ``core.network.connectome.global_connectome`` for health scores
   - ``core.network.aitp_sensing.AITPSensor`` for peer liveness
-  - ``core.network.aitp_protocol.AITPProtocol`` for actual transport
+  - ``experimental.aitp_protocol.AITPProtocol`` for actual transport
 
 Environment:
   - ``VRM_ANYCAST_STRATEGY``: ``weighted`` (default), ``least_latency``, ``round_robin``

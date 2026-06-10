@@ -7,7 +7,7 @@ into N data shards + 1 XOR parity shard. Can reconstruct any single
 missing shard from the remaining shards + parity.
 
 Single fault tolerance only (1 lost shard). For multi-fault tolerance,
-use ``core.network.aitp_fec.FastFEC`` which implements real GF(2^8)
+use ``experimental.aitp_fec.FastFEC`` which implements real GF(2^8)
 Cauchy Reed-Solomon (up to ``parity_shards`` simultaneous losses).
 
 Uses Rust native (vramancer_rust) or C++ (swarm_core) SIMD-accelerated

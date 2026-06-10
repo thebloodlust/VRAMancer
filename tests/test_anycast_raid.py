@@ -268,7 +268,7 @@ class TestNetworkRAID:
             NetworkRAID, RaidShardInfo,
             _pack_shard_header, _unpack_shard_header, _make_raid_id,
         )
-        from core.network.aitp_fec import FastFEC
+        from experimental.aitp_fec import FastFEC
 
         original = os.urandom(1000)
         d_shards = 4
@@ -359,7 +359,7 @@ class TestAITPProtocolIntegration:
 
     def test_send_balanced_no_nodes(self):
         """send_balanced should return False when no nodes available."""
-        from core.network.aitp_protocol import AITPProtocol
+        from experimental.aitp_protocol import AITPProtocol
         proto = AITPProtocol(port=0)
         # Reset global balancer to empty
         import core.network.anycast_balancer as ab
@@ -374,7 +374,7 @@ class TestAITPProtocolIntegration:
 
     def test_send_raid_import_works(self):
         """send_raid method exists and handles no-targets gracefully."""
-        from core.network.aitp_protocol import AITPProtocol
+        from experimental.aitp_protocol import AITPProtocol
         proto = AITPProtocol(port=0)
         # Reset balancer
         import core.network.anycast_balancer as ab

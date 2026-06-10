@@ -31,7 +31,7 @@ import threading
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from core.hierarchical_memory import Tier, HierarchicalMemoryManager
+from experimental.hierarchical_memory import Tier, HierarchicalMemoryManager
 try:
     import builtins
     if not hasattr(builtins, '_hmm'):
@@ -50,7 +50,7 @@ except Exception:
 
 from typing import TYPE_CHECKING
 try:
-    from core.hierarchical_memory import Tier
+    from experimental.hierarchical_memory import Tier
 except ImportError:
     Tier = str
 
@@ -357,7 +357,7 @@ class PagedKVCacheManager:
     def _init_lending_pool(self) -> None:
         """Connect to the VRAMLendingPool for overflow pages."""
         try:
-            from core.vram_lending import get_lending_pool
+            from experimental.vram_lending import get_lending_pool
             self._lending_pool = get_lending_pool()
             _logger.debug("Connected to VRAMLendingPool for overflow")
         except Exception:

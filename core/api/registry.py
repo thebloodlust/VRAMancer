@@ -30,7 +30,7 @@ class PipelineRegistry:
         # Enable explicitly with VRM_CLUSTER_AUTO_DISCOVER=1.
         if os.environ.get("VRM_CLUSTER_AUTO_DISCOVER", "").lower() in ("1", "true", "yes"):
             try:
-                from core.network.cluster_discovery import ClusterDiscovery
+                from experimental.cluster_discovery import ClusterDiscovery
                 self.discovery = ClusterDiscovery(heartbeat_interval=5)
                 self.discovery.start()
             except ImportError:
@@ -92,7 +92,7 @@ class PipelineRegistry:
 
     def generate(self, prompt: str, **kwargs) -> str:
         try:
-            from core.wake_on_inference import get_woi_manager
+            from experimental.wake_on_inference import get_woi_manager
             get_woi_manager().wake_all()
         except ImportError:
             pass
@@ -106,7 +106,7 @@ class PipelineRegistry:
     def generate_stream(self, prompt: str, **kwargs):
         """Yield tokens for streaming. Falls back to word-level split."""
         try:
-            from core.wake_on_inference import get_woi_manager
+            from experimental.wake_on_inference import get_woi_manager
             get_woi_manager().wake_all()
         except ImportError:
             pass

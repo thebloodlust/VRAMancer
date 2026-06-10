@@ -67,7 +67,7 @@ _NUM_EXPERTS: int = 0
 _TOPK_PCT: float = 20.0
 _LENDER_GPU: int = 1
 _COMPUTE_GPU: int = 0
-_LENDING_POOL = None  # core.vram_lending.VRAMLendingPool
+_LENDING_POOL = None  # experimental.vram_lending.VRAMLendingPool
 _LENDING_LEASE = None  # VRAMLease
 
 # B-2: staging mode controls per-call behaviour.
@@ -193,7 +193,7 @@ def install(
 
     Args:
         histogram_path: path to ``qwen3_coder_expert_histogram.json``
-        lending_pool: ``core.vram_lending.VRAMLendingPool`` instance (post-register)
+        lending_pool: ``experimental.vram_lending.VRAMLendingPool`` instance (post-register)
         lending_lease: an active ``VRAMLease`` whose ``tensor_ref`` is the flat
             staging buffer on the lender GPU.
         compute_gpu: physical GPU index for compute (logical cuda device used

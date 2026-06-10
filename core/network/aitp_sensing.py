@@ -83,7 +83,7 @@ class AITPSensor:
 
     def _init_nat_traversal(self):
         try:
-            from core.network.nat_traversal import NATTraversal
+            from experimental.nat_traversal import NATTraversal
             self._nat = NATTraversal()
             self._external_info = self._nat.discover_external()
             if not self._external_info.get("ipv6") and not self._nat.has_ipv6():

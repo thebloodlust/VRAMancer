@@ -443,7 +443,7 @@ def _cmd_discover(args):
     print("Network Node Discovery")
     print("-" * 40)
     try:
-        from core.network.cluster_discovery import ClusterDiscovery
+        from experimental.cluster_discovery import ClusterDiscovery
         import time
         disc = ClusterDiscovery(heartbeat_interval=2)
         disc.start()

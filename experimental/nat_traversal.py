@@ -274,7 +274,7 @@ class NATTraversal:
 
         # Probe packet: AITP header with empty payload + HMAC
         import hmac as _hmac, hashlib as _hl
-        from core.network.aitp_protocol import AITP_HEADER_FORMAT, AITP_MAGIC
+        from experimental.aitp_protocol import AITP_HEADER_FORMAT, AITP_MAGIC
         probe_header = struct.pack(AITP_HEADER_FORMAT, AITP_MAGIC, 1, 0x01, 0, 0)
         secret = os.environ.get("VRM_CLUSTER_SECRET", os.environ.get("VRM_API_TOKEN", "default_secret")).encode()
         sig = _hmac.new(secret, probe_header, _hl.sha256).digest()

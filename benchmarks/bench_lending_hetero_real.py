@@ -90,7 +90,7 @@ def _run_variant(
     """Run one A/B variant in an isolated subprocess.
 
     Subprocess isolation is mandatory: torch.cuda caches device state at first
-    init, and the lending pool registers a singleton inside ``core.vram_lending``.
+    init, and the lending pool registers a singleton inside ``experimental.vram_lending``.
     Running both variants in the same Python process would leak the singleton
     across A and B.
     """

@@ -58,7 +58,7 @@ from core.metrics import (
 )
 from core.utils import enumerate_devices
 from core.tracing import start_tracing
-from core.hierarchical_memory import HierarchicalMemoryManager
+from experimental.hierarchical_memory import HierarchicalMemoryManager
 from core.network.network_transport import (
     open_low_latency_channel,
     detect_fast_interfaces,

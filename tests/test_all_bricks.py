@@ -31,7 +31,7 @@ class TestHierarchicalMemory:
     @pytest.fixture
     def hmem(self, tmp_path):
         os.environ["VRM_AUTOSAVE_MEMORY"] = "0"  # disable autosave thread
-        from core.hierarchical_memory import HierarchicalMemoryManager
+        from experimental.hierarchical_memory import HierarchicalMemoryManager
         return HierarchicalMemoryManager(nvme_dir=str(tmp_path / "nvme"), max_nvme_mb=256)
 
     @pytest.fixture
@@ -159,7 +159,7 @@ class TestHierarchicalMemory:
 
         # Load into fresh instance
         os.environ["VRM_AUTOSAVE_MEMORY"] = "0"
-        from core.hierarchical_memory import HierarchicalMemoryManager
+        from experimental.hierarchical_memory import HierarchicalMemoryManager
         hmem2 = HierarchicalMemoryManager(nvme_dir=str(tmp_path / "nvme2"))
         assert hmem2.load_state(state_path)
         assert hmem2.get_tier(block.id) == "L2"

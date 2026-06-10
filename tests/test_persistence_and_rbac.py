@@ -1,5 +1,5 @@
 import os, time
-from core.hierarchical_memory import HierarchicalMemoryManager
+from experimental.hierarchical_memory import HierarchicalMemoryManager
 from core.memory_block import MemoryBlock
 from core.network.supervision_api import app
 os.environ['VRM_DISABLE_RATE_LIMIT'] = '1'

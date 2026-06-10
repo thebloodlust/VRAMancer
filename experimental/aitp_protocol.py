@@ -117,7 +117,7 @@ class AITPProtocol:
     def enable_fec(self, data_shards: int = 10, parity_shards: int = 2):
         """Enable FEC protection on outgoing packets."""
         try:
-            from core.network.aitp_fec import FastFEC
+            from experimental.aitp_fec import FastFEC
             self._fec = FastFEC(data_shards=data_shards, parity_shards=parity_shards)
             logger.info(f"AITP FEC enabled: {data_shards}+{parity_shards} RS GF(2^8)")
         except Exception as e:

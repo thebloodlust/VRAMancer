@@ -670,7 +670,7 @@ async def health():
 @app.get("/v1/cluster")
 async def cluster_info():
     """Return local node info + all discovered cluster peers."""
-    from core.network.cluster_discovery import get_local_info
+    from experimental.cluster_discovery import get_local_info
     local = get_local_info()
     # Enrich with live VRAM usage
     try:
@@ -854,7 +854,7 @@ def main():
     # Start cluster discovery
     global _discovery
     try:
-        from core.network.cluster_discovery import ClusterDiscovery
+        from experimental.cluster_discovery import ClusterDiscovery
         _discovery = ClusterDiscovery(port=args.port)
         _discovery.start()
         log.info("Cluster discovery started (mDNS port=%d)", args.port)

@@ -25,26 +25,26 @@ class TestFastFEC:
     """GF(2^8) Reed-Solomon encoder/decoder."""
 
     def _make_fec(self, d=4, p=2):
-        from core.network.aitp_fec import FastFEC
+        from experimental.aitp_fec import FastFEC
         return FastFEC(data_shards=d, parity_shards=p)
 
     def test_gf_mul_identity(self):
-        from core.network.aitp_fec import gf_mul
+        from experimental.aitp_fec import gf_mul
         assert gf_mul(1, 42) == 42
         assert gf_mul(42, 1) == 42
 
     def test_gf_mul_zero(self):
-        from core.network.aitp_fec import gf_mul
+        from experimental.aitp_fec import gf_mul
         assert gf_mul(0, 42) == 0
         assert gf_mul(42, 0) == 0
 
     def test_gf_div_inverse(self):
-        from core.network.aitp_fec import gf_mul, gf_div
+        from experimental.aitp_fec import gf_mul, gf_div
         for a in (1, 7, 42, 200, 255):
             assert gf_div(gf_mul(a, 37), 37) == a
 
     def test_gf_inv_zero_raises(self):
-        from core.network.aitp_fec import gf_inv
+        from experimental.aitp_fec import gf_inv
         with pytest.raises(ZeroDivisionError):
             gf_inv(0)
 
@@ -115,7 +115,7 @@ class TestAITPProtocol:
         return os.environ.get("VRM_API_TOKEN", "testtoken").encode("utf-8")
 
     def test_create_parse_roundtrip(self):
-        from core.network.aitp_protocol import AITPProtocol
+        from experimental.aitp_protocol import AITPProtocol
         proto = AITPProtocol.__new__(AITPProtocol)
         proto._fec = None
         proto._recv_running = False
@@ -130,7 +130,7 @@ class TestAITPProtocol:
         assert parsed["version"] == 1
 
     def test_hmac_tampering_rejected(self):
-        from core.network.aitp_protocol import AITPProtocol
+        from experimental.aitp_protocol import AITPProtocol
         proto = AITPProtocol.__new__(AITPProtocol)
         proto._fec = None
         proto._recv_running = False
@@ -145,7 +145,7 @@ class TestAITPProtocol:
             proto.parse_packet(tampered)
 
     def test_truncated_packet_rejected(self):
-        from core.network.aitp_protocol import AITPProtocol
+        from experimental.aitp_protocol import AITPProtocol
         proto = AITPProtocol.__new__(AITPProtocol)
         proto._fec = None
         proto._recv_running = False
@@ -154,13 +154,13 @@ class TestAITPProtocol:
             proto.parse_packet(b"tiny")
 
     def test_flag_bits(self):
-        from core.network.aitp_protocol import FLAG_FEC, FLAG_COMPRESSED, FLAG_PRIORITY
+        from experimental.aitp_protocol import FLAG_FEC, FLAG_COMPRESSED, FLAG_PRIORITY
         assert FLAG_FEC == 0x01
         assert FLAG_COMPRESSED == 0x02
         assert FLAG_PRIORITY == 0x04
 
     def test_fec_enable(self):
-        from core.network.aitp_protocol import AITPProtocol
+        from experimental.aitp_protocol import AITPProtocol
         proto = AITPProtocol.__new__(AITPProtocol)
         proto._fec = None
         proto._recv_running = False

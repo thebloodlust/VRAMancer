@@ -256,7 +256,7 @@ class TestHierarchicalMemoryTransport:
     """Test that HierarchicalMemoryManager uses transport layer."""
 
     def test_migrate_signature_accepts_tensor(self):
-        from core.hierarchical_memory import HierarchicalMemoryManager
+        from experimental.hierarchical_memory import HierarchicalMemoryManager
         from core.memory_block import MemoryBlock
         hmm = HierarchicalMemoryManager()
         block = MemoryBlock(size_mb=100, gpu_id=0)
@@ -266,7 +266,7 @@ class TestHierarchicalMemoryTransport:
         assert hmm.get_tier(block.id) == "L3"
 
     def test_migrate_returns_tensor(self):
-        from core.hierarchical_memory import HierarchicalMemoryManager
+        from experimental.hierarchical_memory import HierarchicalMemoryManager
         from core.memory_block import MemoryBlock
         hmm = HierarchicalMemoryManager()
         block = MemoryBlock(size_mb=50, gpu_id=0)
@@ -276,7 +276,7 @@ class TestHierarchicalMemoryTransport:
         assert result == dummy_tensor  # Should pass through in stub mode
 
     def test_migrate_same_tier_noop(self):
-        from core.hierarchical_memory import HierarchicalMemoryManager
+        from experimental.hierarchical_memory import HierarchicalMemoryManager
         from core.memory_block import MemoryBlock
         hmm = HierarchicalMemoryManager()
         block = MemoryBlock(size_mb=50, gpu_id=0)

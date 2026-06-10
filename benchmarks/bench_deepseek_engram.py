@@ -261,7 +261,7 @@ def setup_lending_pool(compute_gpu: int, lender_gpu: int, lend_bytes: int) -> di
         "compute_info": {},
     }
     try:
-        from core.vram_lending import VRAMLendingPool, LendingPolicy
+        from experimental.vram_lending import VRAMLendingPool, LendingPolicy
 
         # Gather hardware info
         c_info = gpu_info(compute_gpu)

@@ -184,7 +184,7 @@ def gpu_detailed_health() -> Dict[str, Any]:
 def lending_pool_status() -> Dict[str, Any]:
     """VRAM lending pool status."""
     try:
-        from core.vram_lending import get_lending_pool
+        from experimental.vram_lending import get_lending_pool
         pool = get_lending_pool()
         return pool.stats()
     except Exception:
@@ -218,7 +218,7 @@ def transfer_status() -> Dict[str, Any]:
 def cross_vendor_status() -> Dict[str, Any]:
     """Cross-vendor bridge status."""
     try:
-        from core.cross_vendor_bridge import get_cross_vendor_bridge
+        from experimental.cross_vendor_bridge import get_cross_vendor_bridge
         bridge = get_cross_vendor_bridge()
         return bridge.stats()
     except Exception:

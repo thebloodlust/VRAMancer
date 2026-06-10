@@ -1,4 +1,4 @@
-from core.hierarchical_memory import HierarchicalMemoryManager
+from experimental.hierarchical_memory import HierarchicalMemoryManager
 from core.memory_block import MemoryBlock
 from core.metrics import MEMORY_PROMOTIONS, MEMORY_DEMOTIONS, counter_value
 

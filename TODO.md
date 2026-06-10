@@ -70,7 +70,7 @@ Session 2026-05-11 (suite 2 — "fais au mieux") :
 - [x] ~~**Quantization auto-pick** selon GPU~~ *(S)* — fait via `core/auto_detect.recommend_quantization()` + `VRM_QUANTIZATION=auto` câblé dans HuggingFaceBackend
 - [ ] **Auto-tune `cpu_offload_gb`** en fonction de `model_size + max_model_len + free_vram`. *(M)*
 - [x] ~~**Hot-plug GPU/RAM**~~ *(M)* — fait : `invalidate_device_cache()` + détection auto via `_LOGICAL_MAPPING_DEVICE_COUNT` dans `core/utils.py`
-- [ ] **Détection ReBAR** dans `core/cross_vendor_bridge.py` : déjà détecté, pas exploité — câbler à `transfer_manager` Strategy 1.5. *(L)*
+- [ ] **Détection ReBAR** dans `experimental/cross_vendor_bridge.py` : déjà détecté, pas exploité — câbler à `transfer_manager` Strategy 1.5. *(L)*
 - [x] ~~**VM Proxmox détection auto**~~ *(S)* — fait via `core/auto_detect.detect_virtualization()` + `should_disable_p2p()` câblé dans `TransferManager`
 
 ---
