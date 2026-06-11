@@ -1,0 +1,14 @@
+{
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "boundary_layer_idx": 12,
+  "boundary_devices": [
+    "0",
+    "1"
+  ],
+  "n_decode_steps": 99,
+  "n_r_values": 98,
+  "r_min": 0.5543760980197817,
+  "r_median": 0.8788896080988996,
+  "r_max": 1.2510590471754508,
+  "verdict": "FERME"
+}
