@@ -148,6 +148,14 @@ class _Flags:
     def SPEC_WINDOW(self) -> int:
         return _int("VRM_SPEC_WINDOW", 32)
 
+    @property
+    def PROMPT_LOOKUP(self) -> int:
+        """N-gram prompt lookup decoding (transformers
+        ``prompt_lookup_num_tokens``). 0 = disabled, 10 recommended.
+        Lossless: candidate tokens copied from the prompt are verified by
+        the model itself before being accepted (T7.1)."""
+        return _int("VRM_PROMPT_LOOKUP", 0)
+
     # ── TurboEngine / CUDA graphs ─────────────────────────────────────
     @property
     def DISABLE_TURBO(self) -> bool:
@@ -509,6 +517,7 @@ _KNOWN_FLAGS: dict[str, tuple[str, str]] = {
     "VRM_QUANTIZATION":         ("backend", "Quantization mode (nvfp4|nf4|int8|gptq|awq|empty)."),
     "VRM_TRUST_REMOTE_CODE":    ("backend", "Pass trust_remote_code=True to HF."),
     "VRM_DRAFT_MODEL":          ("backend", "Speculative decoding draft model id."),
+    "VRM_PROMPT_LOOKUP":        ("backend", "N-gram prompt lookup decoding (prompt_lookup_num_tokens). 0=off, 10 recommended."),
     "VRM_FORCE_BASIC_TOKENIZER": ("backend", "Use BasicTokenizer fallback."),
     "VRM_TOKENIZER_WORKERS":    ("backend", "Tokenizer thread pool size."),
     "VRM_DISABLE_ONNX":         ("backend", "Disable ONNX export pathway."),

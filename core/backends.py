@@ -1902,6 +1902,13 @@ class HuggingFaceBackend(BaseLLMBackend):
             # avoid regressions with custom GenerationConfig objects.
             gen_kwargs.setdefault("use_cache", True)
 
+            # T7.1: n-gram prompt lookup decoding (lossless candidate
+            # generation from the prompt itself, verified by the model —
+            # no draft model needed). VRM_PROMPT_LOOKUP=N (0=off).
+            _lookup_n = int(os.environ.get("VRM_PROMPT_LOOKUP", "0"))
+            if _lookup_n > 0 and "prompt_lookup_num_tokens" not in gen_kwargs:
+                gen_kwargs["prompt_lookup_num_tokens"] = _lookup_n
+
             out_ids = self.model.generate(
                 input_ids=input_ids,
                 attention_mask=attention_mask,

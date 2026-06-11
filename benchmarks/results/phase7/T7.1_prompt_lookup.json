@@ -1,0 +1,57 @@
+{
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "num_gpus": 1,
+  "max_new": 256,
+  "lookup_n": 10,
+  "n_prompts": 3,
+  "variants": [
+    {
+      "label": "LOOKUP_OFF",
+      "results": [
+        {
+          "prompt_idx": 0,
+          "output": "```python\n\"\"\"VRAMancer Inference Pipeline \u2014 the conductor that wires all components.\n\nThis module connects:\n  - Backend (HuggingFace / vLLM / Ollama) \u2192 model loading + text generation\n  - Scheduler \u2192 VRAM-aware block allocation\n  - ModelSplitter \u2192 multi-GPU model partitioning\n  - TransferManager \u2192 GPU-to-GPU activation transfer\n  - StreamManager \u2192 layer prefetching and swapping\n  - ComputeEngine \u2192 layer execution with profiling\n  - ClusterDiscovery \u2192 network node detection\n  - Metrics \u2192 Prometheus instrumentation\n\nUsage:\n    pipeline = InferencePipeline()\n    pipeline.load(\"gpt2\", num_gpus=2)\n    result = pipeline.generate(\"Hello, world!\", max_new_tokens=50)\n    pipeline.shutdown()\n\n    # Or via the global singleton:\n    from core.inference_pipeline import get_pipeline\n    pipe = get_pipeline()\n    pipe.load(\"gpt2\")\n    logger.info(pipe.generate(\"Once upon a time\"))\n\"\"\"\n\nfrom __future__ import annotations\n\nimport os\nimport sys\nimport time\nimport logging\nimport threading\nfrom typing import Any, Dict, List, Optional\nfrom contextlib import contextmanager\n\ntry:\n    from core.env_flags import flags as _",
+          "elapsed_s": 10.388,
+          "tok_s": 24.64
+        },
+        {
+          "prompt_idx": 1,
+          "output": "```python\n\"\"\"Unified LLM backend abstraction.\n\nProvides:\n- Factory ``select_backend()`` with fallback stub (``VRM_BACKEND_ALLOW_STUB=1``).\n- ``HuggingFaceBackend``: real model loading, VRAM-proportional multi-GPU split\n  via ``model_splitter``, sequential block inference with ``TransferManager``.\n  Supports KV-cache for efficient multi-GPU auto-regressive generation.\n- ``vLLMBackend`` / ``OllamaBackend``: real integration if lib present, stub otherwise.\n\"\"\"\nfrom abc import ABC, abstractmethod\nfrom typing import Any, List, Optional\nimport os\nimport sys\nimport logging\nlogger = logging.getLogger(__name__)\n\nfrom core.logger import LoggerAdapter\n\n_MINIMAL = os.environ.get(\"VRM_MINIMAL_TEST\", \"\")\n\n# Defensive torch import (optional dependency)\ntry:\n    import torch as _torch  # noqa: F401\n    import torch.nn as _nn  # noqa: F401\n    _HAS_TORCH = True\nexcept ImportError:\n    _torch = None  # type: ignore\n    _nn = None  # type: ignore\n    _HAS_TORCH = False\n\n# Fused Triton sampling (",
+          "elapsed_s": 9.702,
+          "tok_s": 26.39
+        },
+        {
+          "prompt_idx": 2,
+          "output": "```python\n\"\"\"Thread-safe Pipeline Registry for VRAMancer.\n\nCentralizes model lifecycle (load / shutdown / generate / infer)\nbehind a reentrant lock so concurrent Flask requests are safe.\n\"\"\"\nfrom __future__ import annotations\n\nimport logging\nimport os\nimport threading\nfrom typing import Any, Optional\n\n_logger = logging.getLogger(\"vramancer.registry\")\n\n\nclass PipelineRegistry:\n    \"\"\"Thread-safe singleton registry for the inference pipeline.\n\n    All access to the pipeline goes through this class, which holds a\n    reentrant lock to protect load/shutdown/access operations.\n    \"\"\"\n\n    def __init__(self):\n        self._lock = threading.RLock()\n        self._pipeline = None\n        self.discovery = None\n\n        # Cluster discovery is opt-in: starting it broadcasts UDP packets and\n        # spawns background threads, which is undesirable in tests / CLI tools.\n        # Enable explicitly with VRM_CLUSTER_AUTO_DISCOVER=1.\n        if os.environ.get(\"VRM_CLUSTER_AUTO_DISCOVER\", \"\").lower() in (\"1\", \"true\", \"yes\"):\n            try:\n                from experimental.cluster_discovery import ClusterDiscovery\n                self.discovery = ClusterDiscovery(heartbeat_interval=5)\n                self.discovery.start()\n            except ImportError:\n                pass\n\n",
+          "elapsed_s": 9.667,
+          "tok_s": 26.48
+        }
+      ],
+      "ok": true
+    },
+    {
+      "label": "LOOKUP_ON",
+      "results": [
+        {
+          "prompt_idx": 0,
+          "output": "```python\n\"\"\"VRAMancer Inference Pipeline \u2014 the conductor that wires all components.\n\nThis module connects:\n  - Backend (HuggingFace / vLLM / Ollama) \u2192 model loading + text generation\n  - Scheduler \u2192 VRAM-aware block allocation\n  - ModelSplitter \u2192 multi-GPU model partitioning\n  - TransferManager \u2192 GPU-to-GPU activation transfer\n  - StreamManager \u2192 layer prefetching and swapping\n  - ComputeEngine \u2192 layer execution with profiling\n  - ClusterDiscovery \u2192 network node detection\n  - Metrics \u2192 Prometheus instrumentation\n\nUsage:\n    pipeline = InferencePipeline()\n    pipeline.load(\"gpt2\", num_gpus=2)\n    result = pipeline.generate(\"Hello, world!\", max_new_tokens=50)\n    pipeline.shutdown()\n\n    # Or via the global singleton:\n    from core.inference_pipeline import get_pipeline\n    pipe = get_pipeline()\n    pipe.load(\"gpt2\")\n    logger.info(pipe.generate(\"Once upon a time\"))\n\"\"\"\n\nfrom __future__ import annotations\n\nimport os\nimport sys\nimport time\nimport logging\nimport threading\nfrom typing import Any, Dict, List, Optional\nfrom contextlib import contextmanager\n\ntry:\n    from core.env_flags import flags as _flags\nexcept ImportError:\n",
+          "elapsed_s": 2.454,
+          "tok_s": 104.33
+        },
+        {
+          "prompt_idx": 1,
+          "output": "```python\n\"\"\"Unified LLM backend abstraction.\n\nProvides:\n- Factory ``select_backend()`` with fallback stub (``VRM_BACKEND_ALLOW_STUB=1``).\n- ``HuggingFaceBackend``: real model loading, VRAM-proportional multi-GPU split\n  via ``model_splitter``, sequential block inference with ``TransferManager``.\n  Supports KV-cache for efficient multi-GPU auto-regressive generation.\n- ``vLLMBackend`` / ``OllamaBackend``: real integration if lib present, stub otherwise.\n\"\"\"\nfrom abc import ABC, abstractmethod\nfrom typing import Any, List, Optional\nimport os\nimport sys\nimport logging\nlogger = logging.getLogger(__name__)\n\nfrom core.logger import LoggerAdapter\n\n_MINIMAL = os.environ.get(\"VRM_MINIMAL_TEST\", \"\")\n\n# Defensive torch import (optional dependency)\ntry:\n    import torch as _torch  # noqa: F401\n    import torch.nn as _nn  # noqa: F401\n    _HAS_TORCH = True\nexcept ImportError:\n    _torch = None  # type: ignore\n    _nn = None  # type: ignore\n    _HAS_TORCH = False\n\n# Fused Triton sampling (optional \u2014",
+          "elapsed_s": 1.614,
+          "tok_s": 158.65
+        },
+        {
+          "prompt_idx": 2,
+          "output": "```python\n\"\"\"Thread-safe Pipeline Registry for VRAMancer.\n\nCentralizes model lifecycle (load / shutdown / generate / infer)\nbehind a reentrant lock so concurrent Flask requests are safe.\n\"\"\"\nfrom __future__ import annotations\n\nimport logging\nimport os\nimport threading\nfrom typing import Any, Optional\n\n_logger = logging.getLogger(\"vramancer.registry\")\n\n\nclass PipelineRegistry:\n    \"\"\"Thread-safe singleton registry for the inference pipeline.\n\n    All access to the pipeline goes through this class, which holds a\n    reentrant lock to protect load/shutdown/access operations.\n    \"\"\"\n\n    def __init__(self):\n        self._lock = threading.RLock()\n        self._pipeline = None\n        self.discovery = None\n\n        # Cluster discovery is opt-in: starting it broadcasts UDP packets and\n        # spawns background threads, which is undesirable in tests / CLI tools.\n        # Enable explicitly with VRM_CLUSTER_AUTO_DISCOVER=1.\n        if os.environ.get(\"VRM_CLUSTER_AUTO_DISCOVER\", \"\").lower() in (\"1\", \"true\", \"yes\"):\n            try:\n                from experimental.cluster_discovery import ClusterDiscovery\n                self.discovery = ClusterDiscovery(heartbeat_interval=5)\n                self.discovery.start()\n            except ImportError:\n                pass\n\n",
+          "elapsed_s": 1.459,
+          "tok_s": 175.51
+        }
+      ],
+      "ok": true
+    }
+  ]
+}
