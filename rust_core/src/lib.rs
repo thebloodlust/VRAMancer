@@ -16,6 +16,25 @@ use std::sync::Mutex;
 // Définition de notre type HMAC
 type HmacSha256 = Hmac<Sha256>;
 
+/// Borne de sécurité sur les tailles lues depuis le réseau. Un pair distant
+/// envoie une longueur dans l'en-tête ; sans borne, `vec![0u8; n]` permet un
+/// OOM-kill trivial à distance (et `total_len - 32` peut sous-déborder en u64
+/// si total_len < 32, donnant ~18 Eo). 16 GiB couvre les plus gros tenseurs
+/// réalistes ; au-delà on rejette la connexion.
+const MAX_PAYLOAD_BYTES: u64 = 16 * 1024 * 1024 * 1024;
+
+/// Valide une longueur (octets utiles) lue du réseau avant toute allocation.
+#[inline]
+fn check_payload_len(n: u64) -> Result<usize, String> {
+    if n > MAX_PAYLOAD_BYTES {
+        return Err(format!(
+            "Payload size {} bytes exceeds maximum {} bytes (peer malveillant ?)",
+            n, MAX_PAYLOAD_BYTES
+        ));
+    }
+    Ok(n as usize)
+}
+
 /// Hiérarchie des Tiers de Transport VRAMancer
 #[pyclass]
 #[derive(Clone, Debug, PartialEq)]
@@ -867,8 +886,8 @@ fn send_tensor_p2p(
             let resp_len = stream.read_u64().await
                 .map_err(|e| format!("Echec lecture réponse Header: {}", e))?;
 
-            // Allocation et lecture de la réponse
-            let mut resp_data = vec![0u8; resp_len as usize];
+            // Allocation et lecture de la réponse (bornée — anti-OOM)
+            let mut resp_data = vec![0u8; check_payload_len(resp_len)?];
             stream.read_exact(&mut resp_data).await
                 .map_err(|e| format!("Echec lecture réponse Body: {}", e))?;
 
@@ -909,9 +928,14 @@ fn receive_tensor_p2p(py: Python, port: u16, secret: &[u8]) -> PyResult<Py<PyByt
             socket.read_exact(&mut signature).await
                 .map_err(|e| format!("Echec lecture signature HMAC: {}", e))?;
                 
-            // Lecture intégrale du Gigabytes de VRAM/Tenseur
-            let payload_len = total_len - 32;
-            let mut payload = vec![0u8; payload_len as usize];
+            // Lecture intégrale du Gigabytes de VRAM/Tenseur.
+            // Garde anti-underflow (total_len doit contenir au moins les 32
+            // octets de signature) + borne anti-OOM.
+            if total_len < 32 {
+                return Err(format!("En-tête invalide: total_len={} < 32 octets", total_len));
+            }
+            let payload_len = check_payload_len(total_len - 32)?;
+            let mut payload = vec![0u8; payload_len];
             socket.read_exact(&mut payload).await
                 .map_err(|e| format!("Echec lecture du payload de données Tensor: {}", e))?;
                 
@@ -1146,14 +1170,17 @@ fn receive_tensor_chunked(
             let num_chunks = socket.read_u32().await.map_err(|e| format!("Header: {}", e))?;
             let _chunk_size = socket.read_u32().await.map_err(|e| format!("Header: {}", e))?;
 
-            let mut payload = Vec::with_capacity(total_len as usize);
+            // Borne anti-OOM sur la pré-allocation totale.
+            let mut payload = Vec::with_capacity(check_payload_len(total_len)?);
 
             for i in 0..num_chunks {
                 // Read per-chunk signature
                 let mut sig = vec![0u8; 32];
                 socket.read_exact(&mut sig).await.map_err(|e| format!("Chunk {} sig: {}", i, e))?;
 
-                let chunk_len = socket.read_u32().await.map_err(|e| format!("Chunk {} len: {}", i, e))? as usize;
+                let chunk_len = check_payload_len(
+                    socket.read_u32().await.map_err(|e| format!("Chunk {} len: {}", i, e))? as u64
+                )?;
                 let mut chunk = vec![0u8; chunk_len];
                 socket.read_exact(&mut chunk).await.map_err(|e| format!("Chunk {} data: {}", i, e))?;
 
