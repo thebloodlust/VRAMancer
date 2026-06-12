@@ -958,7 +958,7 @@ fn receive_tensor_p2p(py: Python, port: u16, secret: &[u8]) -> PyResult<Py<PyByt
                 .map_err(|e| format!("Echec lecture du payload de données Tensor: {}", e))?;
                 
             // Vérification de sécurité (Si un hacker tente d'envoyer du code corrompu, ça dégage ici)
-            let mut mac = HmacSha256::new_from_slice(&secret_vec).unwrap();
+            let mut mac = HmacSha256::new_from_slice(&secret_vec).map_err(|e| format!("Clé HMAC invalide: {}", e))?;
             mac.update(&payload);
             if mac.verify_slice(&signature).is_err() {
                 return Err("ALERTE INTRUSION : Signature HMAC-SHA256 Invalide ! Tentative de transfert P2P rejetée.".to_string());
@@ -1151,7 +1151,7 @@ fn send_tensor_chunked(
             let mut acked: u64 = 0;
             for (i, chunk) in payload_vec.chunks(chunk_sz).enumerate() {
                 // Sign each chunk
-                let mut mac = HmacSha256::new_from_slice(&secret_vec).unwrap();
+                let mut mac = HmacSha256::new_from_slice(&secret_vec).map_err(|e| format!("Clé HMAC invalide: {}", e))?;
                 mac.update(chunk);
                 let sig = mac.finalize().into_bytes();
 
@@ -1226,7 +1226,7 @@ fn receive_tensor_chunked(
                     .map_err(|_| format!("Timeout chunk {} data", i))?.map_err(|e| format!("Chunk {} data: {}", i, e))?;
 
                 // Verify HMAC
-                let mut mac = HmacSha256::new_from_slice(&secret_vec).unwrap();
+                let mut mac = HmacSha256::new_from_slice(&secret_vec).map_err(|e| format!("Clé HMAC invalide: {}", e))?;
                 mac.update(&chunk);
                 if mac.verify_slice(&sig).is_err() {
                     // Send NACK
