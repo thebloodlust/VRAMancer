@@ -1,0 +1,230 @@
+{
+  "torch_baseline": {
+    "4MB": {
+      "0->1_gbps": 10.268,
+      "1->0_gbps": 10.955
+    },
+    "16MB": {
+      "0->1_gbps": 10.386,
+      "1->0_gbps": 11.284
+    },
+    "64MB": {
+      "0->1_gbps": 10.395,
+      "1->0_gbps": 10.987
+    },
+    "256MB": {
+      "0->1_gbps": 10.43,
+      "1->0_gbps": 10.857
+    }
+  },
+  "vramancer_pipeline": {
+    "4MB": {
+      "best_chunk_mb": 4,
+      "best_gbps": 13.2,
+      "per_chunk": {
+        "chunk4": 13.2
+      }
+    },
+    "16MB": {
+      "best_chunk_mb": 4,
+      "best_gbps": 20.89,
+      "per_chunk": {
+        "chunk4": 20.89,
+        "chunk8": 17.63,
+        "chunk16": 13.51
+      }
+    },
+    "64MB": {
+      "best_chunk_mb": 4,
+      "best_gbps": 24.28,
+      "per_chunk": {
+        "chunk4": 24.28,
+        "chunk8": 23.2,
+        "chunk16": 21.14,
+        "chunk32": 16.7,
+        "chunk64": 13.6
+      }
+    },
+    "256MB": {
+      "best_chunk_mb": 4,
+      "best_gbps": 25.27,
+      "per_chunk": {
+        "chunk4": 25.27,
+        "chunk8": 25.09,
+        "chunk16": 24.57,
+        "chunk32": 23.19,
+        "chunk64": 21.14
+      }
+    }
+  },
+  "raw_vramancer": {
+    "4MB_chunk4": {
+      "avg_ms": "0.318",
+      "dst_gpu": "1",
+      "n_buffers": "3",
+      "src_gpu": "0",
+      "chunk_mb": "4",
+      "bandwidth_gbps": "105.62",
+      "method": "staged",
+      "bandwidth_gbs": "13.20",
+      "iterations": "30",
+      "size_mb": "4"
+    },
+    "16MB_chunk4": {
+      "bandwidth_gbps": "167.08",
+      "avg_ms": "0.803",
+      "src_gpu": "0",
+      "dst_gpu": "1",
+      "method": "staged",
+      "chunk_mb": "4",
+      "n_buffers": "3",
+      "bandwidth_gbs": "20.89",
+      "size_mb": "16",
+      "iterations": "30"
+    },
+    "16MB_chunk8": {
+      "bandwidth_gbps": "141.06",
+      "iterations": "30",
+      "bandwidth_gbs": "17.63",
+      "size_mb": "16",
+      "src_gpu": "0",
+      "dst_gpu": "1",
+      "chunk_mb": "8",
+      "n_buffers": "3",
+      "avg_ms": "0.952",
+      "method": "staged"
+    },
+    "16MB_chunk16": {
+      "bandwidth_gbps": "108.10",
+      "size_mb": "16",
+      "chunk_mb": "16",
+      "bandwidth_gbs": "13.51",
+      "src_gpu": "0",
+      "dst_gpu": "1",
+      "iterations": "30",
+      "n_buffers": "3",
+      "avg_ms": "1.242",
+      "method": "staged"
+    },
+    "64MB_chunk4": {
+      "chunk_mb": "4",
+      "bandwidth_gbps": "194.27",
+      "size_mb": "64",
+      "n_buffers": "3",
+      "method": "staged",
+      "avg_ms": "2.764",
+      "dst_gpu": "1",
+      "bandwidth_gbs": "24.28",
+      "iterations": "30",
+      "src_gpu": "0"
+    },
+    "64MB_chunk8": {
+      "src_gpu": "0",
+      "method": "staged",
+      "avg_ms": "2.892",
+      "bandwidth_gbps": "185.63",
+      "chunk_mb": "8",
+      "n_buffers": "3",
+      "bandwidth_gbs": "23.20",
+      "dst_gpu": "1",
+      "iterations": "30",
+      "size_mb": "64"
+    },
+    "64MB_chunk16": {
+      "src_gpu": "0",
+      "chunk_mb": "16",
+      "method": "staged",
+      "iterations": "30",
+      "dst_gpu": "1",
+      "size_mb": "64",
+      "avg_ms": "3.174",
+      "bandwidth_gbps": "169.14",
+      "n_buffers": "3",
+      "bandwidth_gbs": "21.14"
+    },
+    "64MB_chunk32": {
+      "bandwidth_gbps": "133.61",
+      "n_buffers": "3",
+      "avg_ms": "4.018",
+      "bandwidth_gbs": "16.70",
+      "iterations": "30",
+      "src_gpu": "0",
+      "dst_gpu": "1",
+      "method": "staged",
+      "size_mb": "64",
+      "chunk_mb": "32"
+    },
+    "64MB_chunk64": {
+      "avg_ms": "4.933",
+      "method": "staged",
+      "size_mb": "64",
+      "chunk_mb": "64",
+      "bandwidth_gbps": "108.84",
+      "dst_gpu": "1",
+      "src_gpu": "0",
+      "iterations": "30",
+      "n_buffers": "3",
+      "bandwidth_gbs": "13.60"
+    },
+    "256MB_chunk4": {
+      "iterations": "30",
+      "chunk_mb": "4",
+      "bandwidth_gbps": "202.19",
+      "dst_gpu": "1",
+      "n_buffers": "3",
+      "avg_ms": "10.621",
+      "src_gpu": "0",
+      "size_mb": "256",
+      "method": "staged",
+      "bandwidth_gbs": "25.27"
+    },
+    "256MB_chunk8": {
+      "bandwidth_gbps": "200.74",
+      "method": "staged",
+      "dst_gpu": "1",
+      "chunk_mb": "8",
+      "size_mb": "256",
+      "avg_ms": "10.698",
+      "bandwidth_gbs": "25.09",
+      "src_gpu": "0",
+      "iterations": "30",
+      "n_buffers": "3"
+    },
+    "256MB_chunk16": {
+      "dst_gpu": "1",
+      "n_buffers": "3",
+      "chunk_mb": "16",
+      "avg_ms": "10.924",
+      "bandwidth_gbs": "24.57",
+      "method": "staged",
+      "src_gpu": "0",
+      "iterations": "30",
+      "bandwidth_gbps": "196.58",
+      "size_mb": "256"
+    },
+    "256MB_chunk32": {
+      "src_gpu": "0",
+      "bandwidth_gbps": "185.53",
+      "method": "staged",
+      "iterations": "30",
+      "dst_gpu": "1",
+      "size_mb": "256",
+      "bandwidth_gbs": "23.19",
+      "n_buffers": "3",
+      "chunk_mb": "32",
+      "avg_ms": "11.575"
+    },
+    "256MB_chunk64": {
+      "bandwidth_gbs": "21.14",
+      "iterations": "30",
+      "n_buffers": "3",
+      "src_gpu": "0",
+      "size_mb": "256",
+      "dst_gpu": "1",
+      "avg_ms": "12.697",
+      "bandwidth_gbps": "169.13",
+      "chunk_mb": "64",
+      "method": "staged"
+    }
+  }
+}

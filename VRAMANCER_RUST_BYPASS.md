@@ -48,7 +48,12 @@ Strategy 4: CPU-staged PyTorch fallback
 
 ## 2. Le Swarm Brain (Mémoire Holographique)
 Calcul de parité XOR en Rust pur via `generate_holographic_parity` et `heal_holograph`.
-- Auto-vectorisation AVX-512 via LLVM
+- Auto-vectorisation SIMD via LLVM. **Mesuré** sur le binaire release par défaut
+  (`RUSTFLAGS` vide, pas de `target-cpu`) : la boucle XOR compile en **SSE2**
+  (`pxor`/`xmm`, 128 bits) — `objdump` montre 0 instruction AVX2 (`ymm`) ou
+  AVX-512 (`zmm`). AVX2/AVX-512 nécessiteraient un build `-C target-cpu=native`
+  (ou `target-feature=+avx2`), non activé ici. La largeur SIMD est figée au
+  **compile-time** par la cible, pas par le CPU d'exécution.
 - Zéro fuites mémoire (ownership Rust)
 - 50 MB x2 shards : parity en 51ms, heal en 45ms
 
