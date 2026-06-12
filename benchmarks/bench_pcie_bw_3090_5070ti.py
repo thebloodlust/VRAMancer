@@ -78,9 +78,11 @@ def main():
                 try:
                     res = v.bench_gpu_transfer(0, 1, size, chunk, WARMUP, ITERS)
                     results["raw_vramancer"][f"{size}MB_chunk{chunk}"] = res
-                    # IMPORTANT: lire bandwidth_gbs (giga-OCTETS/s), PAS
-                    # bandwidth_gbps qui est en giga-BITS/s (x8, trompeur).
-                    bw = float(res.get("bandwidth_gbs", 0.0))
+                    # Lire les giga-OCTETS/s. Clé explicite bandwidth_gbyte_s
+                    # (fallback bandwidth_gbs, legacy). NE PAS lire bandwidth_gbps
+                    # /_gbit_s qui sont en giga-BITS/s (x8, trompeur).
+                    bw = float(res.get("bandwidth_gbyte_s")
+                               or res.get("bandwidth_gbs", 0.0))
                     method = res.get("method", "?")
                     per_chunk[f"chunk{chunk}"] = bw
                     if bw > best_bw:

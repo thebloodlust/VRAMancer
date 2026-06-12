@@ -1401,7 +1401,9 @@ fn async_gpu_transfer(
 
 /// Benchmark GPU-to-GPU transfer using GpuPipeline.
 /// Allocates temporary GPU memory, runs warmup + timed iterations,
-/// returns dict with bandwidth_gbps, avg_ms, method (p2p/staged), etc.
+/// returns dict with bandwidth_gbit_s (giga-bits/s) + bandwidth_gbyte_s
+/// (giga-bytes/s), avg_ms, method (p2p/staged), etc. The legacy keys
+/// bandwidth_gbps (=gbit_s) and bandwidth_gbs (=gbyte_s) are kept for compat.
 ///
 /// Args:
 ///   src_gpu: source GPU ordinal
@@ -1472,8 +1474,12 @@ fn bench_gpu_transfer(
     m.insert("method".into(), if pipe.p2p_enabled { "p2p" } else { "staged" }.into());
     m.insert("n_buffers".into(), pipe.host_bufs.len().to_string());
     m.insert("avg_ms".into(), format!("{:.3}", avg_s * 1000.0));
+    // Noms historiques (ambigus : "gbps" est en giga-BITS, "gbs" en giga-OCTETS).
     m.insert("bandwidth_gbps".into(), format!("{:.2}", bw_gbps));
     m.insert("bandwidth_gbs".into(), format!("{:.2}", bw_gbs));
+    // Noms explicites (à préférer ; les deux ci-dessus restent pour compat).
+    m.insert("bandwidth_gbit_s".into(), format!("{:.2}", bw_gbps));
+    m.insert("bandwidth_gbyte_s".into(), format!("{:.2}", bw_gbs));
     m.insert("iterations".into(), n_iter.to_string());
     Ok(m)
 }
