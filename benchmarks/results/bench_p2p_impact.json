@@ -1,0 +1,80 @@
+{
+  "p2p_active": true,
+  "gpu0": "NVIDIA GeForce RTX 3090",
+  "gpu1": "NVIDIA GeForce RTX 5070 Ti",
+  "transfer": {
+    "0.008mb": {
+      "bw_gbps": 0.18,
+      "method": "CUDA_P2P",
+      "avg_ms": 0.043
+    },
+    "0.064mb": {
+      "bw_gbps": 1.54,
+      "method": "CUDA_P2P",
+      "avg_ms": 0.041
+    },
+    "0.256mb": {
+      "bw_gbps": 4.61,
+      "method": "CUDA_P2P",
+      "avg_ms": 0.054
+    },
+    "1mb": {
+      "bw_gbps": 8.68,
+      "method": "CUDA_P2P",
+      "avg_ms": 0.112
+    },
+    "8mb": {
+      "bw_gbps": 11.22,
+      "method": "CUDA_P2P",
+      "avg_ms": 0.696
+    },
+    "64mb": {
+      "bw_gbps": 15.86,
+      "method": "CUDA_P2P",
+      "avg_ms": 3.94
+    },
+    "256mb": {
+      "bw_gbps": 20.07,
+      "method": "CUDA_P2P",
+      "avg_ms": 12.454
+    }
+  },
+  "allreduce": {
+    "8 KB   (7B batch=1)": {
+      "avg_ms": 0.031,
+      "p50_ms": 0.03,
+      "bw_gbps": 0.53,
+      "method": "NCCL"
+    },
+    "64 KB  (7B batch=8)": {
+      "avg_ms": 0.052,
+      "p50_ms": 0.051,
+      "bw_gbps": 2.52,
+      "method": "NCCL"
+    },
+    "256 KB (7B batch=32)": {
+      "avg_ms": 0.102,
+      "p50_ms": 0.102,
+      "bw_gbps": 5.15,
+      "method": "NCCL"
+    },
+    "1 MB": {
+      "avg_ms": 0.309,
+      "p50_ms": 0.307,
+      "bw_gbps": 6.8,
+      "method": "NCCL"
+    },
+    "8 MB": {
+      "avg_ms": 2.18,
+      "p50_ms": 2.181,
+      "bw_gbps": 7.7,
+      "method": "NCCL"
+    },
+    "64 MB": {
+      "avg_ms": 17.281,
+      "p50_ms": 17.279,
+      "bw_gbps": 7.77,
+      "method": "NCCL"
+    }
+  }
+}

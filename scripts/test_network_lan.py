@@ -44,7 +44,7 @@ def test_cluster_discovery():
     print(f"      Hostname: {socket.gethostname()}")
 
     try:
-        from core.network.cluster_discovery import ClusterDiscovery
+        from experimental.cluster_discovery import ClusterDiscovery
 
         discovery = ClusterDiscovery(port=55555, heartbeat_interval=5.0)
         discovery.start()
@@ -76,7 +76,7 @@ def test_aitp_protocol():
     print("[2/4] AITP Protocol (local loopback test)")
 
     try:
-        from core.network.aitp_protocol import AITPProtocol
+        from experimental.aitp_protocol import AITPProtocol
 
         proto = AITPProtocol(port=9843)
         test_data = b"Hello from VRAMancer AITP test!" * 10  # ~310 bytes

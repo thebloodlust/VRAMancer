@@ -20,11 +20,11 @@ class TestCrossVendorImports:
     """Verify all cross-vendor modules import cleanly."""
 
     def test_import_bridge(self):
-        from core.cross_vendor_bridge import CrossVendorBridge
+        from experimental.cross_vendor_bridge import CrossVendorBridge
         assert CrossVendorBridge is not None
 
     def test_import_enums(self):
-        from core.cross_vendor_bridge import (
+        from experimental.cross_vendor_bridge import (
             CrossVendorMethod, GPUVendor, CrossVendorResult,
         )
         assert CrossVendorMethod.PIPELINED_ASYNC.name == "PIPELINED_ASYNC"
@@ -40,7 +40,7 @@ class TestCrossVendorImports:
         assert GPUVendor.UNKNOWN.value == "unknown"
 
     def test_import_transports(self):
-        from core.cross_vendor_bridge import (
+        from experimental.cross_vendor_bridge import (
             PipelinedTransport, SharedMemTransport,
             DMABufTransport, ReBarTransport,
         )
@@ -50,7 +50,7 @@ class TestCrossVendorImports:
         assert ReBarTransport is not None
 
     def test_import_utilities(self):
-        from core.cross_vendor_bridge import (
+        from experimental.cross_vendor_bridge import (
             detect_gpu_vendor, detect_rebar, detect_dmabuf_support,
             is_cross_vendor, is_consumer_gpu,
             get_cross_vendor_bridge, reset_cross_vendor_bridge,
@@ -70,13 +70,13 @@ class TestGPUVendorDetection:
     """Test GPU vendor identification logic."""
 
     def test_detect_vendor_stub_mode(self):
-        from core.cross_vendor_bridge import detect_gpu_vendor, GPUVendor
+        from experimental.cross_vendor_bridge import detect_gpu_vendor, GPUVendor
         # In VRM_MINIMAL_TEST mode, should return UNKNOWN (no real GPU)
         vendor = detect_gpu_vendor(0)
         assert vendor == GPUVendor.UNKNOWN
 
     def test_is_consumer_nvidia(self):
-        from core.cross_vendor_bridge import is_consumer_gpu
+        from experimental.cross_vendor_bridge import is_consumer_gpu
         assert is_consumer_gpu("NVIDIA GeForce RTX 4090") is True
         assert is_consumer_gpu("NVIDIA GeForce GTX 1080 Ti") is True
         assert is_consumer_gpu("NVIDIA RTX 3090") is True
@@ -84,20 +84,20 @@ class TestGPUVendorDetection:
         assert is_consumer_gpu("Titan RTX") is True
 
     def test_is_consumer_amd(self):
-        from core.cross_vendor_bridge import is_consumer_gpu
+        from experimental.cross_vendor_bridge import is_consumer_gpu
         assert is_consumer_gpu("AMD Radeon RX 7900 XTX") is True
         assert is_consumer_gpu("AMD Radeon RX 6800 XT") is True
         assert is_consumer_gpu("Radeon Pro W7900") is True
         assert is_consumer_gpu("RX 9070 XT") is True
 
     def test_is_not_consumer_pro(self):
-        from core.cross_vendor_bridge import is_consumer_gpu
+        from experimental.cross_vendor_bridge import is_consumer_gpu
         assert is_consumer_gpu("NVIDIA A100") is False
         assert is_consumer_gpu("NVIDIA H100") is False
         assert is_consumer_gpu("AMD Instinct MI300X") is False
 
     def test_is_cross_vendor_stub(self):
-        from core.cross_vendor_bridge import is_cross_vendor
+        from experimental.cross_vendor_bridge import is_cross_vendor
         # In stub mode, always returns False
         assert is_cross_vendor(0, 1) is False
 
@@ -110,7 +110,7 @@ class TestCrossVendorResult:
     """Test result metadata dataclass."""
 
     def test_bandwidth_calculation(self):
-        from core.cross_vendor_bridge import (
+        from experimental.cross_vendor_bridge import (
             CrossVendorResult, CrossVendorMethod, GPUVendor,
         )
         result = CrossVendorResult(
@@ -125,7 +125,7 @@ class TestCrossVendorResult:
         assert result.bandwidth_gbps == pytest.approx(160.0, rel=0.01)
 
     def test_zero_duration(self):
-        from core.cross_vendor_bridge import (
+        from experimental.cross_vendor_bridge import (
             CrossVendorResult, CrossVendorMethod, GPUVendor,
         )
         result = CrossVendorResult(
@@ -145,7 +145,7 @@ class TestGPUDeviceInfo:
     """Test GPU device info dataclass."""
 
     def test_pcie_bandwidth_gen4_x16(self):
-        from core.cross_vendor_bridge import GPUDeviceInfo, GPUVendor
+        from experimental.cross_vendor_bridge import GPUDeviceInfo, GPUVendor
         info = GPUDeviceInfo(
             index=0, vendor=GPUVendor.NVIDIA, name="RTX 4090",
             pcie_gen=4, pcie_width=16,
@@ -154,7 +154,7 @@ class TestGPUDeviceInfo:
         assert 30.0 < info.pcie_bandwidth_gbps < 33.0
 
     def test_pcie_bandwidth_gen5_x16(self):
-        from core.cross_vendor_bridge import GPUDeviceInfo, GPUVendor
+        from experimental.cross_vendor_bridge import GPUDeviceInfo, GPUVendor
         info = GPUDeviceInfo(
             index=0, vendor=GPUVendor.AMD, name="RX 9070 XT",
             pcie_gen=5, pcie_width=16,
@@ -171,7 +171,7 @@ class TestReBarDetection:
     """Test Resizable BAR detection via sysfs."""
 
     def test_rebar_stub_mode(self):
-        from core.cross_vendor_bridge import detect_rebar
+        from experimental.cross_vendor_bridge import detect_rebar
         enabled, bar_size = detect_rebar(0)
         # In stub mode, ReBAR detection is disabled
         assert enabled is False
@@ -179,7 +179,7 @@ class TestReBarDetection:
 
     def test_rebar_non_linux(self):
         """On non-Linux systems, ReBAR detection should gracefully return False."""
-        from core.cross_vendor_bridge import detect_rebar
+        from experimental.cross_vendor_bridge import detect_rebar
         enabled, _ = detect_rebar(0)
         assert enabled is False
 
@@ -192,7 +192,7 @@ class TestDMABufDetection:
     """Test DMA-BUF availability detection."""
 
     def test_dmabuf_stub_mode(self):
-        from core.cross_vendor_bridge import detect_dmabuf_support
+        from experimental.cross_vendor_bridge import detect_dmabuf_support
         supported, nodes = detect_dmabuf_support()
         assert supported is False
 
@@ -205,7 +205,7 @@ class TestSharedMemTransport:
     """Test the shared memory ring buffer transport."""
 
     def test_init(self):
-        from core.cross_vendor_bridge import SharedMemTransport
+        from experimental.cross_vendor_bridge import SharedMemTransport
         shm = SharedMemTransport(name="/vrm_test_ring")
         assert shm.shm_name == "/vrm_test_ring"
         assert shm.total_size > 0
@@ -214,7 +214,7 @@ class TestSharedMemTransport:
     @pytest.mark.skipif(sys.platform != "linux",
                         reason="SharedMem requires Linux /dev/shm")
     def test_open_close(self):
-        from core.cross_vendor_bridge import SharedMemTransport
+        from experimental.cross_vendor_bridge import SharedMemTransport
         import pathlib
         shm = SharedMemTransport(name="/vrm_test_open")
         try:
@@ -230,7 +230,7 @@ class TestSharedMemTransport:
     @pytest.mark.skipif(sys.platform != "linux",
                         reason="SharedMem requires Linux /dev/shm")
     def test_header_roundtrip(self):
-        from core.cross_vendor_bridge import SharedMemTransport
+        from experimental.cross_vendor_bridge import SharedMemTransport
         import pathlib
         shm = SharedMemTransport(name="/vrm_test_header")
         try:
@@ -258,12 +258,12 @@ class TestCrossVendorBridgeStub:
     """Test the bridge in stub mode (VRM_MINIMAL_TEST=1)."""
 
     def test_init_stub(self):
-        from core.cross_vendor_bridge import CrossVendorBridge
+        from experimental.cross_vendor_bridge import CrossVendorBridge
         bridge = CrossVendorBridge()
         assert bridge.available is False
 
     def test_transfer_stub(self):
-        from core.cross_vendor_bridge import (
+        from experimental.cross_vendor_bridge import (
             CrossVendorBridge, CrossVendorMethod,
         )
         bridge = CrossVendorBridge()
@@ -273,7 +273,7 @@ class TestCrossVendorBridgeStub:
         assert result.bytes_transferred == 0
 
     def test_stats_stub(self):
-        from core.cross_vendor_bridge import CrossVendorBridge
+        from experimental.cross_vendor_bridge import CrossVendorBridge
         bridge = CrossVendorBridge()
         stats = bridge.stats()
         assert stats["available"] is False
@@ -283,12 +283,12 @@ class TestCrossVendorBridgeStub:
         assert stats["transfers"] == 0
 
     def test_is_cross_vendor_pair_stub(self):
-        from core.cross_vendor_bridge import CrossVendorBridge
+        from experimental.cross_vendor_bridge import CrossVendorBridge
         bridge = CrossVendorBridge()
         assert bridge.is_cross_vendor_pair(0, 1) is False
 
     def test_close_safe(self):
-        from core.cross_vendor_bridge import CrossVendorBridge
+        from experimental.cross_vendor_bridge import CrossVendorBridge
         bridge = CrossVendorBridge()
         bridge.close()  # Should not crash
 
@@ -301,7 +301,7 @@ class TestCrossVendorSingleton:
     """Test singleton lifecycle."""
 
     def test_get_singleton(self):
-        from core.cross_vendor_bridge import (
+        from experimental.cross_vendor_bridge import (
             get_cross_vendor_bridge, reset_cross_vendor_bridge,
         )
         bridge = get_cross_vendor_bridge()
@@ -310,7 +310,7 @@ class TestCrossVendorSingleton:
         reset_cross_vendor_bridge()
 
     def test_reset_singleton(self):
-        from core.cross_vendor_bridge import (
+        from experimental.cross_vendor_bridge import (
             get_cross_vendor_bridge, reset_cross_vendor_bridge,
         )
         bridge1 = get_cross_vendor_bridge()
@@ -387,12 +387,12 @@ class TestVRAMLendingCrossVendor:
     """Test VRAM lending pool with cross-vendor awareness."""
 
     def test_gpu_budget_vendor_field(self):
-        from core.vram_lending import GPUBudget
+        from experimental.vram_lending import GPUBudget
         budget = GPUBudget(gpu_id=0, vendor="nvidia")
         assert budget.vendor == "nvidia"
 
     def test_lending_policy_cross_vendor(self):
-        from core.vram_lending import LendingPolicy
+        from experimental.vram_lending import LendingPolicy
         policy = LendingPolicy()
         assert hasattr(policy, 'prefer_same_vendor')
         assert hasattr(policy, 'cross_vendor_penalty')
@@ -400,7 +400,7 @@ class TestVRAMLendingCrossVendor:
         assert 0.0 <= policy.cross_vendor_penalty <= 1.0
 
     def test_register_gpu_with_vendor(self):
-        from core.vram_lending import VRAMLendingPool
+        from experimental.vram_lending import VRAMLendingPool
         pool = VRAMLendingPool()
         budget = pool.register_gpu(
             gpu_id=0, total_bytes=int(24e9), model_bytes=int(12e9),
@@ -416,7 +416,7 @@ class TestVRAMLendingCrossVendor:
         pool.close()
 
     def test_vendor_auto_detect(self):
-        from core.vram_lending import VRAMLendingPool
+        from experimental.vram_lending import VRAMLendingPool
         pool = VRAMLendingPool()
         budget = pool.register_gpu(
             gpu_id=0, total_bytes=int(24e9),
@@ -433,7 +433,7 @@ class TestVRAMLendingCrossVendor:
 
     def test_cross_vendor_lending_works(self):
         """Cross-vendor lending should work, with a scoring penalty."""
-        from core.vram_lending import VRAMLendingPool, LendingPolicy
+        from experimental.vram_lending import VRAMLendingPool, LendingPolicy
 
         policy = LendingPolicy(cross_vendor_penalty=0.15)
         pool = VRAMLendingPool(policy=policy)
@@ -460,7 +460,7 @@ class TestVRAMLendingCrossVendor:
 
     def test_same_vendor_preferred(self):
         """When a same-vendor GPU is available, it should score higher."""
-        from core.vram_lending import VRAMLendingPool, LendingPolicy
+        from experimental.vram_lending import VRAMLendingPool, LendingPolicy
 
         policy = LendingPolicy(cross_vendor_penalty=0.15)
         pool = VRAMLendingPool(policy=policy)
@@ -497,7 +497,7 @@ class TestDtypeUtils:
     """Test tensor serialization utilities."""
 
     def test_dtype_roundtrip(self):
-        from core.cross_vendor_bridge import _dtype_to_code, _code_to_dtype
+        from experimental.cross_vendor_bridge import _dtype_to_code, _code_to_dtype
         # These need torch to be available
         codes_tested = [0, 1, 4, 7, 8]
         for code in codes_tested:
@@ -506,7 +506,7 @@ class TestDtypeUtils:
             # Just verify no crash
 
     def test_torch_to_numpy_dtype(self):
-        from core.cross_vendor_bridge import _torch_to_numpy_dtype
+        from experimental.cross_vendor_bridge import _torch_to_numpy_dtype
         # In stub mode, should return a default
         result = _torch_to_numpy_dtype(None)
         assert result == 'float32'

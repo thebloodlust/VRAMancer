@@ -1,3 +1,4 @@
+"""**Status: functional but orphaned — not wired into the main inference pipeline.**"""
 # Backward-compat redirect — module moved to _deprecated/swarm_ledger.py
 from _deprecated.swarm_ledger import *  # noqa: F401,F403
 try:

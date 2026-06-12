@@ -20,8 +20,8 @@ Architecture::
     collect shards, RS decode if losses ──► reconstruct tensor
 
 Uses:
-  - ``core.network.aitp_fec.FastFEC`` for RS encoding/decoding
-  - ``core.network.aitp_protocol.AITPProtocol`` for authenticated transport
+  - ``experimental.aitp_fec.FastFEC`` for RS encoding/decoding
+  - ``experimental.aitp_protocol.AITPProtocol`` for authenticated transport
   - ``core.network.anycast_balancer.AnycastLoadBalancer`` for node selection
   - ``core.parity_memory.ParityKVManager`` as fallback (XOR, 1-fault only)
 
@@ -219,7 +219,7 @@ class ShardReassembler:
 
         # Need RS recovery — use FastFEC decode
         try:
-            from core.network.aitp_fec import FastFEC
+            from experimental.aitp_fec import FastFEC
             fec = FastFEC(
                 data_shards=meta.data_shards,
                 parity_shards=meta.parity_shards,
@@ -316,7 +316,7 @@ class NetworkRAID:
     def _get_fec(self, d_shards: int) -> Any:
         """Lazy-init FEC with correct shard count."""
         try:
-            from core.network.aitp_fec import FastFEC
+            from experimental.aitp_fec import FastFEC
             return FastFEC(data_shards=d_shards, parity_shards=self.parity_shards)
         except ImportError:
             logger.warning("NetworkRAID: aitp_fec unavailable, no RS protection")
@@ -391,7 +391,7 @@ class NetworkRAID:
         # Wrap shard data with RAID header + send via AITP
         if aitp_protocol is None:
             try:
-                from core.network.aitp_protocol import get_aitp_protocol
+                from experimental.aitp_protocol import get_aitp_protocol
                 aitp_protocol = get_aitp_protocol()
             except ImportError:
                 logger.error("NetworkRAID: aitp_protocol unavailable")

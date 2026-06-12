@@ -33,7 +33,7 @@ from typing import Any, Callable, Optional, Dict
 
 logger = logging.getLogger(__name__)
 
-AITP_PORT = 9109
+AITP_PORT = int(os.environ.get("VRM_AITP_PORT", "55555"))
 AITP_MAGIC = b"VT"
 AITP_HEADER_FORMAT = "!2sBBQI"
 AITP_HEADER_SIZE = struct.calcsize(AITP_HEADER_FORMAT)
@@ -89,7 +89,7 @@ def _init_rx_metrics():
             "AITP receiver backpressure drops",
         )
     except Exception:
-        pass
+        logger.debug("Prometheus metrics unavailable", exc_info=True)
 
 
 class AITPReceiver:
@@ -196,7 +196,7 @@ class AITPReceiver:
             )
             return gpu_buf
         except Exception:
-            pass
+            logger.debug("GPU buffer creation failed", exc_info=True)
 
     # ------------------------------------------------------------------
     # Backpressure

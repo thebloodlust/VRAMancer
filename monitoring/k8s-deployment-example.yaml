@@ -1,0 +1,96 @@
+# VRAMancer — Kubernetes deployment example
+#
+# Probes:
+#   /live   → liveness  (process is alive; restart pod if it fails)
+#   /ready  → readiness (model loaded; pod removed from Service endpoints if not)
+#   /health → human-friendly aggregate (NOT for K8s probes — too lenient)
+#
+# Override readiness gating with VRM_READY_REQUIRE_MODEL=0 if you prefer
+# warmup-on-first-request semantics.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vramancer
+  labels:
+    app: vramancer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vramancer
+  template:
+    metadata:
+      labels:
+        app: vramancer
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: "/metrics"
+        prometheus.io/port: "5030"
+    spec:
+      containers:
+        - name: vramancer
+          image: ghcr.io/jeremiep23/vramancer:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: api
+              containerPort: 5030
+          env:
+            - name: VRM_PRODUCTION
+              value: "1"
+            - name: VRM_LOG_JSON
+              value: "1"
+            - name: VRM_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: vramancer-secrets
+                  key: api-token
+            - name: VRM_AUTH_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: vramancer-secrets
+                  key: auth-secret
+          livenessProbe:
+            httpGet:
+              path: /live
+              port: api
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: api
+            # Model load can take 30–120s; tune for your model size.
+            initialDelaySeconds: 30
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 24       # ~120s grace
+          startupProbe:
+            httpGet:
+              path: /live
+              port: api
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 60       # 5 minutes for slow GPU init
+          resources:
+            limits:
+              nvidia.com/gpu: 1
+              memory: 32Gi
+            requests:
+              nvidia.com/gpu: 1
+              memory: 16Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vramancer
+spec:
+  selector:
+    app: vramancer
+  ports:
+    - name: api
+      port: 80
+      targetPort: api
+  type: ClusterIP

@@ -167,7 +167,7 @@ class GPUFaultManager:
             try:
                 num_gpus = torch.cuda.device_count()
             except Exception:
-                pass
+                _log.debug("CUDA device count failed", exc_info=True)
 
         self.num_gpus = num_gpus
         self.max_consecutive_failures = max_consecutive_failures
@@ -264,7 +264,7 @@ class GPUFaultManager:
             try:
                 cb(gpu_id, fault_type)
             except Exception:
-                pass
+                _log.debug("Fault callback failed", exc_info=True)
 
     def _handle_oom(self, gpu_id: int) -> None:
         """Attempt to recover from OOM by freeing memory."""
@@ -420,7 +420,7 @@ class GPUFaultManager:
             try:
                 cb(gpu_id)
             except Exception:
-                pass
+                _log.debug("Recovery callback failed", exc_info=True)
 
     # ------------------------------------------------------------------
     # Public API

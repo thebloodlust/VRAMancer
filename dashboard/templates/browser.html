@@ -77,45 +77,26 @@
         }
 
         async function loadModel(modelId, source) {
-            let backendToUse = source === 'Ollama' ? 'ollama' : 'huggingface';
             const status = document.getElementById('status');
-            
-            // Hardcode des variables critiques d'asymétrie P2P 
-            const payload = {
-                model: modelId,
-                backend_type: backendToUse,
-                gpu_memory_utilization: 0.96,
-                max_model_len: 4096,
-                enforce_eager: true
-            };
-            
-            status.innerHTML = `<span class="text-cyber-accent">Initialisation du Cortex Tenseur pour ${modelId} (Zero-Copy P2P)...</span>`;
-            
+            status.innerHTML = `<span class="text-cyber-accent">Chargement de ${modelId}...</span>`;
+            status.style.color = '#ffcc00';
             try {
-                // Utilise le header d'authentification Bearer testtoken commun au projet minimal
-                const response = await fetch(`http://${window.location.hostname}:5000/api/models/load`, {
-                    method: 'POST', 
+                const response = await fetch('/api/models/load', {
+                    method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                         'Authorization': 'Bearer testtoken'
                     },
-                    body: JSON.stringify(payload)
+                    body: JSON.stringify({model_id: modelId, source: source})
                 });
-                
-                if(response.ok) {
-                    const resData = await response.json();
-                    status.innerHTML = `<span style="color:#00ff87;"> Fusion Neurale établie ! (${resData.num_gpus} GPUs Actifs)</span>`;
-                    alert(`VRAMancer :
-
-Modèle chargé avec succès sur ${resData.num_gpus} GPUs.
-Tensor Parallelism actif.`);
+                const data = await response.json();
+                if (data.ok) {
+                    status.innerHTML = `<span style="color:#00ff87;">&#10003; ${data.msg} — device_map: ${JSON.stringify(data.device_map)}</span>`;
                 } else {
-                    const errText = await response.text();
-                    status.innerHTML = `<span style="color:#fb2c36;"> Crash Mémoire P2P : ${response.status}</span>`;
-                    alert("Erreur de chargement de modèle : " + errText);
+                    status.innerHTML = `<span style="color:#fb2c36;">&#10007; ${data.msg}</span>`;
                 }
             } catch(e) {
-                status.innerHTML = `<span style="color:#fb2c36;"> Serveur VRAMancer Hors-Ligne ou Inaccessible.</span>`;
+                status.innerHTML = `<span style="color:#fb2c36;">&#10007; Erreur réseau: ${e}</span>`;
                 console.error(e);
             }
         }

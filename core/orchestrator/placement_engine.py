@@ -115,19 +115,23 @@ class PlacementEngine:
             lvl = decision.get("level", "unknown")
             ORCH_PLACEMENTS.labels(lvl).inc()
         except Exception:
-            pass
+            _logger.debug("Metrics placement counter failed", exc_info=True)
         return decision
 
     # ------------------------------------------------------------------
-    # Connectome Helper (Synaptic Weight)
+    # Connectome health weighting
     # ------------------------------------------------------------------
-    
-    def _apply_neuroplasticity_score(self, base_score: float, gpu_id: int) -> float:
-        """Applique la pondération synaptique (Heeb) en fonction de l'état du Connectome."""
+
+    def _apply_connectome_health_score(self, base_score: float, gpu_id: int) -> float:
+        """Weight a placement score by the node's measured Connectome health.
+
+        The Connectome tracks per-node link health (adaptive weight from
+        measured latency/reliability). Local GPUs map to weight 1.0; remote
+        nodes are scaled by their current health weight.
+        """
         try:
             from core.network.connectome import global_connectome
-            # Fake/Local mapping for GPU IDs. In real cluster this translates to Node IP.
-            # Local GPUs get 1.0 (perfect synapse)
+            # GPU IDs map to local nodes here; in a real cluster this maps to a node IP.
             node_id = f"gpu_{gpu_id}"
             strength = global_connectome.get_synaptic_weight(node_id)
             return base_score * strength
@@ -232,23 +236,23 @@ class PlacementEngine:
                     if dev["backend"] in ("cuda", "rocm", "mps"):
                         free = self.monitor.get_free_memory(dev["index"])
                         
-                        # -> THE NEUROPLASTICITY HEURISTIC
-                        # We discount the free VRAM based on the strength of the neural connection.
+                        # -> Adaptive scoring heuristic
+                        # We discount the free VRAM based on the strength of the connection.
                         # Meaning a GPU with lots of VRAM but a terrible connection will look "full".
-                        effective_free = self._apply_neuroplasticity_score(free, dev["index"])
+                        effective_free = self._apply_connectome_health_score(free, dev["index"])
                         
                         if effective_free > max_free:
                             max_free = effective_free
                             gpu_id = dev["index"]
             except Exception:
-                pass
+                _logger.debug("GPU memory enumeration failed", exc_info=True)
 
-        # Since max_free is degraded by plasticity, if the network is terrible, we fall to L3 instead of L1.
+        # Since max_free is degraded by adaptive scoring, if the network is terrible, we fall to L3 instead of L1.
         level = "L1" if max_free >= size_mb * 1024 * 1024 else "L3"
         return {
             "level": level,
             "gpu_id": gpu_id,
-            "strategy": "vram_neuroplastic",
+            "strategy": "vram_adaptive",
         }
 
     def _strategy_balanced(self, block: Dict[str, Any]) -> Dict[str, Any]:
@@ -304,7 +308,7 @@ class PlacementEngine:
                     free_bytes = self.monitor.get_free_memory(idx)
                     free_mb = free_bytes / (1024 * 1024)
                 except Exception:
-                    pass
+                    _logger.debug("GPU free memory query failed", exc_info=True)
 
             if free_mb < size_mb:
                 continue  # Won't fit

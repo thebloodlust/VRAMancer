@@ -446,7 +446,7 @@ def run_smoke_test(python_cmd: str, base_dir: Path) -> bool:
         result = subprocess.run(
             [python_cmd, "-c", textwrap.dedent("""\
                 import sys; sys.path.insert(0, '.')
-                from core.network.cluster_discovery import ClusterDiscovery
+                from experimental.cluster_discovery import ClusterDiscovery
                 d = ClusterDiscovery(heartbeat_interval=1)
                 d.start()
                 import time; time.sleep(2)

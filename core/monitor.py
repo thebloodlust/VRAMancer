@@ -128,7 +128,7 @@ class GPUMonitor:
                 pynvml.nvmlInit()
                 self._pynvml_ok = True
             except Exception:
-                pass
+                _logger.debug("pynvml init failed", exc_info=True)
 
         # Take initial snapshot
         self._refresh_all()
@@ -273,7 +273,7 @@ class GPUMonitor:
             if (idx == "mps" or idx == 0) and hasattr(torch, "mps") and torch.mps.is_available():
                 return torch.mps.current_allocated_memory()
         except Exception:
-            pass
+            _logger.debug("MPS memory query failed", exc_info=True)
         # ROCm-SMI fallback
         if self._backend == "rocm" and isinstance(idx, int):
             info = _rocm_smi_memory(idx)
@@ -288,7 +288,7 @@ class GPUMonitor:
             if isinstance(idx, int) and torch.cuda.is_available() and idx < torch.cuda.device_count():
                 return torch.cuda.memory_reserved(idx)
         except Exception:
-            pass
+            _logger.debug("Reserved memory query failed", exc_info=True)
         return 0
 
     def _query_total(self, idx: int | str) -> Optional[int]:
@@ -301,13 +301,13 @@ class GPUMonitor:
                 mem = pynvml.nvmlDeviceGetMemoryInfo(handle)
                 return int(mem.total)
             except Exception:
-                pass
+                _logger.debug("pynvml total memory query failed", exc_info=True)
         # torch.cuda
         try:
             if isinstance(idx, int) and torch.cuda.is_available() and idx < torch.cuda.device_count():
                 return torch.cuda.get_device_properties(idx).total_mem
         except Exception:
-            pass
+            _logger.debug("torch.cuda get device properties failed", exc_info=True)
         # MPS
         try:
             if hasattr(torch, "mps") and torch.mps.is_available():
@@ -317,7 +317,7 @@ class GPUMonitor:
                 # Fallback: macOS sysctl
                 return _macos_total_memory()
         except Exception:
-            pass
+            _logger.debug("MPS total memory query failed", exc_info=True)
         # ROCm-SMI fallback
         if self._backend == "rocm" and isinstance(idx, int):
             info = _rocm_smi_memory(idx)
@@ -336,7 +336,7 @@ class GPUMonitor:
             try:
                 GPU_MEMORY_USED.labels(gpu=str(idx)).set(used)
             except Exception:
-                pass
+                _logger.debug("Prometheus GPU_MEMORY_USED metric update failed", exc_info=True)
 
     # ------------------------------------------------------------------
     # System memory (CPU/RAM)
@@ -395,7 +395,7 @@ class GPUMonitor:
             try:
                 pynvml.nvmlShutdown()
             except Exception:
-                pass
+                _logger.debug("pynvml shutdown failed", exc_info=True)
 
 
 def _macos_total_memory() -> Optional[int]:
@@ -409,7 +409,7 @@ def _macos_total_memory() -> Optional[int]:
         if result.returncode == 0:
             return int(result.stdout.strip())
     except Exception:
-        pass
+        _logger.debug("macOS sysctl total memory query failed", exc_info=True)
     return None
 
 
@@ -524,7 +524,7 @@ class GPUHotPlugMonitor:
                         except Exception:
                             result.append({"index": i, "name": "unknown", "backend": "cuda"})
             except Exception:
-                pass
+                _logger.debug("torch.cuda GPU list enumeration failed", exc_info=True)
             # MPS
             try:
                 if hasattr(torch, "mps") and torch.mps.is_available():
@@ -535,7 +535,7 @@ class GPUHotPlugMonitor:
                         "total_memory": _macos_total_memory(),
                     })
             except Exception:
-                pass
+                _logger.debug("MPS GPU list enumeration failed", exc_info=True)
         # pynvml fallback (separate from torch)
         if not result and pynvml is not None:
             try:
@@ -555,7 +555,7 @@ class GPUHotPlugMonitor:
                     })
                 pynvml.nvmlShutdown()
             except Exception:
-                pass
+                _logger.debug("pynvml GPU list enumeration failed", exc_info=True)
         return result
 
     def _poll_loop(self) -> None:
@@ -610,7 +610,7 @@ class GPUHotPlugMonitor:
                             ]
                             self.gpu_monitor._refresh_all()
                         except Exception:
-                            pass
+                            _logger.debug("GPU monitor refresh after hot-unplug failed", exc_info=True)
                     for cb in self._on_remove_callbacks:
                         try:
                             cb(info)

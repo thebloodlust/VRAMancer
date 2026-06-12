@@ -23,16 +23,15 @@ class vLLMBackend(BaseLLMBackend):
 
     def load_model(self, model_name: str, **kwargs) -> Any:
         self.model_name = model_name
+        if os.environ.get("VRM_MINIMAL_TEST") == "1":
+            self.engine = "STUB_ENGINE"
+            self.is_loaded = True
+            return self.engine
         try:
             from vllm import LLMEngine, EngineArgs
         except ImportError:
-            if os.environ.get("VRM_MINIMAL_TEST") == "1":
-                self.engine = "STUB_ENGINE"
-                self.is_loaded = True
-                return self.engine
             logger.error("vLLM n'est pas installé. Lancez: pip install vllm")
             raise ImportError("vLLM not found")
-
         logger.info(f"Initialisation de vLLM (TP={self.tensor_parallel_size}, PP={self.pipeline_parallel_size}) pour {self.model_name}")
 
         # Pin to target GPU when TP=1 on a heterogeneous multi-GPU system
@@ -43,13 +42,26 @@ class vLLMBackend(BaseLLMBackend):
         gpu_utilization = float(kwargs.get("gpu_memory_utilization", self.gpu_memory_utilization))
         max_model_len = int(kwargs.get("max_model_len", 8192))
         dtype = kwargs.get("dtype", self.dtype_str)
+        cpu_offload_gb = float(kwargs.get("cpu_offload_gb", 0))
+
+        logger.info(f"Paramètres vLLM: gpu_memory_utilization={gpu_utilization}, max_model_len={max_model_len}, dtype={dtype}, cpu_offload_gb={cpu_offload_gb}")
         
-        logger.info(f"Paramètres vLLM: gpu_memory_utilization={gpu_utilization}, max_model_len={max_model_len}, dtype={dtype}")
-        
+        # Allow explicit tensor_parallel_size override from caller
+        tp = int(kwargs.get("tensor_parallel_size", self.tensor_parallel_size))
+        kv_cache_dtype = kwargs.get("kv_cache_dtype", None)
+
+        # Pin to target GPU only when truly single-GPU; multi-GPU needs all devices visible
+        if tp > 1:
+            os.environ.pop("CUDA_VISIBLE_DEVICES", None)
+            logger.info(f"vLLM TP={tp}: CUDA_VISIBLE_DEVICES cleared, all GPUs exposed")
+        elif self.target_gpu is not None:
+            os.environ["CUDA_VISIBLE_DEVICES"] = str(self.target_gpu)
+            logger.info(f"vLLM pinned to GPU {self.target_gpu} via CUDA_VISIBLE_DEVICES")
+
         engine_kwargs = dict(
             model=self.model_name,
             download_dir=self.cache_dir,
-            tensor_parallel_size=self.tensor_parallel_size,
+            tensor_parallel_size=tp,
             pipeline_parallel_size=self.pipeline_parallel_size,
             trust_remote_code=True,
             gpu_memory_utilization=gpu_utilization,
@@ -58,6 +70,10 @@ class vLLMBackend(BaseLLMBackend):
         )
         if dtype:
             engine_kwargs["dtype"] = dtype
+        if cpu_offload_gb > 0:
+            engine_kwargs["cpu_offload_gb"] = cpu_offload_gb
+        if kv_cache_dtype:
+            engine_kwargs["kv_cache_dtype"] = kv_cache_dtype
         
         engine_args = EngineArgs(**engine_kwargs)
         self.engine = LLMEngine.from_engine_args(engine_args)
@@ -121,7 +137,7 @@ class vLLMBackend(BaseLLMBackend):
                         import torch
                         torch.cuda.empty_cache()
                     except Exception:
-                        pass
+                        logger.debug("CUDA cache clear failed", exc_info=True)
                     # Halve max_tokens — this is the only lever that works
                     # on a live engine (gpu_memory_utilization only affects
                     # engine creation and is a no-op mid-flight).
@@ -185,7 +201,7 @@ class vLLMBackend(BaseLLMBackend):
                         import torch
                         torch.cuda.empty_cache()
                     except Exception:
-                        pass
+                        logger.debug("CUDA cache clear failed", exc_info=True)
                     max_tokens_val = max(1, max_tokens_val // 2)
                     logger.info("[vLLM Stream] Halving max_tokens to %d for OOM retry", max_tokens_val)
                     request_id_retry = str(uuid.uuid4())

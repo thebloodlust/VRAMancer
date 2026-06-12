@@ -468,7 +468,7 @@ Pipeline-parallel split across two heterogeneous GPUs: RTX 3090 (24 GB, Ampere C
 1. **Bi-GPU BF16 = 26.1 tok/s** — roughly half of single 3090 speed (48.9 tok/s). This is expected for a 7B model: it fits on one GPU, so the pipeline-parallel overhead (inter-GPU transfers via CPU staging) outweighs the benefit of additional compute.
 2. **TurboQuant bi-GPU = 4.6 tok/s** vs 0.75 tok/s single-GPU (+6.1x). The CPU bottleneck benefits from parallel KV operations across 2 GPUs, but remains the primary bottleneck.
 3. **Sparse V OOM on bi-GPU**: PagedKVCache allocates buffers on both GPUs. With Sparse V decompression buffers on top of the model split, total VRAM exceeds both GPUs (15.47 GB + 23.56 GB = 39 GB).
-4. **Multi-GPU is for models that don't fit**: Qwen-7B BF16 fits on a single 3090 (19 GB). Splitting it across 2 GPUs adds transfer overhead for zero capacity benefit. The real multi-GPU win is Qwen-14B (35.9 GB, doesn't fit on any single GPU → 6.0 tok/s bi-GPU).
+4. **Multi-GPU is for models that don't fit**: Qwen-7B BF16 fits on a single 3090 (19 GB). Splitting it across 2 GPUs adds transfer overhead for zero capacity benefit. The real multi-GPU win is Qwen-14B (35.9 GB, doesn't fit on any single GPU → 16.1 tok/s bi-GPU, see "Heterogeneous Multi-GPU — The Proof" above).
 
 ### NVFP4 + TurboQuant Combined (RTX 5070 Ti)
 
@@ -516,6 +516,59 @@ The remaining 53x gap requires fusing the ~80 kernel launches per compress() cal
 | `torch.compile` on compress/decompress | 5-10x (fuses all kernels) | Low — but compilation takes 30-60s, crashes in some environments |
 | Custom CUDA kernel (fused WHT + polar encode + QJL) | 10-50x | High — recursive polar encode maps poorly to SIMT |
 | Reduce compression frequency (compress every N tokens) | N× | Medium — trades memory savings for speed |
+
+## Rust extension (`vramancer_rust`) — A/B vs CPU-staged Python (10 June 2026)
+
+`bench_kv_migration.py` measures the operation `vramancer_rust` actually accelerates:
+KV-cache page migration GPU 1 → GPU 0 during VRAM Lending Pool preemption (Strategy 1.5,
+`cuMemcpyPeerAsync` via PyO3, vs the pure-Python pinned-memory CPU-staged path).
+Hardware: RTX 3090 + RTX 5070 Ti, Proxmox VM (`can_device_access_peer` reports `False`,
+i.e. driver-level P2P claimed but unconfirmed by CUDA — see ReBAR section below).
+
+| Scenario | CPU-staged (Python) | Rust P2P | Speedup |
+|---|---|---|---|
+| 10 pages (30 MB) | 3.1 ms | 2.4 ms | +24.1% |
+| 50 pages (150 MB) | 11.5 ms | 7.2 ms | +37.4% |
+| 100 pages (300 MB) | 23.0 ms | 13.2 ms | +42.5% |
+| 300 pages (900 MB) | 69.7 ms | 37.1 ms | +46.7% |
+| 500 pages (1.5 GB) | 115.7 ms | 61.1 ms | **+47.2%** |
+
+**Decision (T2.2): Rust stays in core.** Every scenario clears the 10% threshold, and the
+gain grows with transfer size (24% → 47%) — exactly the regime that matters for lending-pool
+reclaim under long-context KV pressure. `rust_core/` and `core/transfer_manager.py` Strategy 1.5
+remain in the core package; `vramancer_rust` stays an optional build (maturin), with a
+pure-Python fallback when the wheel/extension isn't present (`core/rust_bridge.py`).
+
+Reproduce: `python benchmarks/bench_kv_migration.py` (requires 2 GPUs + `vramancer_rust` built).
+
+## ReBAR + transfer strategies — A/B (10 June 2026)
+
+`bench_transfer_strategies.py` measures Strategy 4 (plain CPU-staged), Strategy 2
+(`PipelinedTransport`, double-buffered pinned memory) and Strategy 1.7 (`ReBarTransport`,
+BAR-optimal chunks) for GPU 1 → GPU 0, on the same RTX 3090 + RTX 5070 Ti Proxmox VM.
+
+| Size | CPU-staged | Pipelined (Strategy 2) | ReBAR (Strategy 1.7) |
+|---|---|---|---|
+| 1 MB | 0.4 Gbps | 5.5 Gbps | n/a |
+| 4 MB | 25.4 Gbps | 38.6 Gbps | n/a |
+| 16 MB | 30.1 Gbps | 127.3 Gbps | n/a |
+| 64 MB | 16.3 Gbps | 162.6 Gbps | n/a |
+| 256 MB | 16.2 Gbps | 174.3 Gbps | n/a |
+| 1024 MB | 16.2 Gbps | **178.0 Gbps** | n/a |
+
+`ReBarTransport.available = False` on this run: `detect_rebar()` reports BAR0 = 8 MB
+(GPU0) / 16 MB (GPU1) — legacy windows, below the 4 GB full-window threshold.
+
+**Decision (T2.3): ReBAR stays in `experimental/`.** `docs/reports/REBAR_PROXMOX_BENCHMARK.md`
+(May 2026) recorded BAR1 ≥ VRAM (32 GB / 16 GB) on a different Proxmox configuration and
+measured ~21-24 GB/s — but that configuration is not the one currently running, and
+`ReBarTransport` cannot be exercised here. Status: "designed, validated once under a
+different VM config, awaiting re-validation" per Fable T2.3. Note that `PipelinedTransport`
+(Strategy 2, same file) IS active and validated on this machine — it's the actual fallback
+`core/transfer_manager.py` uses when P2P/Rust/ReBAR aren't available, and explains most of
+the gap vs naive CPU-staged (178 vs 16 Gbps, +1000% at 1 GB).
+
+Reproduce: `VRM_EXPERIMENTAL=1 python benchmarks/bench_transfer_strategies.py`.
 
 ## Reproduction
 

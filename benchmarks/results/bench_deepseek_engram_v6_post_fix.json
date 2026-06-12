@@ -1,0 +1,38 @@
+{
+  "model": "deepseek-ai/DeepSeek-V4-Flash",
+  "backend": "vllm",
+  "note": "FAILED \u2014 vLLM load error",
+  "error": "Engine core initialization failed. See root cause above. Failed core proc(s): {}",
+  "lending": {
+    "lending_enabled": true,
+    "lender_gpu": 1,
+    "compute_gpu": 0,
+    "lend_requested_gb": 12.884901888,
+    "lease_id": "fbb2409738eb",
+    "p2p_bw_gb_s": 11.45,
+    "p2p_peer_access": false,
+    "lender_info": {
+      "name": "NVIDIA GeForce RTX 3090",
+      "sm": "8.6",
+      "total_mb": 24576,
+      "free_mb": 24111,
+      "used_mb": 464
+    },
+    "compute_info": {
+      "name": "NVIDIA GeForce RTX 5070 Ti",
+      "sm": "12.0",
+      "total_mb": 16303,
+      "free_mb": 15826,
+      "used_mb": 476
+    },
+    "lend_actual_gb": 12.884901888,
+    "staging_materialized": false,
+    "p2p_data_plane": {
+      "lender_to_compute_gb_s": 11.51,
+      "compute_to_lender_gb_s": 11.78,
+      "iterations": 10,
+      "size_mb": 256,
+      "ok": true
+    }
+  }
+}

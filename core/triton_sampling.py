@@ -26,6 +26,10 @@ _MINIMAL = os.environ.get("VRM_MINIMAL_TEST", "")
 _HAS_TRITON = False
 _HAS_TORCH = False
 
+# Debug counters — activated via VRM_DEBUG_SAMPLING=1
+_DEBUG_SAMPLING = os.environ.get("VRM_DEBUG_SAMPLING", "0") == "1"
+_PATH_COUNTS: dict = {"greedy": 0, "fast_topk": 0, "triton_full": 0, "pytorch_fallback": 0}
+
 try:
     import torch
     _HAS_TORCH = True
@@ -128,6 +132,8 @@ def fused_sample(
 
     # Greedy: single kernel call
     if greedy or temperature <= 0:
+        if _DEBUG_SAMPLING:
+            _PATH_COUNTS["greedy"] += 1
         return torch.argmax(logits, dim=-1, keepdim=True)
 
     batch_size = logits.shape[0]
@@ -137,6 +143,8 @@ def fused_sample(
     # This avoids processing the full vocab (32k-152k) entirely.
     # topk + softmax(k) + multinomial(k) is much faster than full-vocab ops.
     if top_k > 0 and top_k < vocab_size:
+        if _DEBUG_SAMPLING:
+            _PATH_COUNTS["fast_topk"] += 1
         top_vals, top_indices = torch.topk(logits, top_k, dim=-1, sorted=True)
         # Temperature scaling + softmax on just k values (tiny tensor)
         top_probs = torch.softmax(top_vals / temperature, dim=-1)
@@ -152,6 +160,8 @@ def fused_sample(
     # ── Full-vocab path (no top_k) ──
     # Use Triton fused kernel for temperature + softmax when available.
     if _HAS_TRITON and logits.is_cuda:
+        if _DEBUG_SAMPLING:
+            _PATH_COUNTS["triton_full"] += 1
         # Fused temperature + softmax via Triton kernel
         probs = torch.empty_like(logits)
         BLOCK = min(triton.next_power_of_2(vocab_size), 4096)
@@ -178,6 +188,8 @@ def fused_sample(
         return torch.multinomial(probs, num_samples=1)
 
     # Fallback: PyTorch path (no Triton, no top_k — both handled above)
+    if _DEBUG_SAMPLING:
+        _PATH_COUNTS["pytorch_fallback"] += 1
     if temperature != 1.0:
         logits = logits / temperature
 

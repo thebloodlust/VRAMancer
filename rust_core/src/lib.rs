@@ -28,8 +28,11 @@ pub enum TransportTier {
 /// Détecte le meilleur tier réseau disponible sur ce nœud host
 #[pyfunction]
 fn detect_best_transport() -> TransportTier {
-    // Plus tard, nous ajouterons ici la détection de "nvidia_peermem" / "ibverbs".
-    // Pour l'instant, on active notre nouveau "Niveau 2" par défaut (ZeroCopy TCP) !
+    // Probe RDMA verbs availability at runtime via libibverbs
+    let has_rdma = unsafe { libloading::Library::new("libibverbs.so.1").is_ok() };
+    if has_rdma {
+        return TransportTier::DirectRdma;
+    }
     TransportTier::ZeroCopyTcp
 }
 
@@ -46,13 +49,37 @@ mod cuda_ffi {
 
     type CUresult = i32;
 
-    static CUDA_LIB: OnceLock<libloading::Library> = OnceLock::new();
+    static CUDA_LIB: OnceLock<Option<libloading::Library>> = OnceLock::new();
+
+    /// Try to load libcuda.so.1 (Linux) / nvcuda.dll (Windows).
+    /// Returns None when CUDA is unavailable, instead of panicking.
+    fn try_lib() -> Option<&'static libloading::Library> {
+        CUDA_LIB
+            .get_or_init(|| unsafe {
+                #[cfg(unix)]
+                let names = ["libcuda.so.1", "libcuda.so"];
+                #[cfg(windows)]
+                let names = ["nvcuda.dll"];
+                for n in names.iter() {
+                    if let Ok(l) = libloading::Library::new(n) {
+                        return Some(l);
+                    }
+                }
+                None
+            })
+            .as_ref()
+    }
 
     fn lib() -> &'static libloading::Library {
-        CUDA_LIB.get_or_init(|| unsafe {
-            libloading::Library::new("libcuda.so.1")
-                .expect("Cannot load libcuda.so.1")
-        })
+        try_lib().expect(
+            "libcuda not loadable — cuda feature requested but no driver found. \
+             Use cuda_available() before calling CUDA APIs.",
+        )
+    }
+
+    /// True if libcuda.so.1 / nvcuda.dll is loadable on the current system.
+    pub fn cuda_available() -> bool {
+        try_lib().is_some()
     }
 
     /// cuInit(0) — initialize CUDA driver. Safe to call multiple times.
@@ -89,6 +116,22 @@ mod cuda_ffi {
             let res = sym(dst, src, bytes);
             if res != 0 {
                 return Err(format!("cuMemcpyDtoD_v2 returned {res}"));
+            }
+            Ok(())
+        }
+    }
+
+    /// cuMemcpyDtoDAsync_v2(dst, src, ByteCount, hStream)
+    /// Asynchronous device-to-device copy. With stream=0 (null stream),
+    /// subsequent GPU operations on the same device will serialize after it.
+    pub fn memcpy_dtod_async(dst: u64, src: u64, bytes: usize, stream: u64) -> Result<(), String> {
+        unsafe {
+            let sym: libloading::Symbol<unsafe extern "C" fn(u64, u64, usize, u64) -> CUresult> =
+                lib().get(b"cuMemcpyDtoDAsync_v2\0")
+                    .map_err(|e| format!("cuMemcpyDtoDAsync_v2 not found: {e}"))?;
+            let res = sym(dst, src, bytes, stream);
+            if res != 0 {
+                return Err(format!("cuMemcpyDtoDAsync_v2 returned {res}"));
             }
             Ok(())
         }
@@ -534,7 +577,18 @@ impl GpuPipeline {
     ///   chunk_mb: chunk size in MiB (default 16)
     #[new]
     fn new(src_gpu: i32, dst_gpu: i32, chunk_mb: Option<usize>) -> PyResult<Self> {
-        let chunk_bytes = chunk_mb.unwrap_or(16) * 1024 * 1024;
+        let chunk_mb = chunk_mb.unwrap_or(16);
+        // Guard against absurd chunk sizes: the 3rd arg is MEGABYTES, not bytes.
+        // A common misuse is passing 1<<20 (intending "1 MB" in bytes), which
+        // would request 1 TiB per buffer × triple-buffering → a cryptic
+        // `cuMemAllocHost returned 2` (CUDA_ERROR_OUT_OF_MEMORY). Fail clearly.
+        if chunk_mb == 0 || chunk_mb > 4096 {
+            return Err(PyValueError::new_err(format!(
+                "GpuPipeline chunk_mb={chunk_mb} is out of range (1..=4096 MiB). \
+                 Note: the 3rd argument is the chunk size in MEGABYTES, not bytes."
+            )));
+        }
+        let chunk_bytes = chunk_mb * 1024 * 1024;
         let n_bufs = 3usize;  // Triple-buffering for full overlap
 
         let src_ctx = cuda_ffi::device_primary_ctx_retain(src_gpu)
@@ -940,9 +994,10 @@ fn cxl_direct_memory_load(py: Python, path: String, ptr: usize, num_bytes: usize
     })
 }
 
-/// Fast XOR for Holographic Parity (bypassing GIL)
+/// Fast XOR parity over N data shards (releases the GIL).
+/// Single-fault-tolerance erasure coding (RAID-5 style).
 #[pyfunction]
-fn generate_holographic_parity(py: Python, shards: Vec<&[u8]>) -> PyResult<Py<PyBytes>> {
+fn generate_xor_parity(py: Python, shards: Vec<&[u8]>) -> PyResult<Py<PyBytes>> {
     // We can confidently release the GIL because we only have immutable slices.
     let (parity, max_len) = py.allow_threads(|| {
         let max_len = shards.iter().map(|s| s.len()).max().unwrap_or(0);
@@ -967,9 +1022,15 @@ fn generate_holographic_parity(py: Python, shards: Vec<&[u8]>) -> PyResult<Py<Py
     Ok(PyBytes::new(py, &parity).into())
 }
 
-/// Reconstructs a missing tensor chunk from Parity
+/// Deprecated alias for ``generate_xor_parity`` (kept for backward compat).
 #[pyfunction]
-fn heal_holograph(py: Python, valid_shards: Vec<&[u8]>, parity: &[u8]) -> PyResult<Py<PyBytes>> {
+fn generate_holographic_parity(py: Python, shards: Vec<&[u8]>) -> PyResult<Py<PyBytes>> {
+    generate_xor_parity(py, shards)
+}
+
+/// Reconstruct a single missing data shard from the remaining shards + parity.
+#[pyfunction]
+fn repair_xor_shard(py: Python, valid_shards: Vec<&[u8]>, parity: &[u8]) -> PyResult<Py<PyBytes>> {
     let reconstructed = py.allow_threads(|| {
         let mut rec_buf = parity.to_vec();
         for shard in valid_shards {
@@ -981,6 +1042,12 @@ fn heal_holograph(py: Python, valid_shards: Vec<&[u8]>, parity: &[u8]) -> PyResu
     });
     
     Ok(PyBytes::new(py, &reconstructed).into())
+}
+
+/// Deprecated alias for ``repair_xor_shard`` (kept for backward compat).
+#[pyfunction]
+fn heal_holograph(py: Python, valid_shards: Vec<&[u8]>, parity: &[u8]) -> PyResult<Py<PyBytes>> {
+    repair_xor_shard(py, valid_shards, parity)
 }
 
 /// C'est ici que l'on déclare officiellement notre module Python.
@@ -1149,6 +1216,30 @@ fn direct_vram_copy(py: Python, src_ptr: u64, dst_ptr: u64, size_bytes: usize) -
 #[pyfunction]
 #[cfg(not(feature = "cuda"))]
 fn direct_vram_copy(_py: Python, _src_ptr: u64, _dst_ptr: u64, _size_bytes: usize) -> PyResult<bool> {
+    Err(PyValueError::new_err("Compilé sans feature CUDA."))
+}
+
+/// Async P2P GPU-to-GPU copy via cuMemcpyDtoDAsync_v2 on the null stream.
+/// Does NOT block the host CPU. Subsequent PyTorch operations enqueued on the
+/// same CUDA device will naturally serialize after this copy via the default
+/// stream. Gate behind VRM_TRANSFER_ASYNC=1 in transfer_manager.py.
+#[cfg(feature = "cuda")]
+#[pyfunction]
+fn direct_vram_copy_async(py: Python, src_ptr: u64, dst_ptr: u64, size_bytes: usize) -> PyResult<bool> {
+    py.allow_threads(|| {
+        // Enqueue async DtoD on stream=0 (null/default stream).
+        // The host returns immediately; GPU operations on this device that
+        // follow will implicitly wait for this copy to complete.
+        match cuda_ffi::memcpy_dtod_async(dst_ptr, src_ptr, size_bytes, 0) {
+            Ok(()) => Ok(true),
+            Err(e) => Err(PyValueError::new_err(format!("CUDA DtoDAsync failed: {e}")))
+        }
+    })
+}
+
+#[pyfunction]
+#[cfg(not(feature = "cuda"))]
+fn direct_vram_copy_async(_py: Python, _src_ptr: u64, _dst_ptr: u64, _size_bytes: usize) -> PyResult<bool> {
     Err(PyValueError::new_err("Compilé sans feature CUDA."))
 }
 
@@ -1989,6 +2080,7 @@ fn vramancer_rust(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(detect_best_transport, m)?)?;
     m.add_function(wrap_pyfunction!(direct_vram_load, m)?)?;
     m.add_function(wrap_pyfunction!(direct_vram_copy, m)?)?;
+    m.add_function(wrap_pyfunction!(direct_vram_copy_async, m)?)?;
     m.add_function(wrap_pyfunction!(staged_gpu_transfer, m)?)?;
     m.add_function(wrap_pyfunction!(async_gpu_transfer, m)?)?;
     m.add_function(wrap_pyfunction!(bench_gpu_transfer, m)?)?;
@@ -2001,13 +2093,28 @@ fn vramancer_rust(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(receive_tensor_chunked, m)?)?;
     m.add_function(wrap_pyfunction!(cxl_direct_memory_dump, m)?)?;
     m.add_function(wrap_pyfunction!(cxl_direct_memory_load, m)?)?;
+    m.add_function(wrap_pyfunction!(generate_xor_parity, m)?)?;
+    m.add_function(wrap_pyfunction!(repair_xor_shard, m)?)?;
+    // Deprecated aliases (backward compat):
     m.add_function(wrap_pyfunction!(generate_holographic_parity, m)?)?;
     m.add_function(wrap_pyfunction!(heal_holograph, m)?)?;
     m.add_function(wrap_pyfunction!(inject_to_vram_ptr, m)?)?;
     m.add_function(wrap_pyfunction!(batch_tokenize_fast, m)?)?;
     m.add_function(wrap_pyfunction!(tokenize_fast, m)?)?;
     m.add_function(wrap_pyfunction!(tokenizer_vocab_size, m)?)?;
+    m.add_function(wrap_pyfunction!(cuda_available, m)?)?;
     Ok(())
+}
+
+/// Returns True iff libcuda.so.1 / nvcuda.dll is loadable on this host.
+/// Always available; returns False when the crate was built without
+/// the `cuda` feature.
+#[pyfunction]
+fn cuda_available() -> bool {
+    #[cfg(feature = "cuda")]
+    { cuda_ffi::cuda_available() }
+    #[cfg(not(feature = "cuda"))]
+    { false }
 }
 
 /// Injecte un buffer CPU directement dans la VRAM via cuMemcpyHtoD (GIL released)

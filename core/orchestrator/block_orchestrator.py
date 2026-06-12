@@ -1,6 +1,8 @@
 from __future__ import annotations
 import os, time, logging
 
+_log = logging.getLogger("vramancer.block_orchestrator")
+
 try:
     from core.memory_balancer import MemoryBalancer
 except ImportError:
@@ -31,7 +33,7 @@ def load_block_from_disk(path):
         import torch
         return torch.load(path, map_location="cpu", weights_only=True)
     except Exception:
-        pass
+        _log.debug("torch.load failed, falling back to JSON", exc_info=True)
     import json
     with open(path, "r") as f:
         return json.load(f)
@@ -45,7 +47,7 @@ def save_block_to_disk(block, path):
             torch.save(block.cpu(), path)
             return
     except Exception:
-        pass
+        _log.debug("torch.save failed, falling back to JSON", exc_info=True)
     import json
     with open(path, "w") as f:
         json.dump({"data": str(block)}, f)

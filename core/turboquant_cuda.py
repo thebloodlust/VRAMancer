@@ -48,7 +48,7 @@ def _detect_and_set_cuda_arch():
                     max_nvcc_arch = 86
                 break
     except Exception:
-        pass
+        _logger.debug("NVCC version detection failed", exc_info=True)
 
     archs = set()
     for i in range(torch.cuda.device_count()):

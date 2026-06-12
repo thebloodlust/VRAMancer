@@ -258,9 +258,13 @@ class TurboQuantLayer(CacheLayerMixin):
     def get_max_cache_shape(self) -> int:
         return -1  # dynamic, no maximum
 
-    def get_mask_sizes(self, cache_position: torch.Tensor) -> tuple[int, int]:
+    def get_mask_sizes(self, cache_position) -> tuple[int, int]:
         kv_offset = 0
-        query_length = cache_position.shape[0]
+        # transformers 5.x may pass cache_position as int or Tensor
+        if isinstance(cache_position, int):
+            query_length = cache_position
+        else:
+            query_length = cache_position.shape[0]
         kv_length = self.get_seq_length() + query_length
         return kv_length, kv_offset
 
@@ -386,7 +390,9 @@ class TurboQuantCache(Cache):
         num_layers = getattr(config, "num_hidden_layers", 12)
         num_heads = getattr(config, "num_attention_heads", 12)
         hidden_size = getattr(config, "hidden_size", 768)
-        head_dim = hidden_size // num_heads
+        # Prefer explicit head_dim attribute (some models like Devstral set it
+        # independently from hidden_size // num_heads, e.g. 128 vs 160)
+        head_dim = getattr(config, "head_dim", None) or (hidden_size // num_heads)
 
         if bits_per_angle is None:
             bits_per_angle = int(os.environ.get("VRM_KV_COMPRESSION_BITS", "3"))

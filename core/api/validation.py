@@ -1,8 +1,11 @@
 """Input validation helpers for VRAMancer API endpoints."""
 from __future__ import annotations
 
+import logging
 import os
 from typing import Optional, Tuple
+
+_logger = logging.getLogger(__name__)
 
 # Max prompt length in characters (configurable via env var)
 _MAX_PROMPT_LENGTH = int(os.environ.get('VRM_MAX_PROMPT_LENGTH', '100000'))
@@ -67,7 +70,7 @@ def count_tokens(text: str, tokenizer=None) -> int:
         try:
             return len(tokenizer.encode(text))
         except Exception:
-            pass
+            _logger.debug("Tokenizer encode failed", exc_info=True)
     return len(text.split())
 
 

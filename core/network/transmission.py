@@ -152,7 +152,7 @@ class UDPTensorTransport:
             self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1024 * 1024 * 32)
             self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 1024 * 1024 * 32)
         except Exception:
-            pass
+            _log.debug("UDP buffer size tuning failed", exc_info=True)
 
     def send_tensor(self, tensor_bytes: bytes, host: str, port: int):
         """Send large tensor over UDP with chunking (VTP-Lite)."""

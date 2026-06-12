@@ -24,7 +24,7 @@ os.environ.setdefault("VRM_API_TOKEN", "testtoken")
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from core.vram_lending import (
+from experimental.vram_lending import (
     VRAMLendingPool,
     VRAMLease,
     GPUBudget,
@@ -562,21 +562,21 @@ class TestBugFixes:
 
     def test_hierarchical_memory_thread_safe(self):
         """hierarchical_memory now has a _lock."""
-        from core.hierarchical_memory import HierarchicalMemoryManager
+        from experimental.hierarchical_memory import HierarchicalMemoryManager
         hmm = HierarchicalMemoryManager()
         assert hasattr(hmm, '_lock')
         assert isinstance(hmm._lock, type(threading.Lock()))
 
     def test_hierarchical_memory_tensor_registry(self):
         """hierarchical_memory now tracks tensors for NVMe spill."""
-        from core.hierarchical_memory import HierarchicalMemoryManager
+        from experimental.hierarchical_memory import HierarchicalMemoryManager
         hmm = HierarchicalMemoryManager()
         assert hasattr(hmm, '_tensor_registry')
         assert isinstance(hmm._tensor_registry, dict)
 
     def test_hierarchical_memory_register_with_tensor(self):
         """register_block accepts optional tensor parameter."""
-        from core.hierarchical_memory import HierarchicalMemoryManager
+        from experimental.hierarchical_memory import HierarchicalMemoryManager
         from core.memory_block import MemoryBlock
         hmm = HierarchicalMemoryManager()
         block = MemoryBlock(id="test-block-1", size_mb=100)

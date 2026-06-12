@@ -31,7 +31,7 @@ import threading
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from core.hierarchical_memory import Tier, HierarchicalMemoryManager
+from experimental.hierarchical_memory import Tier, HierarchicalMemoryManager
 try:
     import builtins
     if not hasattr(builtins, '_hmm'):
@@ -50,7 +50,7 @@ except Exception:
 
 from typing import TYPE_CHECKING
 try:
-    from core.hierarchical_memory import Tier
+    from experimental.hierarchical_memory import Tier
 except ImportError:
     Tier = str
 
@@ -165,6 +165,11 @@ class PhysicalPage:
     # Shape: [num_layers, 2(K/V), num_kv_heads, page_size, head_dim]
     data: Any = None
 
+    # V6.D Phase 2: empty buffer allocated on lender GPU for borrowed pages
+    # (when VRM_KV_LEND=1). Actual KV writes to this buffer are NOT yet wired
+    # into the inference path — use with caution.
+    borrowed_tensor: Any = None
+
 
 # ---------------------------------------------------------------------------
 # Page table (per-request virtual→physical mapping)
@@ -216,6 +221,9 @@ class PagedKVCacheManager:
         self._peak_usage = 0
         self._cache_hits = 0
         self._overflow_borrows = 0
+        # V6.D Phase 3: cross-GPU staging counters
+        self._phase3_stages = 0
+        self._phase3_failures = 0
 
         # Multi-GPU pool: device -> tensor pool
         self._gpu_pools: Dict[str, Any] = {}
@@ -225,6 +233,7 @@ class PagedKVCacheManager:
         # VRAMLendingPool integration for overflow
         self._lending_pool = None
         self._lending_leases: Dict[str, Any] = {}  # lease_id -> lease
+        self._transfer_manager = None  # V6.D: injected for cross-GPU KV transfers
 
         # KV cache compression (per-head compressor + compressed sidecar)
         self._kv_compressor: Any = None
@@ -260,6 +269,10 @@ class PagedKVCacheManager:
             self.config.total_memory_bytes / 1e6,
             self.config.devices,
         )
+
+    def set_transfer_manager(self, transfer_manager) -> None:
+        """Inject TransferManager for V6.D KV lending data plane. Optional."""
+        self._transfer_manager = transfer_manager
 
     def _init_multi_gpu_pools(self) -> None:
         """Pre-allocate page pools across all registered GPUs.
@@ -302,7 +315,7 @@ class PagedKVCacheManager:
                         )
                         device_pages = max_staging
                 except Exception:
-                    pass  # Fall back to configured device_pages
+                    _logger.debug("CUDA mem_get_info failed, using configured device_pages", exc_info=True)
 
             try:
                 pool = torch.zeros(
@@ -344,7 +357,7 @@ class PagedKVCacheManager:
     def _init_lending_pool(self) -> None:
         """Connect to the VRAMLendingPool for overflow pages."""
         try:
-            from core.vram_lending import get_lending_pool
+            from experimental.vram_lending import get_lending_pool
             self._lending_pool = get_lending_pool()
             _logger.debug("Connected to VRAMLendingPool for overflow")
         except Exception:
@@ -457,6 +470,18 @@ class PagedKVCacheManager:
                 page = self._pages[page_id]
                 page.ref_count -= 1
                 if page.ref_count <= 0:
+                    # V6.D Phase 1: release lending lease for borrowed pages
+                    if page.is_borrowed and page.lease_id and self._lending_pool:
+                        try:
+                            self._lending_pool.release(page.lease_id)
+                        except Exception:
+                            _logger.debug(
+                                "Lease release failed for page %d", page_id, exc_info=True
+                            )
+                        self._lending_leases.pop(page.lease_id, None)
+                        page.is_borrowed = False
+                        page.lease_id = None
+
                     page.allocated = False
                     page.ref_count = 0
                     self._free_pages.append(page_id)
@@ -553,8 +578,36 @@ class PagedKVCacheManager:
 
         If KV compression is enabled, also stores compressed
         forms in the sidecar for later attention_score() and offload.
+
+        V6.D Phase 4 (gated VRM_KV_LEND_ATTENTION=1): when the target
+        page is borrowed (lives on a lender GPU via VRAMLendingPool)
+        AND has a populated borrowed_tensor (Phase 2 allocation),
+        the write is routed to the lender-resident buffer instead
+        of self._gpu_pool. Cross-device assignment relies on PyTorch's
+        built-in P2P (or implicit host staging if P2P unsupported).
+        Without the env var, writes always go to self._gpu_pool —
+        for borrowed pages this means data lives on the borrower GPU
+        and Phase 3 staging will read stale/zero data from the lender.
         """
-        if self._gpu_pool is not None:
+        # V6.D Phase 4: route writes to borrowed_tensor on lender GPU
+        routed = False
+        if (
+            os.getenv("VRM_KV_LEND_ATTENTION", "0") == "1"
+            and 0 <= page_id < len(self._pages)
+        ):
+            page = self._pages[page_id]
+            if page.is_borrowed and page.borrowed_tensor is not None:
+                try:
+                    page.borrowed_tensor[layer_idx, 0, :, slot, :] = key
+                    page.borrowed_tensor[layer_idx, 1, :, slot, :] = value
+                    routed = True
+                except Exception:
+                    _logger.debug(
+                        "V6.D Phase 4: borrowed_tensor write failed page=%d slot=%d, falling back to _gpu_pool",
+                        page_id, slot, exc_info=True,
+                    )
+
+        if not routed and self._gpu_pool is not None:
             self._gpu_pool[page_id, layer_idx, 0, :, slot, :] = key
             self._gpu_pool[page_id, layer_idx, 1, :, slot, :] = value
 
@@ -565,7 +618,7 @@ class PagedKVCacheManager:
                 v_flat = value.reshape(-1, self.config.head_dim)
                 self._pending_compress.append((page_id, layer_idx, slot, k_flat, v_flat))
             except Exception:
-                pass
+                _logger.debug("KV compression enqueue failed", exc_info=True)
 
     def flush_compression(self) -> None:
         """Batch-compress all pending KV writes in a single kernel launch.
@@ -619,7 +672,7 @@ class PagedKVCacheManager:
                             "k": ck, "v": cv,
                         }
             except Exception:
-                pass
+                _logger.debug("KV flush compression failed", exc_info=True)
 
     def read_kv(
         self,
@@ -710,6 +763,7 @@ class PagedKVCacheManager:
             entry.num_tokens = seq_len
 
         # Vectorized write: one scatter per page instead of per-token
+        phase4 = os.getenv("VRM_KV_LEND_ATTENTION", "0") == "1"
         for layer_idx in range(min(num_layers, self.config.num_layers)):
             if hasattr(past_key_values, 'key_cache'):
                 k = past_key_values.key_cache[layer_idx][0]  # [heads, seq, dim]
@@ -724,9 +778,26 @@ class PagedKVCacheManager:
                 if tok_start >= seq_len:
                     break
                 slot_end = tok_end - tok_start
-                # Write whole page slice at once: [heads, slot_end, dim]
-                self._gpu_pool[page_id, layer_idx, 0, :, :slot_end, :] = k[:, tok_start:tok_end, :]
-                self._gpu_pool[page_id, layer_idx, 1, :, :slot_end, :] = v[:, tok_start:tok_end, :]
+
+                # V6.D Phase 4: route page-slice writes to borrowed_tensor
+                routed = False
+                if phase4 and 0 <= page_id < len(self._pages):
+                    page = self._pages[page_id]
+                    if page.is_borrowed and page.borrowed_tensor is not None:
+                        try:
+                            page.borrowed_tensor[layer_idx, 0, :, :slot_end, :] = k[:, tok_start:tok_end, :]
+                            page.borrowed_tensor[layer_idx, 1, :, :slot_end, :] = v[:, tok_start:tok_end, :]
+                            routed = True
+                        except Exception:
+                            _logger.debug(
+                                "V6.D Phase 4: borrowed_tensor slice write failed page=%d, falling back",
+                                page_id, exc_info=True,
+                            )
+
+                if not routed:
+                    # Write whole page slice at once: [heads, slot_end, dim]
+                    self._gpu_pool[page_id, layer_idx, 0, :, :slot_end, :] = k[:, tok_start:tok_end, :]
+                    self._gpu_pool[page_id, layer_idx, 1, :, :slot_end, :] = v[:, tok_start:tok_end, :]
 
                 # Compression is DEFERRED — raw KV stays in gpu_pool.
                 # Compressed form is built lazily on first read
@@ -739,6 +810,17 @@ class PagedKVCacheManager:
         Returns tuple of (key, value) per layer.
           key/value shape: [1, num_kv_heads, seq_len, head_dim]
         Returns None if request not found or GPU pool unavailable.
+
+        V6.D Phase 3 (gated by VRM_KV_LEND_ATTENTION=1, default off):
+        when a request's pages include borrowed pages (allocated on a
+        lender GPU via VRAMLendingPool), this method stages each
+        borrowed page back to the query GPU via
+        VRAMLendingPool.transfer_from_lease() (which routes through
+        TransferManager's Rust P2P / ReBAR / CPU-staged cascade).
+        Without the env var, borrowed pages are read directly from
+        self._gpu_pool — that index access only contains valid data
+        for local pages, so borrowed slots will return zeros (the
+        original behavior).
         """
         if self._gpu_pool is None:
             return None
@@ -750,12 +832,69 @@ class PagedKVCacheManager:
             page_ids = list(entry.pages)
             num_tokens = entry.num_tokens
 
+            # V6.D Phase 3: detect borrowed pages while holding the lock
+            # (lease_id and borrowed_tensor must be read atomically with
+            # the page state — eviction/free could race otherwise).
+            phase3_enabled = os.getenv("VRM_KV_LEND_ATTENTION", "0") == "1"
+            borrowed_indices: List[Tuple[int, Any]] = []
+            if phase3_enabled and self._lending_pool is not None:
+                for i, pid in enumerate(page_ids):
+                    p = self._pages[pid]
+                    if p.is_borrowed and p.lease_id and p.borrowed_tensor is not None:
+                        lease = self._lending_leases.get(p.lease_id)
+                        if lease is not None:
+                            borrowed_indices.append((i, lease))
+
+        # Stage borrowed pages OUTSIDE the lock — cross-GPU transfers
+        # can be slow (tens of ms) and we don't want to block other
+        # readers/writers of the page table during that time.
+        staged: Dict[int, Any] = {}
+        if borrowed_indices:
+            query_device = self._gpu_pool.device
+            query_idx = query_device.index if query_device.type == "cuda" else 0
+            for i, lease in borrowed_indices:
+                try:
+                    staged_tensor = self._lending_pool.transfer_from_lease(lease, query_idx)
+                    if staged_tensor is not None:
+                        staged[i] = staged_tensor
+                        self._phase3_stages += 1
+                    else:
+                        self._phase3_failures += 1
+                        _logger.warning(
+                            "V6.D Phase 3: transfer_from_lease returned None for "
+                            "page idx %d (lease %s)", i, lease.lease_id,
+                        )
+                except Exception:
+                    self._phase3_failures += 1
+                    _logger.debug(
+                        "V6.D Phase 3: stage failed for page idx %d", i,
+                        exc_info=True,
+                    )
+
+        has_borrowed = bool(staged)
         past_key_values = []
         for layer_idx in range(self.config.num_layers):
-            # Gather all pages for this layer
-            # gpu_pool shape: [page_id, layer, K/V, heads, page_size, dim]
-            k_pages = self._gpu_pool[page_ids, layer_idx, 0]  # [N, heads, ps, dim]
-            v_pages = self._gpu_pool[page_ids, layer_idx, 1]
+            if not has_borrowed:
+                # Fast path: all pages local to query GPU
+                k_pages = self._gpu_pool[page_ids, layer_idx, 0]
+                v_pages = self._gpu_pool[page_ids, layer_idx, 1]
+            else:
+                # Mixed path: gather per-page, splicing in staged tensors
+                # for borrowed pages. Slightly slower (Python loop over
+                # pages instead of vectorized index) but correct across
+                # device boundaries.
+                k_list = []
+                v_list = []
+                for i, pid in enumerate(page_ids):
+                    if i in staged:
+                        # staged[i] shape: [num_layers, 2, kv_heads, page_size, head_dim]
+                        k_list.append(staged[i][layer_idx, 0])
+                        v_list.append(staged[i][layer_idx, 1])
+                    else:
+                        k_list.append(self._gpu_pool[pid, layer_idx, 0])
+                        v_list.append(self._gpu_pool[pid, layer_idx, 1])
+                k_pages = torch.stack(k_list, dim=0)
+                v_pages = torch.stack(v_list, dim=0)
 
             # Reshape: [N, heads, page_size, dim] → [heads, N*page_size, dim]
             heads = k_pages.shape[1]
@@ -825,6 +964,30 @@ class PagedKVCacheManager:
             self._overflow_borrows += 1
             self._total_allocations += 1
 
+            # V6.D Phase 2: eagerly allocate an empty buffer on lender GPU
+            # (gated by VRM_KV_LEND=1, default off). The actual KV bytes are NOT
+            # migrated here — that requires Phase 3 (cross-GPU attention staging).
+            if os.getenv("VRM_KV_LEND", "0") == "1":
+                try:
+                    # Infer shape from page geometry: [num_layers, 2, num_kv_heads, page_size, head_dim]
+                    shape = (
+                        self.config.num_layers,
+                        2,
+                        self.config.num_kv_heads,
+                        self.config.page_size,
+                        self.config.head_dim,
+                    )
+                    dtype = self.config.dtype if hasattr(self.config, "dtype") else None
+                    borrowed_tensor = self._lending_pool.allocate_on_lease(lease, shape=shape, dtype=dtype)
+                    if borrowed_tensor is not None:
+                        page.borrowed_tensor = borrowed_tensor
+                        _logger.info(
+                            "V6.D: allocated empty buffer on lender GPU %d for borrowed page %d (lease %s)",
+                            lease.owner_gpu, overflow_id, lease.lease_id,
+                        )
+                except Exception:
+                    _logger.debug("V6.D Phase 2 buffer allocation failed", exc_info=True)
+
             _logger.debug(
                 "Overflow page %d borrowed from GPU %d (lease %s)",
                 overflow_id, lease.owner_gpu, lease.lease_id,
@@ -870,7 +1033,7 @@ class PagedKVCacheManager:
                     try:
                         page_data = self._gpu_pool[victim.page_id].cpu().contiguous().numpy().tobytes()
                     except Exception:
-                        pass
+                        _logger.debug("GPU page read failed", exc_info=True)
                 elif victim.page_id in self._compressed_pages:
                     # Use compressed form if available
                     import json
@@ -930,7 +1093,7 @@ class PagedKVCacheManager:
                     self._lending_pool.release(victim.lease_id)
                 self._lending_leases.pop(victim.lease_id, None)
             except Exception:
-                pass
+                _logger.debug("Lending lease release failed", exc_info=True)
             victim.is_borrowed = False
             victim.lease_id = None
 
@@ -1009,6 +1172,8 @@ class PagedKVCacheManager:
             "pages_per_device": per_device,
             "lending_active": self._lending_pool is not None,
             "active_leases": len(self._lending_leases),
+            "phase3_stages": self._phase3_stages,
+            "phase3_failures": self._phase3_failures,
             "kv_compression": self.config.kv_compression or "none",
             "compressed_pages": len(self._compressed_pages),
             "compression_ratio": self.compression_ratio,

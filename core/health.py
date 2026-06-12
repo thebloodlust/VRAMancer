@@ -109,7 +109,7 @@ def gpu_detailed_health() -> Dict[str, Any]:
         stats = fm.stats()
         fault_states = stats.get("gpu_states", {})
     except Exception:
-        pass
+        logging.debug("Fault manager unavailable", exc_info=True)
 
     # Get temperature via pynvml if available (with timeout protection)
     nvml_handles = {}
@@ -123,12 +123,12 @@ def gpu_detailed_health() -> Dict[str, Any]:
                 try:
                     handles[i] = pynvml.nvmlDeviceGetHandleByIndex(i)
                 except Exception:
-                    pass
+                    logging.debug(f"Failed to get NVML handle for GPU {i}", exc_info=True)
             return handles
 
-        result = _call_with_timeout(_init_nvml_handles)
-        if result is not None:
-            nvml_handles = result
+        nvml_result = _call_with_timeout(_init_nvml_handles)
+        if nvml_result is not None:
+            nvml_handles = nvml_result
     except ImportError:
         pass
 
@@ -184,7 +184,7 @@ def gpu_detailed_health() -> Dict[str, Any]:
 def lending_pool_status() -> Dict[str, Any]:
     """VRAM lending pool status."""
     try:
-        from core.vram_lending import get_lending_pool
+        from experimental.vram_lending import get_lending_pool
         pool = get_lending_pool()
         return pool.stats()
     except Exception:
@@ -199,7 +199,7 @@ def kv_cache_status() -> Dict[str, Any]:
         if pipeline.paged_kv:
             return pipeline.paged_kv.stats()
     except Exception:
-        pass
+        logging.debug("PagedKV stats unavailable", exc_info=True)
     return {"active": False}
 
 
@@ -211,17 +211,18 @@ def transfer_status() -> Dict[str, Any]:
         if pipeline.transfer_manager:
             return pipeline.transfer_manager.stats()
     except Exception:
-        pass
+        logging.debug("Transfer manager stats unavailable", exc_info=True)
     return {"active": False}
 
 
 def cross_vendor_status() -> Dict[str, Any]:
     """Cross-vendor bridge status."""
     try:
-        from core.cross_vendor_bridge import get_cross_vendor_bridge
+        from experimental.cross_vendor_bridge import get_cross_vendor_bridge
         bridge = get_cross_vendor_bridge()
         return bridge.stats()
     except Exception:
+        logging.debug("Cross-vendor bridge stats unavailable", exc_info=True)
         return {"active": False}
 
 

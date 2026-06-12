@@ -33,6 +33,11 @@ import threading
 from typing import Any, Dict, List, Optional
 from contextlib import contextmanager
 
+try:
+    from core.env_flags import flags as _flags
+except ImportError:
+    _flags = None  # facade unavailable — fall back to os.environ
+
 _logger = logging.getLogger("vramancer.pipeline")
 _MINIMAL = os.environ.get("VRM_MINIMAL_TEST", "")
 
@@ -114,6 +119,7 @@ class InferencePipeline:
         self.gpu_hotplug = None
         self.continuous_batcher = None
         self.paged_kv = None
+        self.kv_offloader = None  # PagedAttentionOffloader (VRM_KV_OFFLOAD_ENGRAM=1)
         self.lending_pool = None
         self.hierarchical_memory = None
         self.fault_manager: Optional[Any] = None
@@ -122,10 +128,16 @@ class InferencePipeline:
         self.tp_model: Optional[Any] = None  # Tensor Parallel model wrapper
         self._turboquant_cache_factory: Optional[Any] = None  # HF-native TurboQuant cache
 
+        # T7.6 auto-heal state — survives across requests for the lifetime
+        # of this pipeline instance (process never dies on OOM).
+        self.degraded: bool = False
+        self.degraded_reason: Optional[str] = None
+        self._max_new_tokens_scale: float = 1.0  # persistent context reduction (point b)
+
         # Dynamic rebalancing
         self._rebalance_thread: Optional[threading.Thread] = None
         self._rebalancing = False
-        self._rebalance_interval = float(os.environ.get("VRM_REBALANCE_INTERVAL", "5.0"))
+        self._rebalance_interval = (_flags.REBALANCE_INTERVAL if _flags else float(os.environ.get("VRM_REBALANCE_INTERVAL", "5.0")))
 
         # Model info
         self.model_name: Optional[str] = None
@@ -170,7 +182,19 @@ class InferencePipeline:
             For chaining: ``pipeline.load("gpt2").generate("Hello")``
         """
         with self._lock:
-            _logger.info("Loading model: %s (backend=%s)", model_name, self.backend_name)
+            _mode_flags = []
+            _quant = (_flags.QUANTIZATION if _flags else os.environ.get("VRM_QUANTIZATION", "")).upper()
+            if _quant:
+                _mode_flags.append(f"quant={_quant}")
+            _kv = (_flags.KV_COMPRESSION if _flags else os.environ.get("VRM_KV_COMPRESSION", ""))
+            if _kv:
+                _mode_flags.append(f"kv_compression={_kv}")
+            _pp = (_flags.PARALLEL_MODE if _flags else os.environ.get("VRM_PARALLEL_MODE", "pp")).upper()
+            _mode_flags.append(f"parallel={_pp}")
+            if _flags.CUDA_GRAPH if _flags else os.environ.get("VRM_CUDA_GRAPH"):
+                _mode_flags.append("cuda_graph=ON")
+            _mode_banner = " | ".join(_mode_flags) if _mode_flags else "defaults"
+            _logger.info("Loading model: %s (backend=%s) [%s]", model_name, self.backend_name, _mode_banner)
             self.model_name = model_name
 
             # 1. Init scheduler (detects GPUs) first
@@ -212,22 +236,118 @@ class InferencePipeline:
                 _logger.warning("TransferManager init failed: %s", e)
                 self.transfer_manager = None
 
-            # 5. Load model via backend
+            # 4b. [V6.B] Pre-init VRAM Lending Pool BEFORE model load.
+            # The pool exposes ``suggest_placement_budget()`` so the backend's
+            # ``_build_compute_aware_memory_map()`` can ask for a smarter
+            # ``max_memory`` distribution at dispatch time. The static 97 %
+            # formula OOMs at load-time on tight-fit models (Qwen2.5-32B BF16
+            # on 16+24 GB). The pool yields the same physical capacity but
+            # carves out runtime headroom + spills to CPU when oversubscribed.
+            #
+            # The pool is registered here with ``model_bytes=0`` (nothing
+            # loaded yet); ``model_bytes`` and ``kv_cache_bytes`` are
+            # refreshed post-load via ``update_gpu_usage()`` for the
+            # runtime side of the pool's responsibilities.
+            _backend_type_for_pool = getattr(self.backend, 'backend_type', 'huggingface')
+            _lending_enabled = (
+                _flags.VRAM_LENDING if _flags
+                else os.environ.get("VRM_VRAM_LENDING", "1").lower()
+                not in ("0", "false", "no")
+            )
+            if (self.num_gpus > 1
+                    and _backend_type_for_pool not in ('vllm', 'llamacpp')
+                    and _lending_enabled):
+                self._init_lending_pool()
+                # Inject pool reference into the backend so its placement
+                # logic can consult ``suggest_placement_budget()``.
+                if hasattr(self.backend, 'lending_pool') or self.backend is not None:
+                    setattr(self.backend, 'lending_pool', self.lending_pool)
+                # Pass the model size estimate too so the backend's
+                # ``_build_compute_aware_memory_map`` can ask the pool
+                # for a budget that targets exactly this footprint.
+                _est_gb = self._estimate_model_vram_gb(model_name, model_kwargs)
+                if _est_gb is not None:
+                    setattr(self.backend, '_estimated_model_size_bytes',
+                            int(_est_gb * (1024 ** 3)))
+
+            # 5. Load model via backend, with T7.6 auto-heal load-time
+            # OOM recovery ladder:
+            #   (c) retry once with +10% extra VRAM reserve margin per GPU
+            #   (d) last resort: reload in NF4 (sets self.degraded)
             try:
                 self.backend.load_model(model_name, num_gpus=self.num_gpus, **model_kwargs)
             except Exception as e:
-                _logger.error("Model load failed: %s", e)
-                raise
+                if not (_TORCH and "out of memory" in str(e).lower()):
+                    _logger.error("Model load failed: %s", e)
+                    raise
+
+                _logger.warning(
+                    "Load-time OOM — auto-heal (c): retrying with +10%% "
+                    "VRAM reserve margin per GPU"
+                )
+                if torch.cuda.is_available():
+                    for i in range(torch.cuda.device_count()):
+                        with torch.cuda.device(i):
+                            torch.cuda.empty_cache()
+                # Force the static placement formula (skip the lending pool
+                # suggestion, which doesn't account for this margin) and
+                # reserve an extra 10% of each GPU's budget.
+                setattr(self.backend, '_extra_load_reserve', 0.10)
+                prev_pool = getattr(self.backend, 'lending_pool', None)
+                setattr(self.backend, 'lending_pool', None)
+                try:
+                    self.backend.load_model(model_name, num_gpus=self.num_gpus, **model_kwargs)
+                    _logger.info("Load-time OOM auto-heal (c) succeeded with +10%% margin")
+                except Exception as e2:
+                    if not (_TORCH and "out of memory" in str(e2).lower()):
+                        _logger.error("Model load failed on retry: %s", e2)
+                        raise
+                    _logger.warning(
+                        "Load-time OOM persists — auto-heal (d): reloading "
+                        "in NF4 (last resort, model will be marked degraded)"
+                    )
+                    if torch.cuda.is_available():
+                        for i in range(torch.cuda.device_count()):
+                            with torch.cuda.device(i):
+                                torch.cuda.empty_cache()
+                    os.environ["VRM_QUANTIZATION"] = "nf4"
+                    nf4_kwargs = {k: v for k, v in model_kwargs.items()
+                                  if k != "quantization_config"}
+                    self.backend.load_model(model_name, num_gpus=self.num_gpus, **nf4_kwargs)
+                    self.degraded = True
+                    self.degraded_reason = "oom_fallback_nf4"
+                    _logger.warning("Load-time OOM auto-heal (d) succeeded — pipeline degraded (NF4)")
+                finally:
+                    setattr(self.backend, '_extra_load_reserve', 0.0)
+                    if not self.degraded:
+                        setattr(self.backend, 'lending_pool', prev_pool)
+
+            # 5b. [V6.B] Refresh pool's model_bytes for each GPU now that
+            # accelerate has finished placement. This is the snapshot used
+            # by runtime decisions (KV cache spillover, lease borrows).
+            if self.lending_pool is not None and _TORCH and torch.cuda.is_available():
+                for i in range(self.num_gpus):
+                    try:
+                        self.lending_pool.update_gpu_usage(
+                            gpu_id=i,
+                            model_bytes=torch.cuda.memory_allocated(i),
+                        )
+                    except Exception as e:
+                        _logger.debug("Pool update_gpu_usage(%d) failed: %s", i, e)
 
             # 6. Inject transfer manager into backend for multi-GPU activation transfer
             if hasattr(self.backend, 'transfer_manager'):
                 self.backend.transfer_manager = self.transfer_manager
 
-            # 6b. Tensor Parallel mode (VRM_PARALLEL_MODE=tp)
+            # 6b. Patch accelerate send_to_device → Rust P2P for CUDA→CUDA transfers
+            if self.transfer_manager is not None and self.num_gpus > 1:
+                self._patch_accelerate_p2p(self.transfer_manager)
+
+            # 6c. Tensor Parallel mode (VRM_PARALLEL_MODE=tp)
             # When selected, wraps the loaded model with apply_tensor_parallel()
             # which shards weights across GPUs and uses NCCL all-reduce.
             # Default: "pp" (pipeline parallelism via model_splitter).
-            _parallel_mode = os.environ.get("VRM_PARALLEL_MODE", "pp").lower()
+            _parallel_mode = (_flags.PARALLEL_MODE if _flags else os.environ.get("VRM_PARALLEL_MODE", "pp").lower())
             if self.num_gpus > 1 and _parallel_mode == "tp":
                 try:
                     from core.tensor_parallel import apply_tensor_parallel
@@ -298,12 +418,10 @@ class InferencePipeline:
             # 12b. Init TurboQuant HF-native KV cache (if compression requested)
             self._init_turboquant_cache()
 
-            # 13. Init VRAM Lending Pool (cooperative GPU memory)
-            # Skip when vLLM/llama.cpp manage their own VRAM
-            # Controlled by VRM_VRAM_LENDING env var (default: enabled for multi-GPU)
-            _lending_enabled = os.environ.get("VRM_VRAM_LENDING", "1").lower() not in ("0", "false", "no")
-            if self.num_gpus > 1 and _backend_type not in ('vllm', 'llamacpp') and _lending_enabled:
-                self._init_lending_pool()
+            # 13. VRAM Lending Pool — moved to step 4b (before backend.load_model)
+            # so that backend.lending_pool is available when accelerate
+            # computes max_memory. See [V6.B] block above. The pool's
+            # ``model_bytes`` snapshot was refreshed in step 5b post-load.
 
             # 13b. Init Hierarchical Memory Manager (L1-L6 tiered memory)
             self._init_hierarchical_memory()
@@ -318,6 +436,62 @@ class InferencePipeline:
             self._init_cuda_graph_runner()
 
         return self
+
+    # ------------------------------------------------------------------
+    # P2P hook
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _patch_accelerate_p2p(transfer_manager: Any) -> None:
+        """Monkey-patch accelerate's send_to_device to use Rust P2P DMA.
+
+        Accelerate's AlignDevicesHook moves tensors between GPUs using PyTorch
+        .to() which maxes out at ~12 GB/s (CPU-staged). Our Rust cuMemcpyPeer
+        path reaches ~25 GB/s with Proxmox PCIe P2P. We patch the module-level
+        send_to_device used by all hooks so large inter-GPU tensors go via P2P.
+
+        Threshold: 512 KB. Below that the overhead vs .to() is negligible.
+        """
+        _P2P_THRESHOLD = 512 * 1024  # bytes
+
+        try:
+            import accelerate.utils.operations as _ops
+            import torch as _torch
+
+            _orig_send = _ops.send_to_device
+
+            def _p2p_send(tensor, device, non_blocking=False, skip_keys=None):
+                if (isinstance(tensor, _torch.Tensor)
+                        and tensor.device.type == "cuda"):
+                    dst = _torch.device(device)
+                    if dst.type == "cuda":
+                        src_idx = tensor.device.index if tensor.device.index is not None else 0
+                        dst_idx = dst.index if dst.index is not None else 0
+                        if src_idx != dst_idx:
+                            nbytes = tensor.nelement() * tensor.element_size()
+                            if nbytes >= _P2P_THRESHOLD:
+                                try:
+                                    return transfer_manager.send_tensor(
+                                        src_idx, dst_idx, tensor
+                                    )
+                                except Exception:
+                                    _logger.debug("P2P tensor send failed, falling through to .to()", exc_info=True)
+                return _orig_send(tensor, device,
+                                  non_blocking=non_blocking, skip_keys=skip_keys)
+
+            _ops.send_to_device = _p2p_send
+            # Also patch the reference cached in accelerate.hooks
+            try:
+                import accelerate.hooks as _hooks
+                _hooks.send_to_device = _p2p_send
+            except Exception:
+                _logger.debug("Accelerate hooks patch failed", exc_info=True)
+            _logger.info(
+                "Accelerate send_to_device patched → Rust P2P (threshold=%d KB)",
+                _P2P_THRESHOLD // 1024,
+            )
+        except Exception as e:
+            _logger.debug("Could not patch accelerate P2P: %s", e)
 
     # ------------------------------------------------------------------
     # Inference
@@ -360,9 +534,15 @@ class InferencePipeline:
         """
         self._ensure_loaded()
 
+        # T7.6 auto-heal (point b): a prior generation-time OOM persistently
+        # reduces the accepted context for ALL subsequent requests, not just
+        # the one that triggered recovery. Resets only on process restart.
+        if self._max_new_tokens_scale < 1.0:
+            max_new_tokens = max(16, int(max_new_tokens * self._max_new_tokens_scale))
+
         # Wake on Inference - Dynamically pull nodes from sleep
         try:
-            from core.wake_on_inference import get_woi_manager
+            from experimental.wake_on_inference import get_woi_manager
             get_woi_manager().wake_all()
         except Exception as e:
             _logger.debug(f"Exception silencieuse dans l'exécution: {e}", exc_info=True)
@@ -418,7 +598,7 @@ class InferencePipeline:
                     # Auto-create draft callable from backend if not provided
                     _draft = draft_model_callable
                     if _draft is None:
-                        draft_name = os.environ.get("VRM_DRAFT_MODEL")
+                        draft_name = (_flags.DRAFT_MODEL if _flags else os.environ.get("VRM_DRAFT_MODEL"))
                         _draft = create_draft_callable(
                             self.backend,
                             draft_model_name=draft_name,
@@ -428,9 +608,9 @@ class InferencePipeline:
                         decoder = SwarmSpeculativeDecoder(
                             draft_model_callable=_draft,
                             swarm_verify_callable=self.infer,
-                            gamma=int(os.environ.get("VRM_SPEC_GAMMA", "5")),
+                            gamma=(_flags.SPEC_GAMMA if _flags else int(os.environ.get("VRM_SPEC_GAMMA", "5"))),
                             temperature=temperature,
-                            adaptive=os.environ.get("VRM_SPEC_ADAPTIVE", "1") != "0",
+                            adaptive=(_flags.SPEC_ADAPTIVE if _flags else os.environ.get("VRM_SPEC_ADAPTIVE", "1") != "0"),
                         )
                         input_ids = self.backend.tokenizer.encode(
                             prompt, return_tensors="pt",
@@ -460,7 +640,7 @@ class InferencePipeline:
                         top_p=gen_kwargs.get("top_p", top_p),
                     )
                     result = future.result(
-                        timeout=float(os.environ.get("VRM_GENERATE_TIMEOUT", "300"))
+                        timeout=(_flags.GENERATE_TIMEOUT if _flags else float(os.environ.get("VRM_GENERATE_TIMEOUT", "300")))
                     )
                 else:
                     # Execute with fault tolerance protection
@@ -480,6 +660,24 @@ class InferencePipeline:
             except NotImplementedError:
                 # Backend doesn't support generate() — fall back to infer()
                 return self._generate_fallback(prompt, max_new_tokens)
+            except RuntimeError as e:
+                # OOM recovery: clear cache and retry with reduced tokens
+                if _TORCH and "out of memory" in str(e).lower():
+                    _logger.warning(
+                        "CUDA OOM during generate — attempting recovery "
+                        "(clearing cache, halving max_new_tokens)"
+                    )
+                    recovered = self._oom_recover(prompt, gen_kwargs, max_new_tokens)
+                    if recovered is not None:
+                        return recovered
+                # Not OOM or recovery failed — fall through to generic handler
+                if _METRICS:
+                    INFER_ERRORS.inc()
+                if span:
+                    span.set_attribute("error", True)
+                    span.set_attribute("error.message", str(e))
+                _logger.error("Generation failed: %s", e, exc_info=True)
+                raise
             except Exception as e:
                 if _METRICS:
                     INFER_ERRORS.inc()
@@ -707,7 +905,7 @@ class InferencePipeline:
         Uses torch.compile with Inductor kernel fusion on the model body.
         Skipped for vLLM/Ollama backends (they have own optimized runtimes).
         """
-        if os.environ.get("VRM_MINIMAL_TEST") or os.environ.get("VRM_DISABLE_TURBO"):
+        if os.environ.get("VRM_MINIMAL_TEST") or (_flags.DISABLE_TURBO if _flags else os.environ.get("VRM_DISABLE_TURBO")):
             return
         if sys.platform == 'win32':
             _logger.info("TurboEngine skipped on Windows (Triton not available)")
@@ -749,7 +947,7 @@ class InferencePipeline:
         eliminating CPU dispatch overhead on repeated decode steps.
         Requires VRM_CUDA_GRAPH=1 (opt-in — fragile with dynamic shapes).
         """
-        if not os.environ.get("VRM_CUDA_GRAPH"):
+        if not (_flags.CUDA_GRAPH if _flags else os.environ.get("VRM_CUDA_GRAPH")):
             return
         if os.environ.get("VRM_MINIMAL_TEST"):
             return
@@ -766,8 +964,8 @@ class InferencePipeline:
             from core.cuda_graph_decode import CUDAGraphRunner
             self.cuda_graph_runner = CUDAGraphRunner(
                 model=model,
-                max_cache_entries=int(os.environ.get("VRM_CUDA_GRAPH_CACHE", "4")),
-                warmup_steps=int(os.environ.get("VRM_CUDA_GRAPH_WARMUP", "3")),
+                max_cache_entries=(_flags.CUDA_GRAPH_CACHE if _flags else int(os.environ.get("VRM_CUDA_GRAPH_CACHE", "4"))),
+                warmup_steps=(_flags.CUDA_GRAPH_WARMUP if _flags else int(os.environ.get("VRM_CUDA_GRAPH_WARMUP", "3"))),
             )
             _logger.info("CUDA Graph runner initialized (opt-in, %d cache slots)",
                          self.cuda_graph_runner.max_cache_entries)
@@ -863,6 +1061,63 @@ class InferencePipeline:
             return result
         return str(result)
 
+    def _oom_recover(self, prompt: str, gen_kwargs: dict, original_max_tokens: int) -> Optional[str]:
+        """Attempt to recover from a CUDA OOM error.
+
+        Strategy:
+          1. Empty CUDA cache on all devices
+          2. Evict borrowed KV pages (lending pool)
+          3. Retry with halved max_new_tokens (minimum 16)
+
+        T7.6 (point b): also persistently shrinks ``_max_new_tokens_scale``
+        by 25% (floor 0.1) so that EVERY subsequent request — not just the
+        one being retried here — requests a smaller context budget. This
+        makes the degradation durable across requests, as required by the
+        auto-heal spec, without needing to reload or resplit the model.
+
+        Returns generated text on success, None on failure.
+        """
+        if not _TORCH or not torch.cuda.is_available():
+            return None
+
+        # Persist degradation for future requests (point b)
+        self._max_new_tokens_scale = max(0.1, self._max_new_tokens_scale * 0.75)
+        self.degraded = True
+        self.degraded_reason = "oom_context_reduced"
+        _logger.warning(
+            "OOM recovery: persistent max_new_tokens scale now %.2f "
+            "(applies to all future requests)", self._max_new_tokens_scale,
+        )
+
+        # Step 1: flush CUDA cache
+        for i in range(torch.cuda.device_count()):
+            try:
+                with torch.cuda.device(i):
+                    torch.cuda.empty_cache()
+            except Exception:
+                _logger.debug("CUDA cache clear failed on device %d", i, exc_info=True)
+        _logger.info("OOM recovery: CUDA caches cleared on %d devices",
+                     torch.cuda.device_count())
+
+        # Step 2: reclaim lending leases if pool is active
+        if self.lending_pool and hasattr(self.lending_pool, 'reclaim_all'):
+            try:
+                self.lending_pool.reclaim_all()
+                _logger.info("OOM recovery: reclaimed VRAM lending leases")
+            except Exception as e:
+                _logger.debug("OOM recovery: lending reclaim failed: %s", e)
+
+        # Step 3: retry with reduced tokens
+        reduced = max(16, original_max_tokens // 2)
+        retry_kwargs = {**gen_kwargs, "max_new_tokens": reduced}
+        _logger.info("OOM recovery: retrying with max_new_tokens=%d (was %d)",
+                     reduced, original_max_tokens)
+        try:
+            return self._protected_generate(prompt, retry_kwargs)
+        except RuntimeError:
+            _logger.error("OOM recovery failed — model may be too large for available VRAM")
+            return None
+
     # ------------------------------------------------------------------
     # Status / info
     # ------------------------------------------------------------------
@@ -885,6 +1140,9 @@ class InferencePipeline:
             "fault_tolerance": self.fault_manager is not None,
             "tensor_parallel": self.tp_model is not None,
             "parallel_mode": "tp" if self.tp_model is not None else "pp",
+            "degraded": self.degraded,
+            "degraded_reason": self.degraded_reason,
+            "max_new_tokens_scale": self._max_new_tokens_scale,
             "gpus": self.scheduler.get_available_gpus() if self.scheduler else [],
             "transfer_stats": (
                 self.transfer_manager.stats()
@@ -923,17 +1181,18 @@ class InferencePipeline:
             return None
 
         config = None
+        _trc = os.environ.get("VRM_TRUST_REMOTE_CODE") == "1"
         # Try local cache first (no network = fast)
         try:
             config = AutoConfig.from_pretrained(
-                model_name, trust_remote_code=True, local_files_only=True,
+                model_name, trust_remote_code=_trc, local_files_only=True,
             )
         except Exception:
-            pass
+            _logger.debug("AutoConfig local load failed", exc_info=True)
         # Fallback: quick network fetch (only config.json, small file)
         if config is None:
             try:
-                config = AutoConfig.from_pretrained(model_name, trust_remote_code=True)
+                config = AutoConfig.from_pretrained(model_name, trust_remote_code=_trc)
             except Exception:
                 return None
 
@@ -975,7 +1234,7 @@ class InferencePipeline:
             return None
 
         # Bytes per parameter depends on quantization
-        quant = os.environ.get("VRM_QUANTIZATION", "").lower()
+        quant = (_flags.QUANTIZATION if _flags else os.environ.get("VRM_QUANTIZATION", "").lower())
         name_lower = model_name.lower()
         if quant in ("nvfp4", "nf4") or "nvfp4" in name_lower:
             # NF4: final weights are ~0.56 B/param.  With device_map={"":gpu}
@@ -1017,7 +1276,7 @@ class InferencePipeline:
         Cross-GPU transfers add latency (~10-15 GB/s in VM environments).
         Avoiding them gives a significant speedup for models that fit.
         """
-        if os.environ.get("VRM_FORCE_MULTI_GPU") == "1":
+        if (_flags.FORCE_MULTI_GPU if _flags else os.environ.get("VRM_FORCE_MULTI_GPU") == "1"):
             _logger.info("VRM_FORCE_MULTI_GPU=1, keeping %d GPUs", num_gpus)
             return num_gpus
 
@@ -1064,7 +1323,7 @@ class InferencePipeline:
     def _start_discovery(self):
         """Start cluster discovery in background."""
         try:
-            from core.network.cluster_discovery import ClusterDiscovery
+            from experimental.cluster_discovery import ClusterDiscovery
             self.discovery = ClusterDiscovery(heartbeat_interval=5)
             self.discovery.start()
             _logger.info("Cluster discovery started")
@@ -1169,7 +1428,7 @@ class InferencePipeline:
         cache so HF's generate() compresses KV states in-flight via
         PolarQuant+QJL (~4.6x VRAM reduction on the KV cache).
         """
-        kv_comp = os.environ.get("VRM_KV_COMPRESSION", "").lower()
+        kv_comp = (_flags.KV_COMPRESSION if _flags else os.environ.get("VRM_KV_COMPRESSION", "").lower())
         if kv_comp != "turboquant":
             return
 
@@ -1186,8 +1445,8 @@ class InferencePipeline:
                 return
 
             device = self._detect_device()
-            bits = int(os.environ.get("VRM_KV_COMPRESSION_BITS", "3"))
-            residual = int(os.environ.get("VRM_KV_CACHE_RESIDUAL", "128"))
+            bits = (_flags.KV_COMPRESSION_BITS if _flags else int(os.environ.get("VRM_KV_COMPRESSION_BITS", "3")))
+            residual = (_flags.KV_CACHE_RESIDUAL if _flags else int(os.environ.get("VRM_KV_CACHE_RESIDUAL", "128")))
 
             # Factory: each generate() call gets a fresh cache
             def _make_cache():
@@ -1241,11 +1500,51 @@ class InferencePipeline:
                         "(%.1fx reduction on eviction)",
                         self.paged_kv.compression_ratio,
                     )
+
+            # VRM_KV_OFFLOAD_ENGRAM=1 — wire PagedAttentionOffloader for DRAM spill
+            if os.environ.get("VRM_KV_OFFLOAD_ENGRAM", "0") == "1":
+                try:
+                    from core.paged_attention_offload import PagedAttentionOffloader
+
+                    _dram_limit_gb = int(os.environ.get("VRM_KV_DRAM_LIMIT_GB", "200"))
+
+                    class _DramDict:
+                        """Simple dict-backed DRAM store matching PagedAttentionOffloader API."""
+                        def __init__(self, max_gb: int):
+                            self._store: dict = {}
+                            self._max_bytes = max_gb * 1024 ** 3
+
+                        def put(self, key: str, tensor) -> None:  # type: ignore[override]
+                            self._store[key] = tensor
+
+                        def get(self, key: str):  # type: ignore[override]
+                            return self._store.get(key)
+
+                    self.kv_offloader = PagedAttentionOffloader(
+                        self.paged_kv, _DramDict(_dram_limit_gb)
+                    )
+                    _logger.info(
+                        "KV engram offload enabled: DRAM cap=%d GB, "
+                        "parity protection via paged_attention.py",
+                        _dram_limit_gb,
+                    )
+                except Exception as _exc:
+                    _logger.debug("KV engram offload init skipped: %s", _exc)
+                    self.kv_offloader = None
+
         except Exception as e:
             _logger.debug("PagedKV init skipped: %s", e)
             self.paged_kv = None
 
         try:
+            _cb_backend_type = getattr(self.backend, 'backend_type', 'huggingface')
+            if _cb_backend_type in ('vllm', 'ollama', 'llamacpp'):
+                raise RuntimeError(
+                    f"ContinuousBatcher requires a HF-style model "
+                    f"(__call__(input_ids, past_key_values=..., use_cache=True)); "
+                    f"backend_type={_cb_backend_type!r} isn't compatible."
+                )
+
             from core.continuous_batcher import ContinuousBatcher
 
             model = self.backend.model if self.backend else None
@@ -1254,11 +1553,14 @@ class InferencePipeline:
             self.continuous_batcher = ContinuousBatcher(
                 model=model,
                 tokenizer=tokenizer,
-                max_batch_size=int(os.environ.get("VRM_MAX_BATCH_SIZE", "32")),
+                max_batch_size=(_flags.MAX_BATCH_SIZE if _flags else int(os.environ.get("VRM_MAX_BATCH_SIZE", "32"))),
                 device=self._detect_device(),
                 paged_kv_manager=self.paged_kv,
             )
-            # Don't auto-start — only start on first submit or explicit call
+            # Don't auto-start — only start on first submit or explicit call.
+            # NOTE: auto-start via generate() was tested in V5 P1 but caused
+            # 300s timeouts due to batcher incompatibility with transformers 5.x
+            # DynamicCache in decode loop. [NEGATIVE@P1.4]
             _logger.info("ContinuousBatcher ready (call pipeline.submit() to use)")
         except Exception as e:
             _logger.debug("ContinuousBatcher init skipped: %s", e)
@@ -1355,11 +1657,20 @@ class InferencePipeline:
         to lend free VRAM as KV cache overflow to busy GPUs.
         """
         try:
-            from core.vram_lending import get_lending_pool, LendingPolicy
+            from experimental.vram_lending import get_lending_pool, LendingPolicy
 
+            # [V6.B] buffer_prealloc_ratio=0.0 — the pool used to register at
+            # step 13 (post-load) when GPUs were already filled, so a 100 %
+            # prealloc would size the buffer to whatever was left (often
+            # MBs). With V6.B the pool registers BEFORE the model load, when
+            # GPUs are still empty — a 100 % prealloc would then grab the
+            # entire VRAM, starving accelerate's dispatch and triggering
+            # OOM at load time. Lazy allocation via ``allocate_on_lease()``
+            # is fine for the runtime path; we don't need a pre-baked slab.
             policy = LendingPolicy(
-                max_lend_ratio=float(os.environ.get("VRM_LEND_RATIO", "0.70")),
-                reclaim_threshold=float(os.environ.get("VRM_RECLAIM_THRESHOLD", "0.80")),
+                max_lend_ratio=(_flags.LEND_RATIO if _flags else float(os.environ.get("VRM_LEND_RATIO", "0.70"))),
+                reclaim_threshold=(_flags.RECLAIM_THRESHOLD if _flags else float(os.environ.get("VRM_RECLAIM_THRESHOLD", "0.80"))),
+                buffer_prealloc_ratio=0.0,
             )
             self.lending_pool = get_lending_pool(
                 policy=policy,
@@ -1390,7 +1701,7 @@ class InferencePipeline:
 
             # Start background monitoring for auto-reclaim
             self.lending_pool.start_monitoring(
-                interval=float(os.environ.get("VRM_LENDING_INTERVAL", "2.0"))
+                interval=(_flags.LENDING_INTERVAL if _flags else float(os.environ.get("VRM_LENDING_INTERVAL", "2.0")))
             )
             _logger.info("VRAM Lending Pool active: %s", self.lending_pool)
 
@@ -1405,7 +1716,7 @@ class InferencePipeline:
         L1↔L2 GPU memory lending with auto-reclaim.
         """
         try:
-            from core.hierarchical_memory import HierarchicalMemoryManager
+            from experimental.hierarchical_memory import HierarchicalMemoryManager
             self.hierarchical_memory = HierarchicalMemoryManager(
                 lending_pool=self.lending_pool,
             )

@@ -1,34 +1,14 @@
-#############################################################
-# VRAMancer requirements (lite / base server profile)
-# - Version minimale pour exécution orchestrateur + API + mémoire
-# - GUI / Dash / Vision / Tracing / Compression avancée déplacés dans:
-#     requirements-full.txt  OU  pip install .[all]
+# Single source of truth for dependencies: pyproject.toml
+# ([project.dependencies] + [project.optional-dependencies]).
 #
-# Pour stack complète: `pip install -r requirements-full.txt`
-#############################################################
-
-# Core
-torch>=2.2.0
-numpy>=1.26.0
-pyyaml==6.0.1
-psutil==5.9.8
-transformers>=4.34.0
-accelerate>=0.27.2
-flask==3.0.2
-pydantic==2.8.2
-pycryptodome==3.20.0
-prometheus-client==0.21.0
-rich==13.9.4
-requests==2.32.3
-huggingface_hub>=0.16.4
-python-socketio==5.11.1
-PyJWT==2.9.0
-gunicorn==21.2.0
-
-# Tests (optionnel local) – en CI installés via extra [test]
-pytest==8.2.0
-pytest-cov==5.0.0
-flake8==7.1.0
-
-# Packaging
-setuptools==69.0.3
+# This file exists only for tooling (Docker, CI, Makefile) that expects
+# a requirements.txt. It installs VRAMancer itself with the "gpu" extra
+# (torch/transformers/accelerate/...), which matches the previous
+# "lite/base server" profile.
+#
+# For development, prefer an editable install with extras:
+#   pip install -e .            -> CLI / orchestrator only, no torch
+#   pip install -e .[gpu]       -> + torch/transformers/accelerate
+#   pip install -e .[full]      -> everything (GUI, quantization, GGUF, ...)
+#   pip install -e .[windows]   -> Windows dashboards profile
+.[gpu]

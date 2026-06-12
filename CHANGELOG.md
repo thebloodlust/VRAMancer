@@ -1,5 +1,49 @@
 ## Changelog
 
+## [Unreleased] — V5 plan suite
+
+(à remplir au fur et à mesure)
+
+## [1.6.0] — 2026-05-06 — V4 + V5 release
+
+### Added (V5)
+- Auto-start `ContinuousBatcher` init path guarded by `VRM_CONTINUOUS_BATCHING=1` (P1)
+- Label `RUST_P2P` honnête dans `TransferManager._get_method_for()` (P2)
+- `use_cache=True` explicite dans `HuggingFaceBackend.generate()` single-GPU (P3)
+- Flag `VRM_TRANSFER_ASYNC=1` + PyO3 `direct_vram_copy_async` (P4)
+- `benchmarks/bench_hetero_advantage.py` reproducible (P6)
+- Tests régression : auto-start batcher + label `RUST_P2P` (P10)
+
+### Fixed (V5)
+- 33 silents excepts en hot path migrés vers `_logger.debug(exc_info=True)` (P5)
+- `usb4_distributed_vram.py` example déprécié proprement dans `_deprecated/examples/` (P7)
+- 22 `bench_*.{json,log,txt}` à la racine déplacés vers `benchmarks/results/` (P8)
+- TODO open `core/turbo_engine.py:202` migré vers `TECHNICAL_DEBT.md → TURBO_KV_CUDAGRAPH` (P9)
+
+### Changed (V5)
+- `TECHNICAL_DEBT.md` rafraîchi (entrée TURBO_KV_CUDAGRAPH ajoutée, date V5)
+- Version 1.5.0 → 1.6.0
+
+### Added (V4 — récap)
+
+### Added
+- `VRM_TRANSFER_OVERLAP` flag: CUDA stream overlap for inter-GPU transfers (P2)
+- `VRM_DEBUG_SAMPLING` flag: sampling diagnostics (P3)
+- `benchmarks/bench_stress_concurrent_v4.py`: concurrent load stress benchmark (P4)
+- `/api/dashboard/gpus` endpoint alias for dashboard GPU monitoring (P10)
+- `tests/test_transfer_manager_basic.py`, `tests/test_triton_sampling_paths.py` coverage (P8)
+
+### Fixed
+- Honest documentation of P1 attribution and methodology corrections
+- Stubs formalized with explicit STUB labels: VTP_L3, DMA-BUF, NAT hole-punch (P6)
+- WebGPU dead code annotated in `backends.py` (P7.3)
+
+### Changed
+- `TECHNICAL_DEBT.md` refreshed with V4 outcomes (P15)
+- `.github/copilot-instructions.md` updated with V4 environment vars
+- Pre-commit hooks added: trailing whitespace, YAML check, large files (P9.2)
+- CI lint job for core/: flake8 with --max-line-length=120 (P9.1)
+
 ### 1.5.0 (2026-03-23) - Honest Engineering Release
 
 **Benchmarks & Performance (NEW):**

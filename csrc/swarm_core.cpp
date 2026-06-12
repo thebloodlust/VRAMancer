@@ -1,5 +1,5 @@
 // VRAMancer Swarm Core (C++ Fast-Path)
-// Bypasses Python GIL for heavy CPU tasks: Holographic XOR Parity & Tensor Serialization
+// Bypasses Python GIL for heavy CPU tasks: XOR parity & tensor serialization
 // Compiles automatically on Windows (MSVC), macOS (Clang), and Linux (GCC)
 
 #include <pybind11/pybind11.h>
@@ -31,8 +31,8 @@ void xor_buffers_fast(const uint8_t* src, uint8_t* dst, size_t length) {
     }
 }
 
-// Releases Python GIL to calculate Holographic Parity in pure native speed
-py::bytes generate_holographic_parity_cpp(const std::vector<py::bytes>& py_shards) {
+// Releases the Python GIL to compute XOR parity at native speed
+py::bytes generate_xor_parity_cpp(const std::vector<py::bytes>& py_shards) {
     std::vector<std::string> shards;
     size_t max_len = 0;
 
@@ -64,8 +64,8 @@ py::bytes generate_holographic_parity_cpp(const std::vector<py::bytes>& py_shard
     return py::bytes(reinterpret_cast<const char*>(parity.data()), max_len);
 }
 
-// Reconstructs a missing tensor chunk from Parity instantly
-py::bytes heal_holograph_cpp(const std::vector<py::bytes>& valid_shards, py::bytes py_parity) {
+// Reconstructs a missing tensor chunk from parity
+py::bytes repair_xor_shard_cpp(const std::vector<py::bytes>& valid_shards, py::bytes py_parity) {
     std::string parity_str = py_parity;
     std::vector<uint8_t> reconstructed(parity_str.length(), 0);
     
@@ -93,6 +93,9 @@ py::bytes heal_holograph_cpp(const std::vector<py::bytes>& valid_shards, py::byt
 
 PYBIND11_MODULE(swarm_core, m) {
     m.doc() = "VRAMancer Swarm Core C++ Fast-path (Cross-Platform)";
-    m.def("generate_holographic_parity", &generate_holographic_parity_cpp, "Generate XOR parity bypassing GIL");
-    m.def("heal_holograph", &heal_holograph_cpp, "Reconstruct missing tensor bypassing GIL");
+    m.def("generate_xor_parity", &generate_xor_parity_cpp, "Generate XOR parity bypassing GIL");
+    m.def("repair_xor_shard", &repair_xor_shard_cpp, "Reconstruct missing tensor bypassing GIL");
+    // Deprecated aliases (backward compat):
+    m.def("generate_holographic_parity", &generate_xor_parity_cpp, "Deprecated alias of generate_xor_parity");
+    m.def("heal_holograph", &repair_xor_shard_cpp, "Deprecated alias of repair_xor_shard");
 }

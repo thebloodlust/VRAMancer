@@ -56,3 +56,10 @@ make lite
 ---
 
 Pour toute question, consultez le README ou ouvrez une issue sur GitHub.
+
+## Deprecated examples
+
+- `usb4_distributed_vram.py` — moved to `_deprecated/examples/`.
+  Used `core.network.packets` (now in `_deprecated/`). Import chain broken:
+  `transmission.py` → `packets.py` (absent). To revive, port to the current
+  network stack in `core/network/` (see `transmission.py`, `llm_transport.py`).

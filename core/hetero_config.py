@@ -346,13 +346,62 @@ def detect_gpus() -> List[DetectedGPU]:
 
 
 def probe_p2p(gpu_a: int, gpu_b: int) -> bool:
-    """Probe if P2P (peer-to-peer) DMA is possible between two GPUs."""
+    """Probe if P2P (peer-to-peer) DMA is possible between two GPUs.
+
+    CUDA's can_device_access_peer() returns False on GeForce/consumer GPUs and
+    in Proxmox/VFIO VMs even when PCIe P2P is enabled at the hardware level.
+    We use nvidia-smi topo -p2p r as the authoritative source, then fall back
+    to enabling peer access explicitly before re-querying.
+    """
     if not _TORCH or _MINIMAL:
         return False
+
+    # Fast path: CUDA API says yes
     try:
-        return torch.cuda.can_device_access_peer(gpu_a, gpu_b)
+        if torch.cuda.can_device_access_peer(gpu_a, gpu_b):
+            return True
     except Exception:
-        return False
+        _log.debug("cuda can_device_access_peer query failed", exc_info=True)
+
+    # Try enabling peer access explicitly — may succeed even when query said no
+    try:
+        with torch.cuda.device(gpu_a):
+            torch.cuda.enable_peer_access(gpu_b)
+        if torch.cuda.can_device_access_peer(gpu_a, gpu_b):
+            _log.debug("P2P GPU %d→%d: enabled via cudaDeviceEnablePeerAccess", gpu_a, gpu_b)
+            return True
+    except Exception:
+        _log.debug("cuda enable_peer_access failed for GPU %d→%d", gpu_a, gpu_b, exc_info=True)
+
+    # Authoritative fallback: nvidia-smi topo -p2p r
+    # Proxmox P2P shows "OK" here even when CUDA API disagrees.
+    try:
+        import subprocess as _sp
+        result = _sp.run(
+            ["nvidia-smi", "topo", "-p2p", "r"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0:
+            lines = result.stdout.strip().splitlines()
+            # Find the data row for gpu_a (skip header row)
+            data_lines = [l for l in lines if l.strip() and not l.startswith("Legend")]
+            # Header line contains GPU labels; data lines start with "GPU<n>"
+            gpu_rows = [l for l in data_lines if l.strip().startswith("GPU")]
+            if gpu_a < len(gpu_rows):
+                cols = gpu_rows[gpu_a].split()
+                # cols[0] = "GPU<a>", then one col per GPU
+                col_idx = gpu_b + 1  # +1 for the row label
+                if col_idx < len(cols) and cols[col_idx].upper() == "OK":
+                    _log.info(
+                        "P2P GPU %d↔%d: hardware OK (nvidia-smi topo) — "
+                        "CUDA API returned False but PCIe P2P is active",
+                        gpu_a, gpu_b,
+                    )
+                    return True
+    except Exception:
+        _log.debug("nvidia-smi topo P2P query failed", exc_info=True)
+
+    return False
 
 
 # ═══════════════════════════════════════════════════════════════════════════

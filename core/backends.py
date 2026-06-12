@@ -195,7 +195,7 @@ class KVCacheBlock(_nn.Module if _HAS_TORCH else object):
                     pos_emb = layer.self_attn.rotary_emb(hidden_states, position_ids)
                     layer_kwargs["position_embeddings"] = pos_emb
                 except Exception:
-                    pass
+                    logger.debug("Rotary embedding computation failed", exc_info=True)
 
             # Try calling with KV cache kwargs — singular 'past_key_value' FIRST.
             # Most modern HF layers (Llama, Mistral, Qwen2) use singular + **kwargs,
@@ -310,9 +310,33 @@ def _compute_vllm_config(num_gpus: int) -> dict:
         from core.hetero_config import auto_configure
         config = auto_configure(strategy="balanced")
         if config.gpus:
-            # When TP=1, use only the GPU with the most VRAM
+            # When TP=1, default to the GPU with the most VRAM. Caller can
+            # override via VRM_VLLM_TARGET_GPU=<index> when they need to pin
+            # to a specific GPU for compute-capability or quant-kernel reasons
+            # (e.g. V6.D bench: pin to Blackwell sm_120 even if it has less
+            # VRAM than an Ampere donor).
             if result["tensor_parallel_size"] == 1 and len(config.gpus) >= 2:
-                best_gpu = max(config.gpus, key=lambda g: g.total_vram_gb)
+                _override = os.environ.get("VRM_VLLM_TARGET_GPU", "").strip()
+                if _override.isdigit():
+                    target_idx = int(_override)
+                    matched = next(
+                        (g for g in config.gpus if g.index == target_idx),
+                        None,
+                    )
+                    if matched is not None:
+                        best_gpu = matched
+                        logger.info(
+                            f"vLLM TP=1 target overridden by VRM_VLLM_TARGET_GPU"
+                            f" → GPU {best_gpu.index} ({best_gpu.name})"
+                        )
+                    else:
+                        best_gpu = max(config.gpus, key=lambda g: g.total_vram_gb)
+                        logger.warning(
+                            f"VRM_VLLM_TARGET_GPU={_override} did not match any "
+                            f"configured GPU index; falling back to largest VRAM"
+                        )
+                else:
+                    best_gpu = max(config.gpus, key=lambda g: g.total_vram_gb)
                 result["target_gpu"] = best_gpu.index
                 vram_gb = best_gpu.total_vram_gb
                 logger.info(
@@ -404,7 +428,9 @@ def select_backend(model_name: str, cache_dir: str = None, backend: str = "auto"
         return OllamaBackend(model_name)
 
     if backend == "webgpu":
-        from core.webgpu_backend import WebGPUBackend
+        # DEAD CODE: WebGPU backend moved to _deprecated/backends_webgpu.py
+        # core.webgpu_backend does not exist — this path always raises ImportError.
+        from core.webgpu_backend import WebGPUBackend  # type: ignore[import]
         return WebGPUBackend()
 
     if backend == "huggingface":
@@ -567,6 +593,14 @@ class HuggingFaceBackend(BaseLLMBackend):
         to place more model layers on the best GPU (e.g. Blackwell 5070 Ti
         gets priority over Ampere 3090).
 
+        [V6.B] If a VRAMLendingPool reference and a model size estimate
+        have been injected by the pipeline, consults the pool first
+        (``suggest_placement_budget``). The pool's distribution carves
+        out a bigger runtime headroom and spills overflow to CPU when
+        the GPUs cannot collectively absorb the weights — preventing
+        the load-time OOM that the static 97 % formula triggers on
+        oversubscribed models (Qwen2.5-32B BF16 on 16 + 24 GB).
+
         Returns None if detection fails or only 1 GPU (let accelerate decide).
         """
         if not _HAS_TORCH or not _torch.cuda.is_available():
@@ -574,6 +608,35 @@ class HuggingFaceBackend(BaseLLMBackend):
         num_gpus = _torch.cuda.device_count()
         if num_gpus < 2:
             return None
+
+        # T7.6 auto-heal (point c): a load-time OOM retry sets this to ask
+        # for extra headroom on top of the normal reserve ratio. Forces the
+        # static formula below (skips the pool suggestion).
+        extra_reserve = getattr(self, '_extra_load_reserve', 0.0)
+
+        # [V6.B] Pool-aware path: ask the pool to plan the distribution.
+        pool = getattr(self, 'lending_pool', None)
+        estimated = getattr(self, '_estimated_model_size_bytes', None)
+        if extra_reserve <= 0 and pool is not None and estimated is not None and estimated > 0:
+            try:
+                suggestion = pool.suggest_placement_budget(
+                    model_size_bytes=estimated,
+                    gpu_ids=list(range(num_gpus)),
+                )
+                if suggestion:
+                    self.log.info(
+                        "[V6.B] Lending-pool placement: model %.1f GB across "
+                        "%d GPUs → %s",
+                        estimated / (1024 ** 3),
+                        num_gpus,
+                        ", ".join(f"{k}={v}" for k, v in suggestion.items()),
+                    )
+                    return suggestion
+            except Exception as e:
+                self.log.debug(
+                    "Lending pool placement suggestion failed (%s), "
+                    "falling back to static formula", e,
+                )
 
         try:
             from core.hetero_config import auto_configure
@@ -598,6 +661,7 @@ class HuggingFaceBackend(BaseLLMBackend):
                     reserve = 0.85
                 else:
                     reserve = 0.97
+                reserve = max(0.10, reserve - extra_reserve)
                 budget_gb = max(2.0, base_vram * reserve)
                 max_memory[gpu.index] = f"{budget_gb:.1f}GiB"
 
@@ -752,7 +816,7 @@ class HuggingFaceBackend(BaseLLMBackend):
                         profile = lookup_gpu_profile(props.name)
                         best_arch = profile.architecture if profile else ""
                     except Exception:
-                        pass
+                        logger.debug("GPU profile lookup failed", exc_info=True)
 
             if best_cc >= (12, 0):
                 self.log.info(
@@ -798,7 +862,7 @@ class HuggingFaceBackend(BaseLLMBackend):
                     yield
                 _tmu.no_init_weights = _no_init_weights
         except Exception:
-            pass
+            logger.debug("no_init_weights patch failed", exc_info=True)
 
         # ── Monkey-patch GptqHfQuantizer.__init__ ───────────────────────
         try:
@@ -895,6 +959,19 @@ class HuggingFaceBackend(BaseLLMBackend):
         int8: ~1.0 bytes/param (LLM.int8() via BnB), CC >= 7.5.
         """
         quant = os.environ.get("VRM_QUANTIZATION", "").lower()
+        if quant == "auto":
+            try:
+                from core.auto_detect import recommend_quantization
+                reco = recommend_quantization()
+                # Map reco -> supported BnB/torchao modes (drop bf16/gguf).
+                quant = reco if reco in ("nvfp4", "nf4", "int8") else ""
+                if quant:
+                    self.log.info(
+                        "VRM_QUANTIZATION=auto resolved to %s via auto_detect", quant
+                    )
+            except Exception as exc:  # pragma: no cover - defensive
+                self.log.debug("auto-detect failed: %s", exc)
+                quant = ""
         if quant not in ("nvfp4", "nf4", "int8"):
             return ""
         if not _HAS_TORCH or not _torch.cuda.is_available():
@@ -1821,6 +1898,16 @@ class HuggingFaceBackend(BaseLLMBackend):
                 _tp = gen_kwargs.get('top_p', 1.0)
                 if _temp != 1.0 or _tk > 0 or _tp < 1.0:
                     gen_kwargs['do_sample'] = True
+            # KV cache is the default in HF generate() but be explicit to
+            # avoid regressions with custom GenerationConfig objects.
+            gen_kwargs.setdefault("use_cache", True)
+
+            # T7.1: n-gram prompt lookup decoding (lossless candidate
+            # generation from the prompt itself, verified by the model —
+            # no draft model needed). VRM_PROMPT_LOOKUP=N (0=off).
+            _lookup_n = int(os.environ.get("VRM_PROMPT_LOOKUP", "0"))
+            if _lookup_n > 0 and "prompt_lookup_num_tokens" not in gen_kwargs:
+                gen_kwargs["prompt_lookup_num_tokens"] = _lookup_n
 
             out_ids = self.model.generate(
                 input_ids=input_ids,
@@ -1950,7 +2037,7 @@ class HuggingFaceBackend(BaseLLMBackend):
                 device = self._get_device()
                 input_ids = input_ids.to(device)
             except Exception:
-                pass
+                logger.debug("Input tensor device transfer failed", exc_info=True)
 
         generated = input_ids
         past_key_values = None
@@ -2054,6 +2141,7 @@ class HuggingFaceBackend(BaseLLMBackend):
             "pad_token_id": self.tokenizer.pad_token_id,
             **kwargs,
         }
+        gen_kwargs.setdefault("use_cache", True)
         if attention_mask is not None:
             gen_kwargs["attention_mask"] = attention_mask
 

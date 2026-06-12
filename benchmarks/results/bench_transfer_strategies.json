@@ -1,0 +1,67 @@
+{
+  "can_device_access_peer": false,
+  "rebar_available": false,
+  "rebar_full_window": false,
+  "rebar_info": {
+    "available": false,
+    "full_window": false,
+    "threshold_gb": 4.0,
+    "gpus": {}
+  },
+  "results": [
+    {
+      "size_mb": 1,
+      "cpu_staged_ms": 21.548206597799435,
+      "cpu_staged_gbps": 0.3892949495322116,
+      "pipelined_ms": 1.5138345974264666,
+      "pipelined_gbps": 5.541297585786924,
+      "rebar_ms": null,
+      "rebar_gbps": null
+    },
+    {
+      "size_mb": 4,
+      "cpu_staged_ms": 1.3195479987189174,
+      "cpu_staged_gbps": 25.428731681285036,
+      "pipelined_ms": 0.8688390022143722,
+      "pipelined_gbps": 38.61985006943896,
+      "rebar_ms": null,
+      "rebar_gbps": null
+    },
+    {
+      "size_mb": 16,
+      "cpu_staged_ms": 4.4611885998165235,
+      "cpu_staged_gbps": 30.085643096442954,
+      "pipelined_ms": 1.054549403488636,
+      "pipelined_gbps": 127.27495511920448,
+      "rebar_ms": null,
+      "rebar_gbps": null
+    },
+    {
+      "size_mb": 64,
+      "cpu_staged_ms": 32.85942040383816,
+      "cpu_staged_gbps": 16.338416971508437,
+      "pipelined_ms": 3.3009559963829815,
+      "pipelined_gbps": 162.64103871371677,
+      "rebar_ms": null,
+      "rebar_gbps": null
+    },
+    {
+      "size_mb": 256,
+      "cpu_staged_ms": 132.90248179982882,
+      "cpu_staged_gbps": 16.15834120565509,
+      "pipelined_ms": 12.323319198912941,
+      "pipelined_gbps": 174.26178883603313,
+      "rebar_ms": null,
+      "rebar_gbps": null
+    },
+    {
+      "size_mb": 1024,
+      "cpu_staged_ms": 529.2442580015631,
+      "cpu_staged_gbps": 16.230567383830984,
+      "pipelined_ms": 48.26581799425185,
+      "pipelined_gbps": 177.9713873910312,
+      "rebar_ms": null,
+      "rebar_gbps": null
+    }
+  ]
+}

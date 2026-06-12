@@ -31,19 +31,19 @@ class TestReBarDetection:
     """ReBAR detection and threshold logic."""
 
     def test_rebar_threshold_constant(self):
-        from core.cross_vendor_bridge import REBAR_FULL_WINDOW_THRESHOLD
+        from experimental.cross_vendor_bridge import REBAR_FULL_WINDOW_THRESHOLD
         assert REBAR_FULL_WINDOW_THRESHOLD == 4 * 1024 * 1024 * 1024
 
     def test_detect_rebar_stub_mode(self):
         """In stub mode (VRM_MINIMAL_TEST), detect_rebar returns (False, 0)."""
-        from core.cross_vendor_bridge import detect_rebar
+        from experimental.cross_vendor_bridge import detect_rebar
         enabled, size = detect_rebar(0)
         assert enabled is False
         assert size == 0
 
     def test_rebar_transport_not_available_in_stub(self):
         """In stub mode, ReBarTransport has no available GPUs."""
-        from core.cross_vendor_bridge import ReBarTransport
+        from experimental.cross_vendor_bridge import ReBarTransport
         rt = ReBarTransport()
         assert rt.available is False
         assert rt.full_window is False
@@ -51,7 +51,7 @@ class TestReBarDetection:
 
     def test_rebar_transport_info_empty(self):
         """Info method works even when no ReBAR GPUs detected."""
-        from core.cross_vendor_bridge import ReBarTransport
+        from experimental.cross_vendor_bridge import ReBarTransport
         rt = ReBarTransport()
         info = rt.info()
         assert info["available"] is False
@@ -61,13 +61,13 @@ class TestReBarDetection:
 
     def test_rebar_optimal_chunk_default(self):
         """Without ReBAR, chunk size is the default."""
-        from core.cross_vendor_bridge import ReBarTransport, DEFAULT_CHUNK_BYTES
+        from experimental.cross_vendor_bridge import ReBarTransport, DEFAULT_CHUNK_BYTES
         rt = ReBarTransport()
         assert rt.get_optimal_chunk_size(0) == DEFAULT_CHUNK_BYTES
 
     def test_rebar_transport_with_mock_bar(self):
         """Simulate a GPU with 16 GB BAR for chunk calculation."""
-        from core.cross_vendor_bridge import ReBarTransport
+        from experimental.cross_vendor_bridge import ReBarTransport
         rt = ReBarTransport()
         bar_16gb = 16 * 1024 * 1024 * 1024
         rt._gpu_bars[0] = ("/sys/fake/resource0", bar_16gb)
@@ -79,7 +79,7 @@ class TestReBarDetection:
 
     def test_rebar_transport_small_bar(self):
         """BAR of 4 GB → 4 GB / 64 = 64 MB (at cap)."""
-        from core.cross_vendor_bridge import ReBarTransport
+        from experimental.cross_vendor_bridge import ReBarTransport
         rt = ReBarTransport()
         bar_4gb = 4 * 1024 * 1024 * 1024
         rt._gpu_bars[0] = ("/sys/fake/resource0", bar_4gb)
@@ -92,8 +92,8 @@ class TestReBarTransferStub:
 
     def test_transfer_returns_stub_without_torch(self):
         """Without torch, transfer returns STUB result."""
-        import core.cross_vendor_bridge as cvb
-        from core.cross_vendor_bridge import ReBarTransport, CrossVendorMethod
+        import experimental.cross_vendor_bridge as cvb
+        from experimental.cross_vendor_bridge import ReBarTransport, CrossVendorMethod
         rt = ReBarTransport()
         rt._gpu_bars[0] = ("/sys/fake", 16 * 1024**3)
         rt.available = True
@@ -139,7 +139,7 @@ class TestVRAMLending:
     """Core VRAMLendingPool lifecycle."""
 
     def _make_pool(self):
-        from core.vram_lending import VRAMLendingPool, LendingPolicy
+        from experimental.vram_lending import VRAMLendingPool, LendingPolicy
         policy = LendingPolicy(
             max_lend_ratio=0.70,
             reclaim_threshold=0.80,
@@ -225,7 +225,7 @@ class TestVRAMLending:
         pool.close()
 
     def test_reclaim_recovers_memory(self):
-        from core.vram_lending import ReclaimUrgency
+        from experimental.vram_lending import ReclaimUrgency
         pool = self._make_pool()
         pool.register_gpu(0, total_bytes=24e9, model_bytes=12e9)
         pool.register_gpu(1, total_bytes=16e9, model_bytes=8e9)
@@ -271,7 +271,7 @@ class TestVRAMLendingSingleton:
     """Singleton factory and reset."""
 
     def test_get_lending_pool(self):
-        from core.vram_lending import get_lending_pool, reset_lending_pool
+        from experimental.vram_lending import get_lending_pool, reset_lending_pool
         reset_lending_pool()
         pool1 = get_lending_pool()
         pool2 = get_lending_pool()
@@ -279,7 +279,7 @@ class TestVRAMLendingSingleton:
         reset_lending_pool()
 
     def test_reset_lending_pool(self):
-        from core.vram_lending import get_lending_pool, reset_lending_pool
+        from experimental.vram_lending import get_lending_pool, reset_lending_pool
         reset_lending_pool()
         pool1 = get_lending_pool()
         reset_lending_pool()

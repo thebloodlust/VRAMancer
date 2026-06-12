@@ -3,7 +3,7 @@ Anycast Load Balancer — IPv6 health-aware tensor routing.
 ==========================================================
 
 Routes tensor transfers to the best available node in the cluster
-using Connectome synapse weights (Hebbian health scores) and
+using Connectome synapse weights (adaptive health scores) and
 real-time liveness from AITP Sensing.
 
 Strategies:
@@ -14,7 +14,7 @@ Strategies:
 Integrates with:
   - ``core.network.connectome.global_connectome`` for health scores
   - ``core.network.aitp_sensing.AITPSensor`` for peer liveness
-  - ``core.network.aitp_protocol.AITPProtocol`` for actual transport
+  - ``experimental.aitp_protocol.AITPProtocol`` for actual transport
 
 Environment:
   - ``VRM_ANYCAST_STRATEGY``: ``weighted`` (default), ``least_latency``, ``round_robin``
@@ -64,7 +64,7 @@ def _init_lb_metrics():
             "Routing failures (no healthy node available)",
         )
     except Exception:
-        pass
+        logger.debug("Prometheus metrics unavailable", exc_info=True)
 
 
 class AnycastNode:
@@ -192,7 +192,7 @@ class AnycastLoadBalancer:
     def sync_from_connectome(self, connectome=None):
         """Pull synapse weights from the global Connectome into node health.
 
-        This bridges the Hebbian learning (live latency/error tracking)
+        This bridges the adaptive learning (live latency/error tracking)
         into the load balancer's routing decisions.
         """
         if connectome is None:
@@ -200,6 +200,7 @@ class AnycastLoadBalancer:
                 from core.network.connectome import global_connectome
                 connectome = global_connectome
             except ImportError:
+                logger.debug("Connectome module unavailable", exc_info=True)
                 return
 
         weights = connectome.get_all_weights()
@@ -225,6 +226,7 @@ class AnycastLoadBalancer:
                 # No global singleton, caller must provide
                 return
             except ImportError:
+                logger.debug("AITP sensing module unavailable", exc_info=True)
                 return
 
         for uid, peer_info in sensor.peers.items():
@@ -322,7 +324,7 @@ class AnycastLoadBalancer:
     def record_result(self, node_id: str, success: bool):
         """Record transfer outcome for a node — feeds back into Connectome.
 
-        This creates a Hebbian learning loop:
+        This creates an adaptive feedback loop:
         success → strength increases → node gets more traffic
         failure → strength decreases → node gets less traffic
         """
@@ -337,7 +339,7 @@ class AnycastLoadBalancer:
                     if _LB_FAILOVERS:
                         _LB_FAILOVERS.inc()
 
-        # Feed back to Connectome (Hebbian: reinforce or weaken)
+        # Feed back to Connectome (adaptive: reinforce or weaken)
         try:
             from core.network.connectome import global_connectome
             global_connectome.record_transfer_result(node_id, success)

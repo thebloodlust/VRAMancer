@@ -135,7 +135,7 @@ class Transport:
             try:
                 self._sock.shutdown(socket.SHUT_RDWR)
             except Exception:
-                pass
+                _log.debug("Socket shutdown failed", exc_info=True)
             self._sock.close()
             self._sock = None
         self._connected = False

@@ -19,7 +19,7 @@ os.environ.setdefault("VRM_MINIMAL_TEST", "1")
 os.environ.setdefault("VRM_TEST_MODE", "1")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from core.vram_lending import VRAMLendingPool, LendingPolicy
+from experimental.vram_lending import VRAMLendingPool, LendingPolicy
 
 
 # ---------------------------------------------------------------------------

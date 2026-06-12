@@ -6,7 +6,7 @@ Run LLM models that don't fit on a single GPU, across heterogeneous GPUs, in one
 # Load a 14B model across a RTX 3090 + RTX 5070 Ti (neither alone has enough VRAM)
 vramancer run Qwen/Qwen2.5-14B-Instruct
 
-# With 4-bit quantization (fits on a single GPU, 75% faster)
+# With 4-bit quantization (fits on a single GPU, ~70% less VRAM)
 vramancer run Qwen/Qwen2.5-14B-Instruct -q nf4
 
 # One-shot generation
@@ -15,22 +15,41 @@ vramancer run Qwen/Qwen2.5-7B-Instruct -p "Explain gradient descent in 3 sentenc
 
 VRAMancer auto-detects all GPUs, splits the model proportionally to available VRAM, and runs inference block-by-block with CPU-staged transfers between GPUs. No config files, no YAML, no manual device maps.
 
-## Proven: What it actually does
+## Benchmarks
 
-**Heterogeneous multi-GPU inference** — the core feature, benchmarked:
+### Multi-GPU inference — heterogeneous split (RTX 3090 + RTX 5070 Ti)
 
-| Model | Setup | Result |
-|-------|-------|--------|
-| Qwen2.5-14B (28 GB bf16) | Single RTX 3090 (24 GB) | **OOM** |
-| Qwen2.5-14B (28 GB bf16) | Single RTX 5070 Ti (16 GB) | **OOM** |
-| Qwen2.5-14B (28 GB bf16) | VRAMancer 2-GPU (3090 + 5070 Ti) | **6.0 tok/s** ✓ |
-| Qwen2.5-14B NF4 | Single GPU | **10.5 tok/s** (75% faster, 10.8 GB) |
-| Qwen2.5-7B GGUF Q4_K_M | llama.cpp backend | **106.8 tok/s** (3.0 GB) |
+| Model | Params | VRAM | tok/s | Notes |
+|-------|--------|------|-------|-------|
+| Qwen2.5-14B BF16 | 14B | 35.9 GB | **16.1** | 2-GPU, OOMs on either GPU alone |
+| Qwen2.5-14B NF4 | 14B | 10.8 GB | **10.5** | 1 GPU, bitsandbytes, ~70% less VRAM but 35% slower than BF16 2-GPU |
+| **Qwen3-Coder-Next Q3** | **80B (3B active)** | **38 GB** | **~60** | GGUF Q3_K_XL, 2-GPU tensor split, MoE |
+| Qwen2.5-7B GGUF Q4_K_M | 7B | 4.5 GB | **106.8** | llama.cpp, 1 GPU |
 
-_Hardware: RTX 3090 + RTX 5070 Ti, Proxmox VM, PCIe passthrough, CPU-staged transfers ~11 GB/s._
-_Bare-metal expected +10-30% with P2P/NVLink._
+> Qwen3-Coder-Next: 80B MoE model (3B active params per token), GGUF Q3_K_XL split across RTX 3090 (23.4 GB) + RTX 5070 Ti (15 GB). First token: 66–92 ms. Faster than a 14B dense model despite 6× more total parameters — MoE sparsity wins.
 
-**Single-GPU performance** — near-zero overhead:
+### GPU-to-GPU transfer bandwidth (Proxmox PCIe P2P)
+
+`nvidia-smi topo -p2p r` shows P2P OK between GPUs. `torch.cuda.can_device_access_peer()` returns False (CUDA API lies in VM) — VRAMancer probes nvidia-smi as ground truth.
+
+| Method | Bandwidth | Notes |
+|--------|-----------|-------|
+| Rust `cuMemcpyPeerAsync` | **~25 GB/s** | True PCIe P2P DMA |
+| PyTorch `.to()` | ~12 GB/s | CPU-staged fallback |
+| Python pinned CPU | ~10 GB/s | 2-hop: GPU→CPU→GPU |
+
+### KV cache migration (VRAM Lending Pool preemption)
+
+Simulates evicting KV pages from GPU 1 → GPU 0 when a lending GPU reclaims its VRAM.
+Page size: 3 MB (Qwen2.5-14B: 48L × 8kv × 16tok × 128dim × bf16).
+
+| Scenario | CPU-staged | Rust P2P | Speedup |
+|----------|-----------|----------|---------|
+| 10 pages (30 MB) | ~8 ms | ~4 ms | +47% |
+| 100 pages (300 MB) | ~28 ms | ~15 ms | +46% |
+| 500 pages (1.5 GB) | ~116 ms | ~61 ms | **+47%** |
+
+### Single-GPU overhead — near-zero
 
 | Model | HuggingFace native | VRAMancer | Delta |
 |-------|-------------------|-----------|-------|
@@ -38,7 +57,16 @@ _Bare-metal expected +10-30% with P2P/NVLink._
 | TinyLlama-1.1B | 53.0 tok/s | 56.5 tok/s | **+6.6%** |
 | Mistral-7B-v0.1 | 35.1 tok/s | 34.9 tok/s | -0.6% |
 
-Full benchmark details: [benchmarks/BENCHMARK_RESULTS.md](benchmarks/BENCHMARK_RESULTS.md)
+### WebNPU (browser inference via WebNN)
+
+| Device | Backend | tok/s |
+|--------|---------|-------|
+| Samsung S25 Ultra (Hexagon NPU) | WebNN via WebNPU | **67.4** |
+| MacBook M4 | WebGPU | ~45 |
+
+_Hardware: RTX 3090 (24 GB, PCIe 4.0) + RTX 5070 Ti (16 GB, PCIe 5.0), Proxmox VM, VFIO passthrough._
+
+Full benchmark scripts: [benchmarks/](benchmarks/)
 
 ## Install
 
@@ -64,8 +92,7 @@ python -m venv .venv && source .venv/bin/activate
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 
 # VRAMancer + dependencies
-pip install -e .
-pip install -r requirements.txt
+pip install -e .[gpu]
 
 # Verify
 python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}, GPUs: {torch.cuda.device_count()}')"
@@ -103,7 +130,6 @@ pip install torch torchvision
 
 # VRAMancer + dependencies
 pip install -e .
-pip install -r requirements-lite.txt
 
 # Verify MPS backend
 python -c "import torch; print(f'MPS: {torch.backends.mps.is_available()}')"
@@ -119,7 +145,7 @@ This tests:
 - MPS backend detection (`detect_backend()` returns `mps`)
 - GPT-2 124M inference on MPS
 - TinyLlama 1.1B inference on MPS (~4 GB unified memory)
-- Full stub test suite (957 tests)
+- Full stub test suite (`VRM_MINIMAL_TEST=1 pytest tests/ -m "not gpu and not real_torch and not heavy and not chaos"`)
 
 **Run models:**
 ```bash
@@ -146,8 +172,7 @@ python -m venv .venv && .venv\Scripts\activate
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 
 # VRAMancer + dependencies
-pip install -e .
-pip install -r requirements-windows.txt
+pip install -e .[windows]
 
 # Verify
 python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}')"
@@ -166,17 +191,6 @@ python scripts/bench_rtx4060.py
 ```
 
 Tests GPT-2 FP16, TinyLlama 1.1B FP16, Qwen2.5-7B NF4 (~5 GB), and GGUF via llama.cpp.
-
-### Network / multi-node testing
-
-To test cluster discovery and AITP protocol across machines on the same LAN:
-
-```bash
-# Run on EACH machine simultaneously
-python scripts/test_network_lan.py
-```
-
-Tests mDNS + UDP broadcast discovery, AITP protocol (UDP + HMAC-SHA256 + FEC), peer heartbeat sensing, and TCP connectivity between nodes.
 
 ## Usage
 
@@ -241,6 +255,27 @@ vramancer split Qwen/Qwen2.5-14B-Instruct --gpus 2  # Preview model split
 
 > **Tip:** GGUF models are auto-detected and use llama.cpp automatically. For HuggingFace models, add `--backend llamacpp` isn't needed — just use a GGUF repo name.
 
+### Compatibility matrix
+
+| Backend / Feature | Linux x86_64 | macOS (arm64) | Windows | NVIDIA (CUDA) | AMD (ROCm) | Apple Silicon (MPS) | CPU-only |
+|---|---|---|---|---|---|---|---|
+| huggingface | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ (slow) |
+| llamacpp (GGUF) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ (Metal) | ✅ |
+| vllm | ✅ | ❌ | ⚠️ WSL2 | ✅ | ⚠️ exp. | ❌ | ❌ |
+| ollama | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| NVFP4 (Blackwell FP4) | ✅ | ❌ | ✅ | ✅ SM ≥10.0 | ❌ | ❌ | ❌ |
+| NF4 / INT8 (bitsandbytes) | ✅ | ⚠️ | ✅ | ✅ | ⚠️ | ❌ | ❌ |
+| TurboQuant KV (PolarQuant+QJL) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Multi-GPU pipeline parallel | ✅ | N/A | ✅ | ✅ | ✅ | N/A | N/A |
+| Multi-GPU tensor parallel (NCCL) | ✅ | ❌ | ⚠️ | ✅ | ⚠️ | ❌ | ❌ |
+| VRAM Lending Pool | ✅ | N/A | ✅ | ✅ (P2P or ReBAR) | ⚠️ | N/A | N/A |
+| Rust P2P bypass (CUDA FFI) | ✅ | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ |
+| Continuous batcher | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+
+Legend: ✅ supported & tested · ⚠️ partial / experimental · ❌ not supported · N/A not applicable.
+
+> BnB (NF4/INT8) multi-GPU has an upstream bug in `accelerate 1.13 + transformers 5.3` — VRAMancer forces single-GPU for BnB. Use NVFP4 or GGUF Q4_K_M for multi-GPU quantized inference.
+
 ## Configuration
 
 VRAMancer is configured via environment variables (`VRM_*`), not config files:
@@ -258,8 +293,11 @@ Full list: [.github/copilot-instructions.md](.github/copilot-instructions.md#var
 ## Development
 
 ```bash
-# Tests (901 passed, works without GPU)
-VRM_MINIMAL_TEST=1 VRM_DISABLE_RATE_LIMIT=1 pytest tests/ -q
+# Stub tests (no GPU required)
+VRM_MINIMAL_TEST=1 VRM_DISABLE_RATE_LIMIT=1 pytest tests/ -m "not gpu and not real_torch and not heavy and not chaos" -q
+
+# GPU integration tests (requires CUDA/ROCm/MPS)
+VRM_MINIMAL_TEST=1 VRM_DISABLE_RATE_LIMIT=1 pytest tests/ -m "gpu or real_torch" -q
 
 # Lint
 flake8 core/ tests/
@@ -278,6 +316,11 @@ vramancer run model
 ```
 
 Detailed architecture: [docs/architecture.md](docs/architecture.md)
+
+## Known limitations & technical debt
+
+See [docs/reports/TECHNICAL_DEBT.md](docs/reports/TECHNICAL_DEBT.md) for documented stubs,
+known limitations (BnB multi-GPU upstream bug, CUDA Graph single-GPU only, etc.) and V4 plan outcomes.
 
 ## License
 

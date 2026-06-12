@@ -372,7 +372,7 @@ class GPUMemoryRegion:
             try:
                 self.mr.close()
             except Exception:
-                pass
+                log.debug("MR close failed", exc_info=True)
         self.buffer = None
         self._registered = False
 
@@ -682,7 +682,7 @@ class VTPConnection:
                 try:
                     res.close()
                 except Exception:
-                    pass
+                    log.debug("RDMA resource close failed", exc_info=True)
         self._connected = False
         self._double_bufs.clear()
         self._gpu_regions.clear()
@@ -797,13 +797,13 @@ class LLMTransport:
             try:
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_BUSY_POLL, 50)
             except Exception:
-                pass
+                log.debug("SO_BUSY_POLL not supported", exc_info=True)
             # Large socket buffers for tensor transfers
             try:
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4 * 1024 * 1024)
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * 1024 * 1024)
             except Exception:
-                pass
+                log.debug("Socket buffer size tuning failed", exc_info=True)
             sock.settimeout(10.0)
             sock.connect(sa)
 
@@ -824,7 +824,7 @@ class LLMTransport:
                                 f"tier={srv_info.get('tier', '?')}"
                             )
                         except Exception:
-                            pass
+                            log.debug("VTP handshake server info parse failed", exc_info=True)
 
             # Step 2: Send our handshake
             import json
@@ -840,7 +840,7 @@ class LLMTransport:
                 try:
                     local_info["num_gpus"] = torch.cuda.device_count()
                 except Exception:
-                    pass
+                    log.debug("CUDA device count failed", exc_info=True)
             info_bytes = json.dumps(local_info).encode("utf-8")
             client_hdr = TensorHeader(
                 opcode=VTPOpcode.CONTROL,
@@ -1384,7 +1384,7 @@ class LLMTransport:
             try:
                 sock.close()
             except Exception:
-                pass
+                log.debug("TCP fallback socket close failed", exc_info=True)
         self._connections.clear()
         self._tcp_fallback.clear()
         log.info("VTP: all connections closed")
@@ -1443,7 +1443,7 @@ class VTPServer:
             try:
                 self._server_sock.close()
             except Exception:
-                pass
+                log.debug("VTP server socket close failed", exc_info=True)
         log.info("VTP server stopped")
 
     def _accept_loop(self):
@@ -1456,7 +1456,7 @@ class VTPServer:
                     conn.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4 * 1024 * 1024)
                     conn.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * 1024 * 1024)
                 except Exception:
-                    pass
+                    log.debug("Accepted connection socket buffer tuning failed", exc_info=True)
                 threading.Thread(
                     target=self._handle_client, args=(conn, addr),
                     daemon=True,
@@ -1545,7 +1545,7 @@ class VTPServer:
             try:
                 conn.close()
             except Exception:
-                pass
+                log.debug("VTP client connection close failed", exc_info=True)
             log.info(f"VTP: connection closed from {peer_id}")
 
     def _recv_loop(self, conn: socket.socket, peer_id: str):
@@ -1631,7 +1631,7 @@ class VTPServer:
             try:
                 info["num_gpus"] = torch.cuda.device_count()
             except Exception:
-                pass
+                log.debug("CUDA device count failed", exc_info=True)
         return json.dumps(info).encode("utf-8")
 
     @staticmethod

@@ -71,4 +71,18 @@ cd rust_core && maturin develop --release
 ```
 
 ---
-*19 fonctions PyO3 + GpuPipeline persistent, 645 tests passés, 0 échec. Chiffres corrigés après suppression de l'artéfact cache driver.*
+*19 fonctions PyO3 + GpuPipeline persistent, 645 tests passés, 0 échec. Chiffres
+
+## 6. Async DtoD (V5 P4 — `VRM_TRANSFER_ASYNC=1`)
+
+`direct_vram_copy_async(src_ptr, dst_ptr, size_bytes)` — appelle `cuMemcpyDtoDAsync_v2` sur le stream nul (0).
+- **Non-blocking host** : la CPU retourne immédiatement
+- Opérations PyTorch suivantes sur le même device se sérialisent automatiquement via le default stream
+- Gate derrière `VRM_TRANSFER_ASYNC=1` dans `transfer_manager.py` (Strategy 1.5, tensors ≤1 MB)
+- Gain mesuré : ~0% sur petits tensors (DtoD latency << model compute), potentiellement utile en pipeline multi-layer overlapping
+- Retourne `TransportMethod.RUST_P2P`
+
+```python
+# Activer l'async DtoD :
+VRM_TRANSFER_ASYNC=1 python server.py
+``` corrigés après suppression de l'artéfact cache driver.*

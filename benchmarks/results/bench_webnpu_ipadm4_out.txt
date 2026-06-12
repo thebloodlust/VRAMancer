@@ -1,0 +1,35 @@
+/home/jeremie/VRAMancer/VRAMancer/.venv/lib/python3.12/site-packages/torch/cuda/__init__.py:65: FutureWarning: The pynvml package is deprecated. Please install nvidia-ml-py instead. If you did not install pynvml directly, please report this to the maintainers of the package that installed pynvml for you.
+  import pynvml  # type: ignore[import]
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+WARNING:huggingface_hub.utils._http:Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+`torch_dtype` is deprecated! Use `dtype` instead!
+=======================================================
+  VRAMancer WebNPU Inference Benchmark
+  WebNN → NPU / GPU / CPU (with WebGPU fallback)
+=======================================================
+Model: gpt2
+Prompt: 'The meaning of life is'
+Max tokens: 30
+
+[1/5] Loading model locally...
+Loading weights:   0%|          | 0/148 [00:00<?, ?it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 4974.53it/s]
+The attention mask and the pad token id were not set. As a consequence, you may observe unexpected behavior. Please pass your input's `attention_mask` to obtain reliable results.
+Setting `pad_token_id` to `eos_token_id`:50256 for open-end generation.
+The attention mask is not set and cannot be inferred from input because pad token is same as eos token. As a consequence, you may observe unexpected behavior. Please pass your input's `attention_mask` to obtain reliable results.
+  Loaded: 124M params in 1.3s
+
+[2/5] Local PyTorch reference generation...
+  Local: 30 tokens in 6.90s (4.3 tok/s)
+  Text: 'The meaning of life is not the same as the meaning of death.\n\nThe meaning of life is not the same as the meaning of death.\n\nThe meaning of'
+
+[3/5] Starting WebGPU/WebNN backend server...
+[04/07/26 22:41:55] INFO     WebGPU server on wss://0.0.0.0:8765 (WSS + static  
+                             files on same port)                                
+  Server: https://0.0.0.0:8765
+
+  >>> Open in browser: https://localhost:8765/webnpu.html
+  >>> Or any device:   https://<server-ip>:8765/webnpu.html
+
+  The page auto-detects: WebNN NPU → WebNN GPU → WebGPU fallback
+  Waiting for browser to connect...
+ERROR: No browser connected within 5 minutes.

@@ -191,3 +191,78 @@ groups:
         annotations:
           summary: "Memory eviction rate above 10/5min"
           description: "{{ $value }} evictions/5min from {{ $labels.from }}→{{ $labels.to }}. Consider adding VRAM/DRAM."
+
+  # ── KV cache pressure ───────────────────────────────────────────
+  - name: vramancer_kv_cache
+    interval: 30s
+    rules:
+      - alert: KVCachePressureHigh
+        expr: >
+          vramancer_paged_kv_used_pages
+          / (vramancer_paged_kv_used_pages + vramancer_paged_kv_free_pages > 0)
+          > 0.90
+        for: 5m
+        labels:
+          severity: warning
+          component: kv_cache
+        annotations:
+          summary: "KV cache usage above 90% on {{ $labels.device }}"
+          description: "Paged KV cache is {{ $value | humanizePercentage }} full on {{ $labels.device }}. New requests may be queued or rejected."
+
+      - alert: KVCacheBorrowingActive
+        expr: vramancer_paged_kv_borrowed_pages > 0
+        for: 10m
+        labels:
+          severity: info
+          component: kv_cache
+        annotations:
+          summary: "KV cache is borrowing overflow pages from lending pool"
+          description: "{{ $value }} pages borrowed for >10min. Lending pool is healthy but consider provisioning more native VRAM."
+
+  # ── Continuous batcher backpressure ─────────────────────────────
+  - name: vramancer_batcher
+    interval: 30s
+    rules:
+      - alert: BatcherQueueDepthHigh
+        expr: vramancer_batcher_queue_depth > 64
+        for: 3m
+        labels:
+          severity: warning
+          component: batcher
+        annotations:
+          summary: "Continuous batcher queue depth above 64"
+          description: "{{ $value }} requests waiting for >3min. Service is overloaded — scale horizontally or reduce concurrency."
+
+      - alert: BatcherQueueDepthCritical
+        expr: vramancer_batcher_queue_depth > 200
+        for: 1m
+        labels:
+          severity: critical
+          component: batcher
+        annotations:
+          summary: "Continuous batcher queue depth above 200 (max 256)"
+          description: "Queue near saturation ({{ $value }}). Imminent backpressure rejections."
+
+  # ── Circuit breaker ─────────────────────────────────────────────
+  - name: vramancer_circuit_breaker
+    interval: 15s
+    rules:
+      - alert: CircuitBreakerOpen
+        expr: vramancer_circuit_breaker_state == 2
+        for: 1m
+        labels:
+          severity: critical
+          component: circuit_breaker
+        annotations:
+          summary: "Circuit breaker {{ $labels.name }} is OPEN"
+          description: "Breaker '{{ $labels.name }}' has been OPEN for >1min — all requests are fast-rejected. Check inference health."
+
+      - alert: CircuitBreakerFlapping
+        expr: increase(vramancer_circuit_breaker_trips_total[15m]) >= 3
+        for: 0m
+        labels:
+          severity: warning
+          component: circuit_breaker
+        annotations:
+          summary: "Circuit breaker {{ $labels.name }} flapping"
+          description: "Breaker '{{ $labels.name }}' has tripped {{ $value }} times in the last 15min."

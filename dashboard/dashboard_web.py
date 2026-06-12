@@ -1,3 +1,4 @@
+"""**Status: demo / local monitoring — not for production deployment.**"""
 import os, sys
 # Auto-activation du mode minimal APRÈS import os
 if os.environ.get('VRM_DASHBOARD_MINIMAL','0') == '0':
@@ -143,6 +144,7 @@ def dashboard():
 
 
 @app.route("/api/gpu")
+@app.route("/api/dashboard/gpus")
 def api_gpu():
     """Real-time GPU info (pynvml preferred, torch fallback)."""
     # Try pynvml first for accurate VRAM
@@ -256,6 +258,41 @@ def api_models_search():
 
     print(">>> RESULTS:", results)
     return jsonify({"results": results})
+
+
+@app.route("/api/models/load", methods=["POST"])
+def api_models_load():
+    """Load a HuggingFace model into the active InferencePipeline.
+
+    POST body: {"model_id": "sshleifer/tiny-gpt2", "source": "hf"}
+    Returns: {"ok": bool, "msg": str, "model_id": str, "device_map": dict}
+    """
+    payload = request.get_json(silent=True) or {}
+    model_id = payload.get("model_id", "").strip()
+    source = payload.get("source", "hf").strip().lower()
+    if not model_id:
+        return jsonify({"ok": False, "msg": "model_id required"}), 400
+    if source not in ("hf", "hugging face", "huggingface"):
+        return jsonify({"ok": False, "msg": f"source '{source}' not supported yet"}), 400
+
+    try:
+        from core.inference_pipeline import InferencePipeline
+        pipeline = app.config.get("pipeline")
+        if pipeline is None:
+            pipeline = InferencePipeline(enable_metrics=False, enable_discovery=False)
+            app.config["pipeline"] = pipeline
+        pipeline.load(model_id)
+    except Exception as e:
+        app.logger.error("Failed to load model %s: %s", model_id, e, exc_info=True)
+        return jsonify({"ok": False, "msg": f"load failed: {e}"}), 500
+
+    device_map = getattr(getattr(pipeline, "backend", None), "hf_device_map", None) or {}
+    return jsonify({
+        "ok": True,
+        "msg": f"Loaded {model_id}",
+        "model_id": model_id,
+        "device_map": dict(device_map) if hasattr(device_map, "items") else {},
+    })
 
 
 @app.route("/api/swarm/status")

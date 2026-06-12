@@ -1,0 +1,171 @@
+{
+  "bench": "bench_lending_hetero_real",
+  "phase": "V5 P13bis (companion to bench_deepseek_engram)",
+  "model": "Qwen/Qwen2.5-32B-Instruct",
+  "num_gpus": 2,
+  "max_new": 32,
+  "warmup": 2,
+  "topology": [
+    {
+      "index": 0,
+      "name": "NVIDIA GeForce RTX 5070 Ti",
+      "sm": "12.0",
+      "total_mb": 16303,
+      "free_mb": 15826,
+      "used_mb": 476
+    },
+    {
+      "index": 1,
+      "name": "NVIDIA GeForce RTX 3090",
+      "sm": "8.6",
+      "total_mb": 24576,
+      "free_mb": 24111,
+      "used_mb": 464
+    }
+  ],
+  "runs": [
+    {
+      "label": "LENDING_OFF",
+      "lending_enabled_env": false,
+      "vram_pre_load": {
+        "gpu0": {
+          "used_mb": 476,
+          "total_mb": 16303
+        },
+        "gpu1": {
+          "used_mb": 464,
+          "total_mb": 24576
+        }
+      },
+      "load_time_s": 184.4,
+      "pool_active": false,
+      "vram_post_load": {
+        "gpu0": {
+          "used_mb": 15314,
+          "total_mb": 16303
+        },
+        "gpu1": {
+          "used_mb": 24292,
+          "total_mb": 24576
+        }
+      },
+      "status": "OOM",
+      "error": "CUDA out of memory. Tried to allocate 1.45 GiB. GPU 0 has a total capacity of 15.47 GiB of which 956.62 MiB is free. Including non-PyTorch memory, this process has 14.51 GiB memory in use. Of the allocated memory 14.23 GiB is allocated by PyTorch, and 13.33 MiB is reserved by PyTorch but unallocated",
+      "vram_post_oom": {
+        "gpu0": {
+          "used_mb": 15350,
+          "total_mb": 16303
+        },
+        "gpu1": {
+          "used_mb": 24332,
+          "total_mb": 24576
+        }
+      },
+      "elapsed_subprocess_s": 196.9,
+      "returncode": 0
+    },
+    {
+      "label": "LENDING_ON",
+      "lending_enabled_env": true,
+      "vram_pre_load": {
+        "gpu0": {
+          "used_mb": 476,
+          "total_mb": 16303
+        },
+        "gpu1": {
+          "used_mb": 464,
+          "total_mb": 24576
+        }
+      },
+      "load_time_s": 215.35,
+      "pool_active": true,
+      "pool_registered_gpus": [
+        {
+          "gpu_id": 0,
+          "device_name": "NVIDIA GeForce RTX 5070 Ti",
+          "lendable_bytes": 2665696564
+        },
+        {
+          "gpu_id": 1,
+          "device_name": "NVIDIA GeForce RTX 3090",
+          "lendable_bytes": 1313693082
+        }
+      ],
+      "vram_post_load": {
+        "gpu0": {
+          "used_mb": 14394,
+          "total_mb": 16303
+        },
+        "gpu1": {
+          "used_mb": 22912,
+          "total_mb": 24576
+        }
+      },
+      "tok_s": 0.39,
+      "total_tokens": 160,
+      "elapsed_s": 411.86,
+      "vram_post_bench": {
+        "gpu0": {
+          "used_mb": 15918,
+          "total_mb": 16303
+        },
+        "gpu1": {
+          "used_mb": 22932,
+          "total_mb": 24576
+        }
+      },
+      "vram_delta_mb": {
+        "gpu0": 15442,
+        "gpu1": 22468
+      },
+      "pool_stats": {
+        "total_leases_created": 0,
+        "total_leases_reclaimed": 0,
+        "total_bytes_lent": 0,
+        "total_bytes_reclaimed": 0,
+        "preemptions_graceful": 0,
+        "preemptions_forced": 0,
+        "reclaim_avg_ms": 0.0,
+        "peak_lent_bytes": 0,
+        "total_lendable_bytes": 3979389646,
+        "total_lendable_gb": 3.979389646,
+        "total_lent_bytes": 0,
+        "total_lent_gb": 0.0,
+        "total_borrowed_bytes": 0,
+        "gpu_count": 2,
+        "active_leases": 0,
+        "per_gpu": {
+          "0": {
+            "device": "NVIDIA GeForce RTX 5070 Ti",
+            "total_gb": 16.611278848,
+            "model_gb": 12.2844544,
+            "kv_cache_gb": 0.0,
+            "lent_gb": 0.0,
+            "borrowed_gb": 0.0,
+            "free_gb": 2.665696564,
+            "lendable_gb": 2.665696564,
+            "effective_capacity_gb": 16.611278848,
+            "utilization": 0.8395249042296975,
+            "pcie_gen": 5
+          },
+          "1": {
+            "device": "NVIDIA GeForce RTX 3090",
+            "total_gb": 25.298141184,
+            "model_gb": 21.454633984,
+            "kv_cache_gb": 0.0,
+            "lent_gb": 0.0,
+            "borrowed_gb": 0.0,
+            "free_gb": 1.313693082,
+            "lendable_gb": 1.313693082,
+            "effective_capacity_gb": 25.298141184,
+            "utilization": 0.948071557018946,
+            "pcie_gen": 4
+          }
+        }
+      },
+      "status": "ok",
+      "elapsed_subprocess_s": 681.3,
+      "returncode": 0
+    }
+  ]
+}
