@@ -68,7 +68,21 @@ pipe.load(MODEL, num_gpus=2)
 be = getattr(pipe, 'backend', None)
 blocks = getattr(be, 'blocks', None)
 has_devmap = bool(getattr(getattr(be, 'model', None), 'hf_device_map', None))
-path_used = 'accelerate' if (blocks is None and has_devmap) else 'UNKNOWN'
+_nb = len(blocks) if blocks else 0
+# Diagnostic précis du mécanisme réellement utilisé par la prod (Path 1).
+# NB (constat dry-run) : un petit modèle qui tient sur 1 GPU NE déclenche PAS
+# device_map="auto" -> l'InferencePipeline fait un split manuel -> les 2 chemins
+# se confondent. Seul un modèle > VRAM d'un GPU (ex. 14B bf16) emprunte vraiment
+# accelerate ici. Si Path 1 ressort 'manual_split', le modèle est trop petit
+# pour le test A1 (résultat non fiable, cf. garde-fou plus bas).
+if has_devmap and _nb == 0:
+    path_used = 'accelerate'
+elif _nb > 1:
+    path_used = 'manual_split'
+elif _nb == 1:
+    path_used = 'single_block'
+else:
+    path_used = 'single_gpu'
 
 out, toks = _gen(pipe.generate)
 print('RESULT_JSON:' + json.dumps({
@@ -187,8 +201,13 @@ def main():
             verdict["notes"].append("OK: chemins distincts confirmés "
                                     "(accelerate vs manual_split).")
         else:
-            verdict["notes"].append(f"⚠️ chemins suspects: p1={p1.get('path_used')} "
-                                    f"p2={p2.get('path_used')} — résultat NON fiable.")
+            verdict["notes"].append(
+                f"⚠️ chemins NON distincts : p1={p1.get('path_used')} "
+                f"p2={p2.get('path_used')}. Pour un vrai test A1, Path 1 doit être "
+                f"'accelerate' — il faut un modèle qui ne tient PAS sur 1 GPU "
+                f"(ex. 14B bf16). Sur un petit modèle les 2 chemins se confondent. "
+                f"Résultat NON fiable pour la décision.")
+            verdict["pass"] = None  # indécis : test non valide sur ce modèle
     else:
         verdict["notes"].append("Un worker a échoué — voir stderr_tail dans le JSON.")
 
