@@ -1,4 +1,6 @@
-"""Lightweight Edge REST API for smartphones and IoT devices.
+"""**Status: edge IoT lifecycle management — used by core/network/supervision_api.**
+
+Lightweight Edge REST API for smartphones and IoT devices.
 
 Provides a minimal HTTP API that edge devices can use to:
   1. Register as swarm workers (report capabilities)

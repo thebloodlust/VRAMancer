@@ -71,6 +71,15 @@ def health():
     checks['pipeline_loaded'] = _registry_ref.is_loaded() if _registry_ref else False
     if not all(checks.get(k, False) for k in ('monitor', 'config')):
         overall = 'degraded'
+
+    # T7.6 auto-heal: surface persistent OOM-recovery state (e.g. NF4
+    # fallback reload, or a persistently reduced context budget).
+    extra = _registry_ref.health_extra() if _registry_ref else {"degraded": False, "degraded_reason": None}
+    if extra.get('degraded'):
+        overall = 'degraded'
+        checks['autoheal_degraded'] = True
+        checks['autoheal_reason'] = extra.get('degraded_reason')
+
     return jsonify({
         'status': overall, 'service': 'vramancer-api',
         'version': version, 'checks': checks,
@@ -79,18 +88,32 @@ def health():
 
 @ops_bp.route('/ready')
 def ready():
-    """Readiness check."""
+    """Readiness check.
+
+    Kubernetes readiness probe: returns 200 only when the service is ready
+    to handle traffic (backend detected AND model pipeline loaded).
+    Returns 503 otherwise so K8s removes the pod from Service endpoints.
+
+    Override the strict model-loaded requirement with
+    ``VRM_READY_REQUIRE_MODEL=0`` (e.g. for warmup-on-first-request
+    deployments where the pod should accept traffic before load).
+    """
     try:
         from core.utils import detect_backend, enumerate_devices
         backend = detect_backend()
         devices = enumerate_devices()
         has_gpu = any(d['backend'] in ('cuda', 'rocm', 'mps') for d in devices)
-        return jsonify({
-            'status': 'ready', 'backend': backend,
+        model_loaded = _registry_ref.is_loaded() if _registry_ref else False
+        require_model = os.environ.get('VRM_READY_REQUIRE_MODEL', '1') not in ('0', 'false', 'False')
+        ready_ok = (not require_model) or model_loaded
+        payload = {
+            'status': 'ready' if ready_ok else 'not_ready',
+            'backend': backend,
             'devices': len(devices), 'has_gpu': has_gpu,
-            'model_loaded': _registry_ref.is_loaded() if _registry_ref else False,
+            'model_loaded': model_loaded,
             'service': 'vramancer-api',
-        })
+        }
+        return jsonify(payload), (200 if ready_ok else 503)
     except Exception as e:
         logger.error("Readiness check failed: %s", e)
         return jsonify({'status': 'not_ready', 'error': str(e)}), 503
@@ -319,7 +342,7 @@ def nodes_info():
                     'count': len(gpu_devs),
                 }
         except Exception:
-            pass
+            logger.debug("GPU info collection failed", exc_info=True)
         discovered = []
         try:
             if _registry_ref:
@@ -327,7 +350,7 @@ def nodes_info():
                 for hostname, info in nodes.items():
                     discovered.append({'hostname': hostname, **info})
         except Exception:
-            pass
+            logger.debug("Node discovery failed", exc_info=True)
         local_node = {
             'host': 'localhost',
             'name': f'VRAMancer-{platform.node()}',

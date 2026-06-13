@@ -6,6 +6,8 @@ Utility helpers for GPU‑aware inference.
 from __future__ import annotations
 import logging
 
+_logger = logging.getLogger(__name__)
+
 import os, sys, re
 from typing import Iterable, Sequence, Optional, List, Dict, Any
 
@@ -105,9 +107,11 @@ else:  # mode normal mais on protège chaque import lourd + fallback tokenizer p
                         try:
                             return AutoTokenizer.from_pretrained(model_name, use_fast=False)
                         except Exception:
+                            logging.debug("Slow tokenizer failed, using basic", exc_info=True)
                             return _basic()
                     return _basic()
         except Exception:
+            logging.debug("AutoTokenizer import failed, using basic", exc_info=True)
             FORCE_BASIC = True
     if FORCE_BASIC:
         def get_tokenizer(model_name: str):  # pragma: no cover - trivial
@@ -151,7 +155,7 @@ def detect_backend() -> str:
                 if 'AMD' in device_name or 'RADEON' in device_name or 'INSTINCT' in device_name:
                     return 'rocm'  # AMD GPU détectée
             except Exception:
-                pass
+                logging.debug("Failed to check GPU device name", exc_info=True)
             return 'cuda'
 
         # Intel XPU (IPEX)
@@ -168,13 +172,13 @@ def detect_backend() -> str:
             if xm.xla_device():
                 return 'tpu'
         except ImportError:
-            pass
+            logging.debug("Torch XLA not available", exc_info=True)
         
         # Apple Silicon MPS
         if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
             return 'mps'
     except Exception:
-        pass
+        logging.debug("Backend detection failed", exc_info=True)
     return 'cpu'
 
 
@@ -217,12 +221,32 @@ def detect_device_backend(device_index: int) -> str:
 
 
 _LOGICAL_MAPPING: Optional[Dict[int, int]] = None
+_LOGICAL_MAPPING_DEVICE_COUNT: int = -1  # last seen torch.cuda.device_count()
+
 
 def _get_logical_mapping() -> Dict[int, int]:
-    global _LOGICAL_MAPPING
+    """Return cached logical→physical GPU mapping.
+
+    Cache is invalidated automatically if ``torch.cuda.device_count()``
+    changes (new GPU plugged, GPU lost, ``CUDA_VISIBLE_DEVICES`` reset by
+    a worker fork). Use :func:`invalidate_device_cache` to force a refresh
+    explicitly.
+    """
+    global _LOGICAL_MAPPING, _LOGICAL_MAPPING_DEVICE_COUNT
+
+    # Auto-invalidate on count change (cheap probe).
+    try:
+        if torch.cuda.is_available():
+            current_count = torch.cuda.device_count()
+            if current_count != _LOGICAL_MAPPING_DEVICE_COUNT:
+                _LOGICAL_MAPPING = None
+                _LOGICAL_MAPPING_DEVICE_COUNT = current_count
+    except Exception:
+        pass
+
     if _LOGICAL_MAPPING is not None:
         return _LOGICAL_MAPPING
-    
+
     mapping = {}
     backend = detect_backend()
     if backend in ('cuda', 'rocm') and torch.cuda.is_available():
@@ -247,6 +271,16 @@ def _get_logical_mapping() -> Dict[int, int]:
             
     _LOGICAL_MAPPING = mapping
     return mapping
+
+
+def invalidate_device_cache() -> None:
+    """Force re-detection on next call to :func:`_get_logical_mapping` /
+    :func:`enumerate_devices`. Useful after GPU hot-plug/unplug or
+    ``CUDA_VISIBLE_DEVICES`` change.
+    """
+    global _LOGICAL_MAPPING, _LOGICAL_MAPPING_DEVICE_COUNT
+    _LOGICAL_MAPPING = None
+    _LOGICAL_MAPPING_DEVICE_COUNT = -1
 
 def get_device_type(idx: int) -> torch.device:
     """Retourne un objet torch.device cohérent pour un index.
@@ -311,7 +345,7 @@ def enumerate_devices() -> List[Dict[str, Any]]:
             cuda_devices.sort(key=lambda d: d.get('logical_index', d['index']))
             devices.extend(cuda_devices)
     except Exception:
-        pass
+        _logger.debug("CUDA device listing failed", exc_info=True)
     # Intel XPU
     try:
         if hasattr(torch, 'xpu') and torch.xpu.is_available():
@@ -326,7 +360,7 @@ def enumerate_devices() -> List[Dict[str, Any]]:
                     'vendor': 'intel',
                 })
     except Exception:
-        pass
+        _logger.debug("Intel XPU detection failed", exc_info=True)
     # Huawei NPU
     try:
         if hasattr(torch, 'npu') and torch.npu.is_available():
@@ -341,7 +375,7 @@ def enumerate_devices() -> List[Dict[str, Any]]:
                     'vendor': 'huawei',
                 })
     except Exception:
-        pass
+        _logger.debug("Huawei NPU detection failed", exc_info=True)
     # Google TPU
     try:
         import torch_xla.core.xla_model as xm
@@ -369,7 +403,7 @@ def enumerate_devices() -> List[Dict[str, Any]]:
                 'vendor': 'apple',
             })
     except Exception:
-        pass
+        _logger.debug("Apple/TPU device detection failed", exc_info=True)
     if not devices:  # CPU fallback explicite
         devices.append({
             'id': 'cpu:0',
@@ -406,7 +440,7 @@ def assign_block_to_device(block: torch.nn.Module, idx: int) -> torch.nn.Module:
         try:
             setattr(moved, 'device', device)
         except Exception:
-            pass
+            _logger.debug("setattr device failed", exc_info=True)
     return moved
 
 # ------------------------------------------------------------------
@@ -437,6 +471,7 @@ __all__ = [
     'detect_backend',
     'detect_device_backend',
     'enumerate_devices',
+    'invalidate_device_cache',
     'assign_block_to_device',
     'serialize_tensors',
     'deserialize_tensors',

@@ -274,12 +274,14 @@ def create_app(model_name: Optional[str] = None,
         except Exception as e:
             logger.error("Failed to pre-load model: %s", e)
 
-    # Start VTP worker server for distributed inference
-    try:
-        from core.cross_node import start_vtp_server
-        start_vtp_server()
-    except Exception as exc:
-        logger.warning("VTP server failed to start: %s", exc)
+    # VTP server is opt-in: it opens listening sockets which is undesirable
+    # in tests and single-node deployments. Enable with VRM_FEATURE_AITP=1.
+    if os.environ.get("VRM_FEATURE_AITP", "").lower() in ("1", "true", "yes"):
+        try:
+            from core.cross_node import start_vtp_server
+            start_vtp_server()
+        except Exception as exc:
+            logger.warning("VTP server failed to start: %s", exc)
 
     return application
 
@@ -369,7 +371,7 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
                         path=path_label, method='POST', status='200'
                     ).observe(_elapsed)
                 except Exception:
-                    pass
+                    logger.debug("Metrics record failed", exc_info=True)
             except Exception as exc:
                 if _circuit_breaker:
                     _circuit_breaker.record_failure()
@@ -424,6 +426,12 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
         _registry.load(model_name)
         return None
 
+    @application.route('/chat', methods=['GET'])
+    def code_chat_ui():
+        """Minimal code/chat UI — single static page, talks to /v1/chat/completions."""
+        chat_html = Path(__file__).parent.parent / "dashboard" / "templates" / "code_chat.html"
+        return Response(chat_html.read_text(), mimetype="text/html")
+
     @application.route('/v1/completions', methods=['POST'])
     @application.route('/api/generate', methods=['POST'])
     def generate():
@@ -451,7 +459,7 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
                 from core.metrics import INFER_REQUESTS, INFER_LATENCY, API_LATENCY
                 INFER_REQUESTS.inc()
             except Exception:
-                pass
+                logger.debug("Metrics import failed", exc_info=True)
 
             req_id = "vrm-" + uuid.uuid4().hex[:12]
 
@@ -520,7 +528,7 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
             try:
                 API_LATENCY.labels(path='/v1/completions', method='POST', status='200').observe(elapsed)
             except Exception:
-                pass
+                logger.debug("Metrics record failed", exc_info=True)
 
             return jsonify({
                 'id': req_id,
@@ -548,7 +556,7 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
                 from core.metrics import INFER_ERRORS
                 INFER_ERRORS.inc()
             except Exception:
-                pass
+                logger.debug("Metrics error counter failed", exc_info=True)
             return jsonify({'error': str(e)}), 500
 
     @application.route('/v1/chat/completions', methods=['POST'])
@@ -613,7 +621,7 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
                 reserved_tokens = params.get('max_tokens', 250)
                 ledger.consume_credits(user_id, reserved_tokens)
             except Exception:
-                pass
+                logger.debug("Swarm ledger credit consumption failed", exc_info=True)
 
         # Convert messages to prompt
         prompt_parts = []
@@ -639,7 +647,7 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
                 from core.metrics import INFER_REQUESTS, API_LATENCY
                 INFER_REQUESTS.inc()
             except Exception:
-                pass
+                logger.debug("Metrics import failed", exc_info=True)
 
             req_id = "chatcmpl-" + uuid.uuid4().hex[:12]
 
@@ -650,6 +658,7 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
                         max_new_tokens=params['max_tokens'],
                         temperature=params['temperature'],
                         top_p=params['top_p'],
+                        stop=["\nUser:", "\nSystem:"],
                     ):
                         chunk = {
                             "id": req_id,
@@ -689,6 +698,7 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
                     max_new_tokens=params['max_tokens'],
                     temperature=params['temperature'],
                     top_p=params['top_p'],
+                    stop=["\nUser:", "\nSystem:"],
                 )
 
             text, queue_err = _run_with_timeout(_do_chat)
@@ -704,7 +714,7 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
             try:
                 API_LATENCY.labels(path='/v1/chat/completions', method='POST', status='200').observe(elapsed)
             except Exception:
-                pass
+                logger.debug("Metrics record failed", exc_info=True)
 
             return jsonify({
                 'id': req_id,
@@ -732,7 +742,7 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
                 from core.metrics import INFER_ERRORS
                 INFER_ERRORS.inc()
             except Exception:
-                pass
+                logger.debug("Metrics error counter failed", exc_info=True)
             return jsonify({'error': str(e)}), 500
 
     @application.route('/api/infer', methods=['POST'])
@@ -867,7 +877,7 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
                 from core.metrics import INFER_REQUESTS, API_LATENCY
                 INFER_REQUESTS.inc(len(prompts))
             except Exception:
-                pass
+                logger.debug("Metrics import failed", exc_info=True)
 
             req_id = "vrm-batch-" + uuid.uuid4().hex[:12]
             start = time.perf_counter()
@@ -953,7 +963,7 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
                     path='/v1/batch/completions', method='POST', status='200'
                 ).observe(elapsed)
             except Exception:
-                pass
+                logger.debug("Metrics record failed", exc_info=True)
 
             return jsonify({
                 'id': req_id,
@@ -979,7 +989,7 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
                 from core.metrics import INFER_ERRORS
                 INFER_ERRORS.inc()
             except Exception:
-                pass
+                logger.debug("Metrics error counter failed", exc_info=True)
             return jsonify({'error': str(e)}), 500
 
     # ====================================================================
@@ -1099,16 +1109,29 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
 
     @application.route('/api/swarm/awaken', methods=['POST'])
     def swarm_awaken():
+        """Wake known cluster nodes via Wake-on-LAN and return their status.
+
+        Sends WoL magic packets to registered nodes (if any) and reports how
+        many were pinged. Returns real counts from the discovery layer rather
+        than fabricated figures.
         """
-        SWARM ATTENTION: Wake up the organic network.
-        Forces the WebGPU Swarm Node Manager to simulate a massive context offload,
-        bringing the UI neural network to life.
-        """
+        nodes = []
+        try:
+            disco = getattr(_registry, 'discovery', None)
+            if disco is not None and hasattr(disco, 'get_nodes'):
+                nodes = list(disco.get_nodes() or [])
+        except Exception:
+            logger.debug("swarm_awaken: discovery unavailable", exc_info=True)
+        woke = 0
+        try:
+            from experimental.wake_on_inference import get_woi_manager
+            woke = get_woi_manager().wake_all() or 0
+        except Exception:
+            logger.debug("swarm_awaken: WoL unavailable", exc_info=True)
         return jsonify({
-            "status": "Awakening Swarm Attention...",
-            "message": "Envoi asynchrone des requetes Tensor vers le reseau L7 Edge.",
-            "tflops_allocated": 14.3,
-            "nodes_pinged": 15
+            "status": "ok",
+            "nodes_known": len(nodes),
+            "nodes_woken": int(woke),
         })
 
     # ====================================================================
@@ -1278,7 +1301,7 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
                     transport_mode = "vtp"
                     continue
                 except Exception:
-                    pass  # Fallback to HTTP
+                    logger.debug("VTP worker connection failed, falling back to HTTP", exc_info=True)
             workers.append(RemoteWorker(url, token, sl, el))
 
         try:
@@ -1363,7 +1386,7 @@ def main():
             from core.cross_node import stop_vtp_server
             stop_vtp_server()
         except Exception:
-            pass
+            logger.debug("VTP server stop failed", exc_info=True)
         # Drain inference executor
         try:
             if hasattr(app, 'vrm_executor') and app.vrm_executor:
@@ -1378,7 +1401,7 @@ def main():
             if dist.is_initialized():
                 dist.destroy_process_group()
         except Exception:
-            pass
+            logger.debug("Torch distributed cleanup failed", exc_info=True)
         logger.info("Cleanup complete")
 
     atexit.register(_cleanup)
@@ -1436,9 +1459,30 @@ def run_server(host: str = None, port: int = None):
     """Start the API server with gunicorn (production) or Werkzeug (fallback).
 
     Called from main() and from vramancer CLI 'serve' command.
+
+    Set ``VRM_NO_GUNICORN=1`` to force the single-process Werkzeug server.
+    This is required when a GPU model is pre-loaded in this process: gunicorn
+    forks worker processes, and CUDA cannot be re-initialised in a fork
+    ("Cannot re-initialize CUDA in forked subprocess"). The single-process
+    server keeps the loaded CUDA context usable.
     """
     host = host or API_HOST
     port = port or API_PORT
+
+    # Force single-process server (no fork) — mandatory with a pre-loaded
+    # CUDA model, and convenient for local single-user serving.
+    if os.environ.get('VRM_NO_GUNICORN', '').strip() in ('1', 'true', 'yes'):
+        logger.info("VRM_NO_GUNICORN set — using single-process Werkzeug server")
+        try:
+            app.run(host=host, port=port, debug=False,
+                    use_reloader=False, threaded=True)
+        except KeyboardInterrupt:
+            logger.info("Shutdown requested by user")
+        except Exception as e:
+            logger.critical("Fatal error: %s", e, exc_info=True)
+            sys.exit(1)
+        return
+
     try:
         from gunicorn.app.base import BaseApplication
 

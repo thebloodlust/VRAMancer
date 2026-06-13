@@ -77,7 +77,13 @@ except ImportError:  # pragma: no cover
 
 
 class RemoteExecutor:
-    """Remote block execution proxy with connection management."""
+    """Remote block execution proxy with connection management.
+
+    Serializes the input tensor via safetensors over a TCP socket to a remote
+    worker, receives the output, and deserializes it.  This involves a full
+    CPU ↔ network round-trip and is NOT zero-copy.  Use only when the remote
+    GPU provides VRAM that is unavailable locally.
+    """
 
     def __init__(self, host: str, port: int, timeout: float = 10.0):
         self.host = host
@@ -414,7 +420,7 @@ class BlockRouter:
                     os.makedirs(self._nvme_cache_path, exist_ok=True)
                     return True
             except Exception:
-                pass
+                _logger.debug("NVMe cache setup failed", exc_info=True)
 
         # Windows: use %TEMP%
         if os.name == "nt":
@@ -425,7 +431,7 @@ class BlockRouter:
                 self._nvme_cache_path = cache_dir
                 return True
             except Exception:
-                pass
+                _logger.debug("NVMe cache path setup failed", exc_info=True)
 
         return False
 

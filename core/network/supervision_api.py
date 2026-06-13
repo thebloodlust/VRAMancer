@@ -26,7 +26,10 @@ STATUS — HA Sync:
     - /api/ha/apply state replication (HMM registry only, not NODES)
 """
 from flask import Flask, jsonify, request, Response
+import logging
 import os
+
+_logger = logging.getLogger("vramancer.supervision")
 try:
     from flask_socketio import SocketIO, emit
 except Exception:  # fallback tests minimal
@@ -55,7 +58,7 @@ from core.metrics import (
 )
 from core.utils import enumerate_devices
 from core.tracing import start_tracing
-from core.hierarchical_memory import HierarchicalMemoryManager
+from experimental.hierarchical_memory import HierarchicalMemoryManager
 from core.network.network_transport import (
     open_low_latency_channel,
     detect_fast_interfaces,
@@ -82,7 +85,7 @@ def _api_timer_stop(resp):  # pragma: no cover - mesure
         try:
             API_LATENCY.labels(request.path, request.method, str(resp.status_code)).observe(dur)
         except Exception:
-            pass
+            _logger.debug("Metrics record failed", exc_info=True)
     return resp
 
 cors_origins = os.environ.get("VRM_CORS_ORIGINS", "http://localhost:*").split(",")
@@ -110,7 +113,7 @@ class _SimpleScheduler:
         try:
             fn()
         except Exception:
-            pass
+            _logger.debug("Scheduled task failed", exc_info=True)
         return tid
     def submit_batch(self, batch):
         return [self.submit(b['fn'], b.get('priority','NORMAL'), b.get('tags',[])) for b in batch]
@@ -309,7 +312,7 @@ def fastpath_interfaces():
         try:
             FASTPATH_IF_LATENCY.labels(iface, kind).set(lat)
         except Exception:
-            pass
+            _logger.debug("Metrics record failed", exc_info=True)
     selected = interfaces[0] if interfaces else None
     return jsonify({
         'interfaces': interfaces,
@@ -346,7 +349,7 @@ def fastpath_select():
         try:
             FASTPATH_IF_LATENCY.labels(iface, kind).set(lat)
         except Exception:
-            pass
+            _logger.debug("Metrics record failed", exc_info=True)
     selected = interfaces[0] if interfaces else None
     return jsonify({'ok': True, 'selected': selected, 'interfaces': interfaces, 'benchmarks': benches})
 
@@ -431,7 +434,7 @@ def ha_apply():
         try:
             HA_JOURNAL_SIZE.set(os.path.getsize(jpath))
         except Exception:
-            pass
+            _logger.debug("Metrics record failed", exc_info=True)
     # Rotation journal (taille max en octets)
     max_size = int(os.environ.get('VRM_HA_JOURNAL_MAX','5242880'))  # 5MB
     if jpath and os.path.exists(jpath) and os.path.getsize(jpath) > max_size:
@@ -447,7 +450,7 @@ def ha_apply():
             HA_JOURNAL_ROTATIONS.inc()
             HA_JOURNAL_SIZE.set(0)
         except Exception:
-            pass
+            _logger.debug("Metrics record failed", exc_info=True)
     # Politique cluster globale: si trop de blocs L1 cumulés > seuil, éviction locale
     l1_blocks = sum(1 for v in HMM.registry.values() if v['tier']=='L1')
     if l1_blocks > int(os.environ.get('VRM_CLUSTER_L1_THRESHOLD','500')):
@@ -545,7 +548,7 @@ def telemetry_ingest():
                     'cpu_load_pct': entry.get('cpu_load_pct'), 'free_cores': entry.get('free_cores'), 'last_seen': time.time()
                 })
     except Exception:
-        pass
+        _logger.debug("Telemetry ingest failed", exc_info=True)
     return jsonify({'ok': True, 'bytes': len(blob), 'merged': True})
 
 @socketio.on("subscribe")

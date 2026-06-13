@@ -1,0 +1,100 @@
+{
+  "bench": "bench_lending_hetero_real",
+  "phase": "V5 P13bis (companion to bench_deepseek_engram)",
+  "model": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+  "num_gpus": 2,
+  "max_new": 32,
+  "warmup": 2,
+  "topology": [
+    {
+      "index": 0,
+      "name": "NVIDIA GeForce RTX 5070 Ti",
+      "sm": "12.0",
+      "total_mb": 16303,
+      "free_mb": 15826,
+      "used_mb": 476
+    },
+    {
+      "index": 1,
+      "name": "NVIDIA GeForce RTX 3090",
+      "sm": "8.6",
+      "total_mb": 24576,
+      "free_mb": 24111,
+      "used_mb": 464
+    }
+  ],
+  "runs": [
+    {
+      "label": "LENDING_OFF",
+      "lending_enabled_env": false,
+      "vram_pre_load": {
+        "gpu0": {
+          "used_mb": 476,
+          "total_mb": 16303
+        },
+        "gpu1": {
+          "used_mb": 464,
+          "total_mb": 24576
+        }
+      },
+      "load_time_s": 10.54,
+      "pool_active": false,
+      "vram_post_load": {
+        "gpu0": {
+          "used_mb": 3092,
+          "total_mb": 16303
+        },
+        "gpu1": {
+          "used_mb": 3154,
+          "total_mb": 24576
+        }
+      },
+      "status": "error",
+      "error": "cuDNN Frontend error: [cudnn_frontend] Error: No valid execution plans built.",
+      "elapsed_subprocess_s": 18.3,
+      "returncode": 0
+    },
+    {
+      "label": "LENDING_ON",
+      "lending_enabled_env": true,
+      "vram_pre_load": {
+        "gpu0": {
+          "used_mb": 476,
+          "total_mb": 16303
+        },
+        "gpu1": {
+          "used_mb": 464,
+          "total_mb": 24576
+        }
+      },
+      "load_time_s": 12.7,
+      "pool_active": true,
+      "pool_registered_gpus": [
+        {
+          "gpu_id": 0,
+          "device_name": "NVIDIA GeForce RTX 5070 Ti",
+          "lendable_bytes": 10888755304
+        },
+        {
+          "gpu_id": 1,
+          "device_name": "NVIDIA GeForce RTX 3090",
+          "lendable_bytes": 18953762612
+        }
+      ],
+      "vram_post_load": {
+        "gpu0": {
+          "used_mb": 8292,
+          "total_mb": 16303
+        },
+        "gpu1": {
+          "used_mb": 11934,
+          "total_mb": 24576
+        }
+      },
+      "status": "error",
+      "error": "cuDNN Frontend error: [cudnn_frontend] Error: No valid execution plans built.",
+      "elapsed_subprocess_s": 20.5,
+      "returncode": 0
+    }
+  ]
+}

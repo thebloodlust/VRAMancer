@@ -377,8 +377,8 @@ class ContinuousBatcher:
             batch_tokens = self.tokenizer(prompts, return_tensors="pt", padding=True)
             batch_ids = batch_tokens["input_ids"]
             batch_mask = batch_tokens.get("attention_mask")
-        except Exception:
-            pass
+        except Exception as _hf_tok_err:
+            _logger.debug("HF batch tokenizer failed: %s", _hf_tok_err, exc_info=True)
 
         # Strategy 2: Rust GIL-free tokenizer (when HF batch fails or tokenizer is non-HF)
         if batch_ids is None:
@@ -387,8 +387,8 @@ class ContinuousBatcher:
                 if hasattr(vramancer_rust, 'batch_tokenize_fast'):
                     rust_ids = vramancer_rust.batch_tokenize_fast(prompts)
                     _logger.debug("Using Rust GIL-free tokenizer for %d prompts", len(prompts))
-            except Exception:
-                pass
+            except Exception as _rust_tok_err:
+                _logger.debug("Rust batch tokenizer failed: %s", _rust_tok_err, exc_info=True)
 
         # Strategy 3: sequential fallback
         if batch_ids is None and rust_ids is None:
@@ -427,8 +427,9 @@ class ContinuousBatcher:
                     try:
                         req.input_ids = req.input_ids.to(self._device)
                         req.generated_ids = req.generated_ids.to(self._device)
-                    except Exception:
-                        pass
+                    except Exception as _to_dev_err:
+                        _logger.debug("Failed to move request tensors to device %s: %s",
+                                      self._device, _to_dev_err, exc_info=True)
 
                 # Paged attention: allocate pages + try prefix cache
                 if self.paged_kv:
@@ -468,8 +469,9 @@ class ContinuousBatcher:
             try:
                 req.input_ids = req.input_ids.to(self._device)
                 req.generated_ids = req.generated_ids.to(self._device)
-            except Exception:
-                pass
+            except Exception as _to_dev2_err:
+                _logger.debug("Failed to move tensors to device %s: %s",
+                              self._device, _to_dev2_err, exc_info=True)
 
         # Paged attention: allocate pages + try prefix cache
         if self.paged_kv:
@@ -592,8 +594,9 @@ class ContinuousBatcher:
             if self.paged_kv and req.kv_cache is not None:
                 try:
                     self.paged_kv.from_hf_cache(req.request_id, req.kv_cache)
-                except Exception:
-                    pass
+                except Exception as _paged_kv_err:
+                    _logger.debug("Chunked prefill paged KV store failed for %s: %s",
+                                  req.request_id, _paged_kv_err, exc_info=True)
 
             _logger.debug("Chunked prefill %s: processed %d/%d tokens",
                           req.request_id, chunk_size,
@@ -671,8 +674,9 @@ class ContinuousBatcher:
                         )
                         if token_text:
                             req.on_token(token_text)
-                    except Exception:
-                        pass
+                    except Exception as _stream_cb_batched_err:
+                        _logger.debug("Streaming callback (batched prefill) failed for %s: %s",
+                                      req.request_id, _stream_cb_batched_err)
 
                 # Check completion
                 token_id = next_token.item()
@@ -791,8 +795,9 @@ class ContinuousBatcher:
                             )
                             if token_text:
                                 req.on_token(token_text)
-                        except Exception:
-                            pass
+                        except Exception as _decode_cb_err:
+                            _logger.debug("Streaming callback (batched decode) failed for %s: %s",
+                                          req.request_id, _decode_cb_err)
 
                     # Check completion
                     token_id = next_token.item()
@@ -863,10 +868,26 @@ class ContinuousBatcher:
 
     def _unbatch_kv_cache(self, batched_kv: Tuple, idx: int) -> Tuple:
         """Extract one request's KV cache from a batched KV cache."""
+        # Handle DynamicCache (transformers 5.x) directly
+        try:
+            from transformers import DynamicCache
+            if isinstance(batched_kv, DynamicCache):
+                cache = DynamicCache()
+                for layer_idx in range(len(batched_kv)):
+                    cache.update(
+                        batched_kv.key_cache[layer_idx][idx:idx + 1],
+                        batched_kv.value_cache[layer_idx][idx:idx + 1],
+                        layer_idx,
+                    )
+                return cache
+        except ImportError:
+            pass
         result = []
         for layer_kv in batched_kv:
-            k, v = layer_kv
-            result.append((k[idx:idx+1], v[idx:idx+1]))
+            # Use indexing to be robust against caches that store more than
+            # (key, value) per layer (e.g. sin/cos embeddings in some impls).
+            k, v = layer_kv[0], layer_kv[1]
+            result.append((k[idx:idx + 1], v[idx:idx + 1]))
         return tuple(result)
 
     def _forward_single(self, req: InferenceRequest, is_prefill: bool) -> None:
@@ -891,8 +912,9 @@ class ContinuousBatcher:
                 if self.paged_kv and req.kv_cache is not None:
                     try:
                         self.paged_kv.from_hf_cache(req.request_id, req.kv_cache)
-                    except Exception:
-                        pass
+                    except Exception as _paged_single_kv_err:
+                        _logger.debug("_forward_single paged KV store failed for %s: %s",
+                                      req.request_id, _paged_single_kv_err, exc_info=True)
             except (TypeError, AttributeError):
                 # Model doesn't support use_cache
                 logits = self.model(req.generated_ids)
@@ -921,12 +943,9 @@ class ContinuousBatcher:
                     )
                     if token_text:
                         req.on_token(token_text)
-                except Exception:
-                    pass
-
-            # Check completion
-            token_id = next_token.item()
-            if token_id == req.stop_token_id:
+                except Exception as _single_cb_err:
+                    _logger.debug("Streaming callback (_forward_single) failed for %s: %s",
+                                  req.request_id, _single_cb_err)
                 self._finish_request_decode(req)
             elif req.tokens_generated >= req.max_new_tokens:
                 self._finish_request_decode(req)
@@ -1019,8 +1038,9 @@ class ContinuousBatcher:
         if self.paged_kv:
             try:
                 self.paged_kv.free(req.request_id)
-            except Exception:
-                pass
+            except Exception as _paged_free_err:
+                _logger.debug("paged_kv.free() failed for %s: %s",
+                              req.request_id, _paged_free_err, exc_info=True)
 
         if req.future and not req.future.done():
             req.future.set_result(result)

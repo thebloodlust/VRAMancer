@@ -1,0 +1,101 @@
+/home/jeremie/VRAMancer/VRAMancer/.venv/lib/python3.12/site-packages/torch/cuda/__init__.py:65: FutureWarning: The pynvml package is deprecated. Please install nvidia-ml-py instead. If you did not install pynvml directly, please report this to the maintainers of the package that installed pynvml for you.
+  import pynvml  # type: ignore[import]
+`torch_dtype` is deprecated! Use `dtype` instead!
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+WARNING:huggingface_hub.utils._http:Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+=======================================================
+  VRAMancer WebNPU Inference Benchmark
+  WebNN → NPU / GPU / CPU (with WebGPU fallback)
+=======================================================
+Model: gpt2
+Prompt: 'The meaning of life is'
+Max tokens: 30
+
+[1/5] Loading model locally...
+Loading weights:   0%|          | 0/148 [00:00<?, ?it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 35348.61it/s]
+The attention mask and the pad token id were not set. As a consequence, you may observe unexpected behavior. Please pass your input's `attention_mask` to obtain reliable results.
+Setting `pad_token_id` to `eos_token_id`:50256 for open-end generation.
+The attention mask is not set and cannot be inferred from input because pad token is same as eos token. As a consequence, you may observe unexpected behavior. Please pass your input's `attention_mask` to obtain reliable results.
+  Loaded: 124M params in 1.3s
+
+[2/5] Local PyTorch reference generation...
+  Local: 30 tokens in 7.04s (4.3 tok/s)
+  Text: 'The meaning of life is not the same as the meaning of death.\n\nThe meaning of life is not the same as the meaning of death.\n\nThe meaning of'
+
+[3/5] Starting WebGPU/WebNN backend server...
+[04/07/26 21:28:00] INFO     WebGPU server on wss://0.0.0.0:8765 (WSS + static  
+                             files on same port)                                
+  Server: https://0.0.0.0:8765
+
+  >>> Open in browser: https://localhost:8765/webnpu.html
+  >>> Or any device:   https://<server-ip>:8765/webnpu.html
+
+  The page auto-detects: WebNN NPU → WebNN GPU → WebGPU fallback
+  Waiting for browser to connect...
+[04/07/26 21:28:59] INFO     WebGPU worker connected: ('192.168.1.13', 57602)   
+                             (total: 1)                                         
+                    INFO     1 WebGPU worker(s) connected                       
+  Worker ('192.168.1.13', 57602): RTT 7.5ms
+
+[4/5] Uploading GPT-2 weights to browser...
+[04/07/26 21:29:10] INFO     Uploaded layer 0/12                                
+[04/07/26 21:29:12] INFO     Uploaded layer 1/12                                
+[04/07/26 21:29:14] INFO     Uploaded layer 2/12                                
+[04/07/26 21:29:16] INFO     Uploaded layer 3/12                                
+[04/07/26 21:29:18] INFO     Uploaded layer 4/12                                
+[04/07/26 21:29:19] INFO     Uploaded layer 5/12                                
+[04/07/26 21:29:21] INFO     Uploaded layer 6/12                                
+[04/07/26 21:29:23] INFO     Uploaded layer 7/12                                
+[04/07/26 21:29:25] INFO     Uploaded layer 8/12                                
+[04/07/26 21:29:27] INFO     Uploaded layer 9/12                                
+[04/07/26 21:29:29] INFO     Uploaded layer 10/12                               
+[04/07/26 21:29:31] INFO     Uploaded layer 11/12                               
+                    INFO     GPT-2 model uploaded: 12 layers, 124M params, 475  
+                             MB float32                                         
+  Uploaded 475 MB in 31.8s (15 MB/s)
+
+[5/5] Browser WebNN (WebNPU) generation...
+  Token 0: 407 (' not') 79.0ms
+  Token 1: 262 (' the') 16.0ms
+  Token 2: 976 (' same') 14.6ms
+  Token 3: 355 (' as') 13.8ms
+  Token 4: 262 (' the') 13.4ms
+  Token 5: 3616 (' meaning') 13.6ms
+  Token 6: 286 (' of') 15.6ms
+  Token 7: 1918 (' death') 13.9ms
+  Token 8: 13 ('.') 14.5ms
+  Token 9: 198 ('\n') 14.6ms
+  Token 10: 198 ('\n') 14.5ms
+  Token 11: 464 ('The') 15.9ms
+  Token 12: 3616 (' meaning') 14.6ms
+  Token 13: 286 (' of') 14.1ms
+  Token 14: 1204 (' life') 13.8ms
+  Token 15: 318 (' is') 13.9ms
+  Token 16: 407 (' not') 16.6ms
+  Token 17: 262 (' the') 13.7ms
+  Token 18: 976 (' same') 13.9ms
+  Token 19: 355 (' as') 15.8ms
+  Token 20: 262 (' the') 13.7ms
+  Token 21: 3616 (' meaning') 16.1ms
+  Token 22: 286 (' of') 15.0ms
+  Token 23: 1918 (' death') 14.2ms
+  Token 24: 13 ('.') 13.6ms
+  Token 25: 198 ('\n') 13.9ms
+  Token 26: 198 ('\n') 15.5ms
+  Token 27: 464 ('The') 14.0ms
+  Token 28: 3616 (' meaning') 14.2ms
+  Token 29: 286 (' of') 14.4ms
+
+=======================================================
+  RESULTS — WebNPU Benchmark
+=======================================================
+Prompt: 'The meaning of life is'
+WebNPU output: ' not the same as the meaning of death.\n\nThe meaning of life is not the same as the meaning of death.\n\nThe meaning of'
+Local output:  'The meaning of life is not the same as the meaning of death.\n\nThe meaning of life is not the same as the meaning of death.\n\nThe meaning of'
+
+WebNPU: 30 tokens, 511ms total, 56.8 tok/s (decode)
+Local:  30 tokens, 7042ms total, 4.3 tok/s
+
+Token match: 30/30 (PASS)
+
+Done.

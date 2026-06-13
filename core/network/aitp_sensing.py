@@ -19,7 +19,8 @@ import hashlib
 logger = logging.getLogger(__name__)
 
 AITP_SENSING_GROUP = "ff02::1:ff00:1"  # link-local multicast (VRAMancer)
-AITP_SENSING_PORT = 9110
+_AITP_BASE = int(os.environ.get("VRM_AITP_PORT", "55555"))
+AITP_SENSING_PORT = _AITP_BASE + 1  # 55556 by default
 
 # Heartbeat interval (seconds)
 _HEARTBEAT_INTERVAL = int(os.environ.get("VRM_SENSING_HEARTBEAT", "10"))
@@ -82,7 +83,7 @@ class AITPSensor:
 
     def _init_nat_traversal(self):
         try:
-            from core.network.nat_traversal import NATTraversal
+            from experimental.nat_traversal import NATTraversal
             self._nat = NATTraversal()
             self._external_info = self._nat.discover_external()
             if not self._external_info.get("ipv6") and not self._nat.has_ipv6():
@@ -227,5 +228,5 @@ class AITPSensor:
             try:
                 self.sock.close()
             except Exception:
-                pass
+                logger.debug("Sensing socket close failed", exc_info=True)
         logger.info("[Sensing] Stopped")

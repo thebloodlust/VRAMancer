@@ -1,0 +1,49 @@
+{
+  "target_model": "QuantTrio/Qwen3-Coder-30B-A3B-Instruct-AWQ",
+  "draft_model": "Qwen/Qwen3-0.6B",
+  "num_speculative_tokens": 4,
+  "vllm_config": {
+    "tensor_parallel_size": 1,
+    "max_model_len": 4096,
+    "gpu_memory_utilization": 0.94,
+    "cpu_offload_gb": 6.0,
+    "enforce_eager": false
+  },
+  "load_seconds": 203.87,
+  "vram_after_load": {
+    "gpu0": {
+      "used_mb": 15969,
+      "total_mb": 16303
+    },
+    "gpu1": {
+      "used_mb": 464,
+      "total_mb": 24576
+    }
+  },
+  "results": [
+    {
+      "ctx_target": 512,
+      "prompt_chars": 2048,
+      "max_new_requested": 64,
+      "tokens_generated": 64,
+      "dt_s": 1.104,
+      "tok_s": 57.96
+    },
+    {
+      "ctx_target": 1024,
+      "prompt_chars": 4096,
+      "max_new_requested": 64,
+      "tokens_generated": 64,
+      "dt_s": 1.13,
+      "tok_s": 56.62
+    },
+    {
+      "ctx_target": 2048,
+      "prompt_chars": 8192,
+      "max_new_requested": 64,
+      "tokens_generated": 64,
+      "dt_s": 1.17,
+      "tok_s": 54.68
+    }
+  ]
+}

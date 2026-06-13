@@ -51,7 +51,7 @@ except Exception:
 
 # Cross-vendor bridge (AMD ↔ NVIDIA)
 try:
-    from core.cross_vendor_bridge import (
+    from experimental.cross_vendor_bridge import (
         CrossVendorBridge, CrossVendorMethod, CrossVendorResult,
         detect_gpu_vendor, GPUVendor, is_consumer_gpu as _xv_is_consumer,
         get_cross_vendor_bridge,
@@ -69,7 +69,8 @@ log = LoggerAdapter("transfer")
 class TransportMethod(Enum):
     """How a tensor transfer was performed."""
     NCCL = auto()        # torch.distributed NCCL backend
-    CUDA_P2P = auto()    # Direct cudaMemcpyPeer
+    CUDA_P2P = auto()    # Direct cudaMemcpyPeer (PyTorch-level)
+    RUST_P2P = auto()    # Rust GpuPipeline (direct_vram_copy / GpuPipeline.transfer)
     REBAR_PIPELINE = auto()  # ReBAR full-window (> 4 GB) with BAR-optimal chunks
     CPU_STAGED = auto()  # GPU -> CPU -> GPU (no P2P, no NCCL)
     CPU_ONLY = auto()    # Pure CPU (no GPU)
@@ -166,12 +167,25 @@ class TransferManager:
         self._stub_mode = os.environ.get("VRM_MINIMAL_TEST", "0") == "1"
 
         # Force-disable P2P via env var (useful in VMs where IOMMU blocks P2P)
-        self._p2p_forced_off = os.environ.get(
-            "VRM_TRANSFER_P2P", ""
-        ).lower() in ("0", "false", "no")
+        # Falls back to auto-detect: if running under Proxmox/VMware/Hyper-V/KVM
+        # without an explicit override, disable P2P proactively.
+        try:
+            from core.auto_detect import should_disable_p2p
+            self._p2p_forced_off = should_disable_p2p()
+        except Exception:
+            self._p2p_forced_off = os.environ.get(
+                "VRM_TRANSFER_P2P", ""
+            ).lower() in ("0", "false", "no")
 
         # Persistent Rust GpuPipeline instances (lazy, per GPU pair)
         self._gpu_pipelines: Dict[Tuple[int, int], Any] = {}
+
+        # CUDA Stream Overlap — dedicated transfer streams per src GPU
+        # Activated via VRM_TRANSFER_OVERLAP=1.
+        # When enabled, P2P sends use a non-default stream so the caller can
+        # overlap compute with the in-flight transfer via an Event wait.
+        self._overlap_enabled = os.environ.get("VRM_TRANSFER_OVERLAP", "0") == "1"
+        self._transfer_streams: Dict[int, Any] = {}  # {src_gpu: torch.cuda.Stream}
 
         # VM detection — VFIO passthrough adds ~10-15% overhead on DMA
         self._is_vm = False
@@ -188,8 +202,8 @@ class TransferManager:
                             break
                 except OSError:
                     continue
-        except Exception:
-            pass
+        except Exception as _vm_detect_err:
+            log.debug("VM detection probe failed: %s", _vm_detect_err, exc_info=True)
         if self._is_vm:
             log.info(
                 "VM environment detected — VFIO-passthrough adds ~10-15%% PCIe overhead. "
@@ -201,7 +215,7 @@ class TransferManager:
             # Initialize ReBAR full-window transport (BAR > 4 GB)
             if _XVENDOR_AVAILABLE:
                 try:
-                    from core.cross_vendor_bridge import ReBarTransport
+                    from experimental.cross_vendor_bridge import ReBarTransport
                     self._rebar_transport = ReBarTransport()
                     if self._rebar_transport.available:
                         rebar_info = self._rebar_transport.info()
@@ -425,8 +439,14 @@ class TransferManager:
             )
 
         # Select transport
+        # When VRM_TRANSFER_OVERLAP=1, pass a dedicated stream so the caller
+        # can overlap the in-flight copy with the next compute kernel.
+        effective_stream = stream
+        if self._overlap_enabled and stream is None and _TORCH_AVAILABLE:
+            effective_stream = self._get_transfer_stream(source_gpu)
+
         method, output_tensor = self._execute_transfer(
-            source_gpu, target_gpu, tensor, stream
+            source_gpu, target_gpu, tensor, effective_stream
         )
 
         duration = time.perf_counter() - start
@@ -457,6 +477,36 @@ class TransferManager:
             )
 
         return result
+
+    def send_tensor(
+        self,
+        source_gpu: int,
+        target_gpu: int,
+        tensor: Any,
+        stream: Optional[Any] = None,
+    ) -> Any:
+        """Transfer tensor and return the result tensor on target_gpu.
+
+        Like send_activation() but returns the output tensor directly,
+        suitable for use in accelerate hooks and forward-pass interception.
+        """
+        if source_gpu == target_gpu:
+            return tensor
+        _, dst_tensor = self._execute_transfer(source_gpu, target_gpu, tensor, stream)
+        return dst_tensor
+
+    def _get_transfer_stream(self, src_gpu: int) -> Optional[Any]:
+        """Lazy-init a dedicated CUDA Stream for transfers from src_gpu.
+
+        Used when VRM_TRANSFER_OVERLAP=1 to allow compute/transfer pipelining.
+        """
+        if not _TORCH_AVAILABLE or not torch.cuda.is_available():
+            return None
+        if src_gpu not in self._transfer_streams:
+            with torch.cuda.device(src_gpu):
+                # priority=-1 (high) so the transfer stream preempts default
+                self._transfer_streams[src_gpu] = torch.cuda.Stream(priority=-1)
+        return self._transfer_streams[src_gpu]
 
     def _execute_transfer(
         self,
@@ -514,18 +564,29 @@ class TransferManager:
                 nbytes = src_tensor.element_size() * src_tensor.nelement()
 
                 if nbytes <= 1 * 1024 * 1024 and hasattr(vramancer_rust, 'direct_vram_copy'):
-                    # Small activations: try cuMemcpyDtoD (lowest latency)
+                    # Small activations: try cuMemcpyDtoD (lowest latency).
+                    # When VRM_TRANSFER_ASYNC=1, use cuMemcpyDtoDAsync (non-blocking host).
+                    _use_async = os.environ.get("VRM_TRANSFER_ASYNC", "0") not in ("0", "false", "no", "")
+                    _async_fn = getattr(vramancer_rust, 'direct_vram_copy_async', None)
                     try:
-                        vramancer_rust.direct_vram_copy(
-                            src_tensor.data_ptr(), dst_tensor.data_ptr(), nbytes
-                        )
-                        log.debug(
-                            f"Rust DtoD GPU {source_gpu} → GPU {target_gpu}: "
-                            f"{nbytes / 1e6:.1f} MB"
-                        )
-                        return TransportMethod.CUDA_P2P, dst_tensor
-                    except Exception:
-                        pass  # DtoD failed (P2P blocked), fall through to pipeline
+                        if _use_async and _async_fn is not None:
+                            _async_fn(src_tensor.data_ptr(), dst_tensor.data_ptr(), nbytes)
+                            log.debug(
+                                f"Rust DtoDAsync GPU {source_gpu} → GPU {target_gpu}: "
+                                f"{nbytes / 1e6:.1f} MB"
+                            )
+                        else:
+                            vramancer_rust.direct_vram_copy(
+                                src_tensor.data_ptr(), dst_tensor.data_ptr(), nbytes
+                            )
+                            log.debug(
+                                f"Rust DtoD GPU {source_gpu} → GPU {target_gpu}: "
+                                f"{nbytes / 1e6:.1f} MB"
+                            )
+                        return TransportMethod.RUST_P2P, dst_tensor
+                    except Exception as _dtod_err:
+                        log.debug("Rust DtoD GPU %d→%d failed (P2P blocked?): %s",
+                                  source_gpu, target_gpu, _dtod_err)
 
                 # Persistent async pipeline with P2P auto-detection
                 pipe = self._get_gpu_pipeline(
@@ -540,7 +601,7 @@ class TransferManager:
                     f"Rust {method_name} GPU {source_gpu} → GPU {target_gpu}: "
                     f"{nbytes / 1e6:.1f} MB"
                 )
-                return TransportMethod.CUDA_P2P, dst_tensor
+                return TransportMethod.RUST_P2P, dst_tensor
         except Exception as e:
             log.debug(f"Rust GPU transfer failed: {e}")
 
@@ -572,7 +633,7 @@ class TransferManager:
         # sequential CPU staging (~26 GB/s vs ~12 GB/s measured).
         if not self._can_p2p(source_gpu, target_gpu):
             try:
-                from core.cross_vendor_bridge import PipelinedTransport
+                from experimental.cross_vendor_bridge import PipelinedTransport
                 chunk = 8 * 1024 * 1024  # 8 MB default (no ReBAR)
                 pipeline = PipelinedTransport(chunk_bytes=chunk)
                 output, xv_result = pipeline.transfer(
@@ -916,6 +977,9 @@ class TransferManager:
                 and self._xvendor_bridge.is_cross_vendor_pair(src, dst)):
             method = self._xvendor_bridge.get_method(src, dst)
             return f"CROSS_VENDOR:{method.name}"
+        # Rust GpuPipeline cached for this pair — real transfers go through Rust
+        if (src, dst) in self._gpu_pipelines:
+            return "RUST_P2P"
         if self._can_p2p(src, dst):
             return "CUDA_P2P"
         if self._nccl_initialized:

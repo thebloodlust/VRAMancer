@@ -11,6 +11,13 @@ Limitations:
     with a position mask — not the default HuggingFace growing tuple.
   - NCCL / P2P ops inside the captured region are not supported.
 
+LIMITATION (NOT A BUG) — CUDA_GRAPH_MULTI_GPU:
+  CUDA Graphs cannot capture NCCL collectives or P2P operations.
+  This is a fundamental PyTorch/CUDA constraint, not a VRAMancer bug.
+  For multi-GPU pipeline parallelism, VRAMancer falls back to eager
+  mode (no graph capture). Only single-device decode benefits from
+  graph replay. See: docs/reports/TECHNICAL_DEBT.md#CUDA_GRAPH_MULTI_GPU
+
 Usage inside VRAMancer:
   runner = CUDAGraphRunner(model, max_batch_size=8)
   for step in range(max_new_tokens):

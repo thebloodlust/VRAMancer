@@ -1,0 +1,40 @@
+{
+  "model": "deepseek-ai/DeepSeek-V4-Flash",
+  "backend": "vllm",
+  "note": "FAILED \u2014 vLLM load error",
+  "error": "Engine core initialization failed. See root cause above. Failed core proc(s): {}",
+  "log_path": "benchmarks/results/bench_deepseek_engram_vllm.log",
+  "log_tail": "r/VRAMancer/.venv/lib/python3.12/site-packages/torch/nn/modules/module.py\", line 1790, in _call_impl\n(EngineCore pid=3722572)     return forward_call(*args, **kwargs)\n(EngineCore pid=3722572)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n(EngineCore pid=3722572)   File \"/home/jeremie/VRAMancer/VRAMancer/.venv/lib/python3.12/site-packages/vllm/model_executor/models/deepseek_v4.py\", line 1209, in forward\n(EngineCore pid=3722572)     x = self.attn(positions, x, None)\n(EngineCore pid=3722572)         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n(EngineCore pid=3722572)   File \"/home/jeremie/VRAMancer/VRAMancer/.venv/lib/python3.12/site-packages/torch/nn/modules/module.py\", line 1779, in _wrapped_call_impl\n(EngineCore pid=3722572)     return self._call_impl(*args, **kwargs)\n(EngineCore pid=3722572)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n(EngineCore pid=3722572)   File \"/home/jeremie/VRAMancer/VRAMancer/.venv/lib/python3.12/site-packages/torch/nn/modules/module.py\", line 1790, in _call_impl\n(EngineCore pid=3722572)     return forward_call(*args, **kwargs)\n(EngineCore pid=3722572)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n(EngineCore pid=3722572)   File \"/home/jeremie/VRAMancer/VRAMancer/.venv/lib/python3.12/site-packages/vllm/model_executor/models/deepseek_v4.py\", line 1089, in forward\n(EngineCore pid=3722572)     return self.mla_attn(positions, hidden_states, llama_4_scaling)\n(EngineCore pid=3722572)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n(EngineCore pid=3722572)   File \"/home/jeremie/VRAMancer/VRAMancer/.venv/lib/python3.12/site-packages/torch/nn/modules/module.py\", line 1779, in _wrapped_call_impl\n(EngineCore pid=3722572)     return self._call_impl(*args, **kwargs)\n(EngineCore pid=3722572)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n(EngineCore pid=3722572)   File \"/home/jeremie/VRAMancer/VRAMancer/.venv/lib/python3.12/site-packages/torch/nn/modules/module.py\", line 1790, in _call_impl\n(EngineCore pid=3722572)     return forward_call(*args, **kwargs)\n(EngineCore pid=3722572)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n(EngineCore pid=3722572)   File \"/home/jeremie/VRAMancer/VRAMancer/.venv/lib/python3.12/site-packages/vllm/model_executor/layers/deepseek_v4_attention.py\", line 312, in forward\n(EngineCore pid=3722572)     o_fp8, o_scale = fused_inv_rope_fp8_quant(\n(EngineCore pid=3722572)                      ^^^^^^^^^^^^^^^^^^^^^^^^^\n(EngineCore pid=3722572)   File \"/home/jeremie/VRAMancer/VRAMancer/.venv/lib/python3.12/site-packages/vllm/v1/attention/ops/deepseek_v4_ops/fused_inv_rope_fp8_quant.py\", line 193, in fused_inv_rope_fp8_quant\n(EngineCore pid=3722572)     fp8_buf, scale_buf = torch.ops.vllm.fused_inv_rope_fp8_quant_kernel(\n(EngineCore pid=3722572)                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n(EngineCore pid=3722572)   File \"/home/jeremie/VRAMancer/VRAMancer/.venv/lib/python3.12/site-packages/torch/_ops.py\", line 1269, in __call__\n(EngineCore pid=3722572)     return self._op(*args, **kwargs)\n(EngineCore pid=3722572)            ^^^^^^^^^^^^^^^^^^^^^^^^^\n(EngineCore pid=3722572)   File \"/home/jeremie/VRAMancer/VRAMancer/.venv/lib/python3.12/site-packages/vllm/v1/attention/ops/deepseek_v4_ops/fused_inv_rope_fp8_quant.py\", line 245, in _fused_inv_rope_fp8_quant_kernel_impl\n(EngineCore pid=3722572)     _fused_inv_rope_fp8_quant_per_head[grid](\n(EngineCore pid=3722572)   File \"/home/jeremie/VRAMancer/VRAMancer/.venv/lib/python3.12/site-packages/triton/runtime/jit.py\", line 370, in <lambda>\n(EngineCore pid=3722572)     return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)\n(EngineCore pid=3722572)                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n(EngineCore pid=3722572)   File \"/home/jeremie/VRAMancer/VRAMancer/.venv/lib/python3.12/site-packages/triton/runtime/jit.py\", line 739, in run\n(EngineCore pid=3722572)     kernel = self._do_compile(key, signature, device, constexprs, options, attrs, warmup)\n(EngineCore pid=3722572)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n(EngineCore pid=3722572)   File \"/home/jeremie/VRAMancer/VRAMancer/.venv/lib/python3.12/site-packages/triton/runtime/jit.py\", line 884, in _do_compile\n(EngineCore pid=3722572)     kernel = self.compile(src, target=target, options=options.__dict__)\n(EngineCore pid=3722572)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n(EngineCore pid=3722572)   File \"/home/jeremie/VRAMancer/VRAMancer/.venv/lib/python3.12/site-packages/triton/compiler/compiler.py\", line 307, in compile\n(EngineCore pid=3722572)     module = src.make_ir(target, options, codegen_fns, module_map, context)\n(EngineCore pid=3722572)              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n(EngineCore pid=3722572)   File \"/home/jeremie/VRAMancer/VRAMancer/.venv/lib/python3.12/site-packages/triton/compiler/compiler.py\", line 80, in make_ir\n(EngineCore pid=3722572)     return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns,\n(EngineCore pid=3722572)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n(EngineCore pid=3722572) triton.compiler.errors.CompilationError: at 1:0:\n(EngineCore pid=3722572) def _fused_inv_rope_fp8_quant_per_head(\n(EngineCore pid=3722572) ^\n(EngineCore pid=3722572) ValueError(\"type fp8e4nv not supported in this architecture. The supported fp8 dtypes are ('fp8e4b15', 'fp8e5')\")\n[rank0]:[W510 01:02:37.708152536 ProcessGroupNCCL.cpp:1575] Warning: WARNING: destroy_process_group() was not called before program exit, which can leak resources. For more info, please see https://pytorch.org/docs/stable/distributed.html#shutdown (function operator())\n[05/10/26 01:03:00] ERROR    Model load failed: Engine core initialization      \n                             failed. See root cause above. Failed core proc(s): \n                             {}                                                 \n",
+  "lending": {
+    "lending_enabled": true,
+    "lender_gpu": 1,
+    "compute_gpu": 0,
+    "lend_requested_gb": 12.884901888,
+    "lease_id": "4a487d9c2dc8",
+    "p2p_bw_gb_s": 11.63,
+    "p2p_peer_access": false,
+    "lender_info": {
+      "name": "NVIDIA GeForce RTX 3090",
+      "sm": "8.6",
+      "total_mb": 24576,
+      "free_mb": 24111,
+      "used_mb": 464
+    },
+    "compute_info": {
+      "name": "NVIDIA GeForce RTX 5070 Ti",
+      "sm": "12.0",
+      "total_mb": 16303,
+      "free_mb": 15826,
+      "used_mb": 476
+    },
+    "lend_actual_gb": 12.884901888,
+    "staging_materialized": false,
+    "p2p_data_plane": {
+      "lender_to_compute_gb_s": 11.68,
+      "compute_to_lender_gb_s": 11.75,
+      "iterations": 10,
+      "size_mb": 256,
+      "ok": true
+    }
+  }
+}

@@ -57,8 +57,26 @@ def main():
     total_params = sum(p.numel() for p in model.parameters())
     print(f"  Loaded: {total_params/1e6:.0f}M params in {load_time:.1f}s")
 
+    # --- Local PyTorch reference (before server, avoids browser timeout) ---
+    print("\n[2/5] Local PyTorch reference generation...")
+    input_ids = tokenizer.encode(prompt, return_tensors="pt")
+    t0 = time.time()
+    with torch.no_grad():
+        local_output = model.generate(
+            input_ids, max_new_tokens=max_tokens,
+            do_sample=False, temperature=1.0,
+        )
+    local_time = time.time() - t0
+    local_tokens = local_output[0].tolist()
+    local_text = tokenizer.decode(local_tokens, skip_special_tokens=True)
+    local_new_toks = len(local_tokens) - input_ids.shape[1]
+    local_tps = local_new_toks / local_time if local_time > 0 else 0
+    print(f"  Local: {local_new_toks} tokens in {local_time:.2f}s "
+          f"({local_tps:.1f} tok/s)")
+    print(f"  Text: {local_text!r}")
+
     # --- Start server ---
-    print("\n[2/5] Starting WebGPU/WebNN backend server...")
+    print("\n[3/5] Starting WebGPU/WebNN backend server...")
     backend = WebGPUBackend()
     http_proto = "https" if backend._ssl_context else "http"
     port = backend._ws_port
@@ -83,31 +101,13 @@ def main():
         print(f"  Worker {addr}: RTT {ms}ms")
 
     # --- Push model to browser ---
-    print("\n[3/5] Uploading GPT-2 weights to browser...")
+    print("\n[4/5] Uploading GPT-2 weights to browser...")
     t0 = time.time()
     backend.push_gpt2_model(model, tokenizer)
     upload_time = time.time() - t0
     total_mb = total_params * 4 / 1024 / 1024
     print(f"  Uploaded {total_mb:.0f} MB in {upload_time:.1f}s "
           f"({total_mb/upload_time:.0f} MB/s)")
-
-    # --- Local PyTorch reference ---
-    print(f"\n[4/5] Local PyTorch reference generation...")
-    input_ids = tokenizer.encode(prompt, return_tensors="pt")
-    t0 = time.time()
-    with torch.no_grad():
-        local_output = model.generate(
-            input_ids, max_new_tokens=max_tokens,
-            do_sample=False, temperature=1.0,
-        )
-    local_time = time.time() - t0
-    local_tokens = local_output[0].tolist()
-    local_text = tokenizer.decode(local_tokens, skip_special_tokens=True)
-    local_new_toks = len(local_tokens) - input_ids.shape[1]
-    local_tps = local_new_toks / local_time if local_time > 0 else 0
-    print(f"  Local: {local_new_toks} tokens in {local_time:.2f}s "
-          f"({local_tps:.1f} tok/s)")
-    print(f"  Text: {local_text!r}")
 
     # --- Browser WebNN generation ---
     print(f"\n[5/5] Browser WebNN (WebNPU) generation...")

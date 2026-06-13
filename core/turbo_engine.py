@@ -110,7 +110,7 @@ def _disable_cudnn_gqa():
         torch.backends.cuda.enable_math_sdp(True)
         _GQA_PATCHED = False
     except Exception:
-        pass
+        logger.debug("torch attention backend config failed", exc_info=True)
 
 
 class StaticKVCache:
@@ -199,7 +199,8 @@ class TurboForward(nn.Module):
     lm_head only on the LAST token position (saves compute).
 
     Phase 1: Uses DynamicCache (proven 52+ tok/s, no graph capture).
-    Phase 2 (TODO): StaticKVCache + CUDA Graph capture.
+    Phase 2 (deferred): StaticKVCache + CUDA Graph capture.
+    See TECHNICAL_DEBT.md → TURBO_KV_CUDAGRAPH.
     """
 
     def __init__(self, hf_model):

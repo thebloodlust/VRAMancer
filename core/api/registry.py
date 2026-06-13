@@ -24,14 +24,17 @@ class PipelineRegistry:
         self._lock = threading.RLock()
         self._pipeline = None
         self.discovery = None
-        
-        # Start global cluster discovery immediately so node is discoverable
-        try:
-            from core.network.cluster_discovery import ClusterDiscovery
-            self.discovery = ClusterDiscovery(heartbeat_interval=5)
-            self.discovery.start()
-        except ImportError:
-            pass
+
+        # Cluster discovery is opt-in: starting it broadcasts UDP packets and
+        # spawns background threads, which is undesirable in tests / CLI tools.
+        # Enable explicitly with VRM_CLUSTER_AUTO_DISCOVER=1.
+        if os.environ.get("VRM_CLUSTER_AUTO_DISCOVER", "").lower() in ("1", "true", "yes"):
+            try:
+                from experimental.cluster_discovery import ClusterDiscovery
+                self.discovery = ClusterDiscovery(heartbeat_interval=5)
+                self.discovery.start()
+            except ImportError:
+                pass
 
     # ------------------------------------------------------------------
     # Core lifecycle
@@ -46,6 +49,17 @@ class PipelineRegistry:
         with self._lock:
             return self._pipeline is not None and self._pipeline.is_loaded()
 
+    def health_extra(self) -> dict:
+        """T7.6 auto-heal state, surfaced by /health (degraded / reason)."""
+        with self._lock:
+            p = self._pipeline
+        if p is None:
+            return {"degraded": False, "degraded_reason": None}
+        return {
+            "degraded": getattr(p, "degraded", False),
+            "degraded_reason": getattr(p, "degraded_reason", None),
+        }
+
     def load(self, model_name: str, backend: str = "auto", num_gpus: Optional[int] = None, verbose: bool = False, **kwargs):
         """Load a model, shutting down any existing pipeline first."""
         with self._lock:
@@ -53,7 +67,7 @@ class PipelineRegistry:
                 try:
                     self._pipeline.shutdown()
                 except Exception:
-                    pass
+                    _logger.debug("Pipeline shutdown failed during reset", exc_info=True)
             from core.inference_pipeline import InferencePipeline
             self._pipeline = InferencePipeline(
                 backend_name=backend, verbose=verbose
@@ -74,14 +88,14 @@ class PipelineRegistry:
                 try:
                     self._pipeline.shutdown()
                 except Exception:
-                    pass
+                    _logger.debug("Pipeline shutdown failed during cleanup", exc_info=True)
                 self._pipeline = None
             # Stop cluster discovery threads
             if self.discovery:
                 try:
                     self.discovery.stop()
                 except Exception:
-                    pass
+                    _logger.debug("Discovery stop failed", exc_info=True)
 
     # ------------------------------------------------------------------
     # Inference
@@ -89,7 +103,7 @@ class PipelineRegistry:
 
     def generate(self, prompt: str, **kwargs) -> str:
         try:
-            from core.wake_on_inference import get_woi_manager
+            from experimental.wake_on_inference import get_woi_manager
             get_woi_manager().wake_all()
         except ImportError:
             pass
@@ -103,7 +117,7 @@ class PipelineRegistry:
     def generate_stream(self, prompt: str, **kwargs):
         """Yield tokens for streaming. Falls back to word-level split."""
         try:
-            from core.wake_on_inference import get_woi_manager
+            from experimental.wake_on_inference import get_woi_manager
             get_woi_manager().wake_all()
         except ImportError:
             pass

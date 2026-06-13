@@ -11,21 +11,20 @@ name = "vramancer_rust"
 crate-type = ["cdylib"]
 
 [dependencies]
-# PyO3 est la passerelle magique entre Rust et Python
+# PyO3: Rust <-> Python bindings (extension module)
 pyo3 = { version = "0.20.0", features = ["extension-module"] }
 
-# Pour notre preuve de concept : réécrire la validation HMAC en Rust 100x plus rapide
+# HMAC validation in Rust (faster than the Python hmac module)
 hmac = "0.12.1"
 sha2 = "0.10.8"
 
-# Pour l'Offensive Réseau (Zero-Copy P2P Asynchrone TCP)
-tokio = { version = "1.36.0", features = ["full"] }
+# Pour l'Offensive Réseau (Zero-Copy P2P Asynchrone TCP).
+# Features minimales réellement utilisées (cf. usages dans lib.rs) plutôt que
+# "full" : net (TcpStream/Listener), io-util (AsyncReadExt read_u64/read_exact),
+# rt-multi-thread (Runtime::new), sync (Semaphore), time (timeout).
+tokio = { version = "1.36.0", features = ["net", "io-util", "rt-multi-thread", "sync", "time"] }
 
-# Pour l'Offensive GPU (Zero-Copy Host-to-Device)
-# Optionnel pour ne pas casser la compilation sur les vieux Mac/No-GPU
-cudarc = { version = "0.11", features = ["cuda-12000"], optional = true }
-
-# FFI directe vers libcuda.so pour les transferts GPU natifs
+# FFI directe vers libcuda.so pour les transferts GPU natifs (module cuda_ffi).
 libloading = { version = "0.8", optional = true }
 
 # Lazy static pour le vocabulaire du tokenizer
@@ -37,4 +36,13 @@ libc = "0.2"
 
 [features]
 default = []
-cuda = ["cudarc", "libloading"]
+cuda = ["libloading"]
+
+# Build release optimisé pour une cdylib (binaire plus petit/rapide).
+# NB : PAS de `panic = "abort"` — pyo3 capture les panics à la frontière FFI
+# pour les convertir en exceptions Python ; abort tuerait tout le process.
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

@@ -1,6 +1,8 @@
 """
 Exemple de client Python pour l’API d’automatisation avancée (REST & GraphQL)
-"""
+Requires: VRAMancer server running on localhost:5002
+  Start with: python server.py --port 5002
+  Not runnable in VRM_MINIMAL_TEST mode (needs live API)."""
 import requests
 
 # REST : créer un job

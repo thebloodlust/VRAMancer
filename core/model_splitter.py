@@ -117,6 +117,7 @@ def _get_gpu_compute_scores(num_gpus: int) -> List[float]:
             # Estimate relative throughput (rough but fair)
             scores.append(cc * sm)
         except Exception:
+            _logger.debug(f"GPU scoring failed for device {i}", exc_info=True)
             scores.append(1.0)
     return scores
 
@@ -173,7 +174,7 @@ def _get_free_vram_per_gpu(num_gpus: int) -> List[int]:
             pynvml.nvmlShutdown()
             return result
         except Exception:
-            pass
+            _logger.debug("pynvml free memory query failed", exc_info=True)
 
     # torch.cuda fallback
     if torch is not None and torch.cuda.is_available():
@@ -209,7 +210,7 @@ def _get_total_vram_per_gpu(num_gpus: int) -> List[int]:
             pynvml.nvmlShutdown()
             return result
         except Exception:
-            pass
+            _logger.debug("pynvml total memory query failed", exc_info=True)
 
     if torch is not None and torch.cuda.is_available():
         result = []

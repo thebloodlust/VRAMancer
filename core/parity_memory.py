@@ -7,7 +7,7 @@ into N data shards + 1 XOR parity shard. Can reconstruct any single
 missing shard from the remaining shards + parity.
 
 Single fault tolerance only (1 lost shard). For multi-fault tolerance,
-use ``core.network.aitp_fec.FastFEC`` which implements real GF(2^8)
+use ``experimental.aitp_fec.FastFEC`` which implements real GF(2^8)
 Cauchy Reed-Solomon (up to ``parity_shards`` simultaneous losses).
 
 Uses Rust native (vramancer_rust) or C++ (swarm_core) SIMD-accelerated
@@ -50,7 +50,7 @@ def _init_parity_metrics():
             "Parity reconstruction failures (>1 shard lost)",
         )
     except Exception:
-        pass
+        logger.debug("Parity memory metric registration failed", exc_info=True)
 
 
 class ParityKVManager:
@@ -107,7 +107,9 @@ class ParityKVManager:
 
         # Generate parity
         if self._use_native and self.native_core is not None:
-            parity = self.native_core.generate_holographic_parity(padded_shards)
+            _gen = getattr(self.native_core, "generate_xor_parity", None) or \
+                self.native_core.generate_holographic_parity
+            parity = _gen(padded_shards)
         else:
             parity = bytearray(max_len)
             for shard in padded_shards:
@@ -150,7 +152,9 @@ class ParityKVManager:
                 s for i, s in enumerate(shards)
                 if i != missing_index and s is not None
             ]
-            reconstructed_shard = self.native_core.heal_holograph(
+            _repair = getattr(self.native_core, "repair_xor_shard", None) or \
+                self.native_core.heal_holograph
+            reconstructed_shard = _repair(
                 valid_shards, parity,
             )
         else:

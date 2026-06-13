@@ -100,7 +100,7 @@ pip install mlx mlx-lm numpy
 ## Étape 2 : Télécharger le worker
 
 ```bash
-curl -L -o ~/mac_worker.py https://raw.githubusercontent.com/thebloodlust/VRAMancer/main/mac_worker.py
+curl -L -o ~/mac_worker.py https://raw.githubusercontent.com/thebloodlust/VRAMancer/main/scripts/mac_worker.py
 ```
 
 ## Étape 3 : Lancer le worker

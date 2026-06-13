@@ -1,0 +1,180 @@
+{
+  "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8",
+  "backend": "vllm",
+  "vramancer_capability": "Hetero inference (5070 Ti compute + cpu_offload DRAM) with VRAMancer VRAM lending pool reserving 3090 staging buffer and exercising P2P data plane. Weight prefetch via 3090 buffer is NOT wired into vLLM (V6).",
+  "note": "Qwen3-Coder-30B-A3B FP8 (30B total / 3B active params, MoE). Compute: RTX 5070 Ti (SM12) TP=1 \u2014 generic FP8 path (no DeepseekV4-style custom MXFP8 kernel that depends on Triton fp8e4nv on Blackwell sm_120). VRAMancer reserves a 13 GB lending buffer on RTX 3090 and validates the P2P data plane (lender\u2192compute and reverse) \u2014 see lending.p2p_data_plane for measured bandwidth. cpu_offload_gb=24.0 UVA-offloads cold weights to DRAM (model ~30 GB FP8, GPU 16 GB). Weight prefetch through the 3090 buffer is V6.E follow-up \u2014 V6.D validates lending + P2P data plane.",
+  "hardware": {
+    "compute_gpu": {
+      "index": 0,
+      "name": "NVIDIA GeForce RTX 5070 Ti",
+      "sm": "12.0",
+      "vram_mb": 16303,
+      "role": "compute \u2014 FP8 inference"
+    },
+    "lender_gpu": {
+      "index": 1,
+      "name": "NVIDIA GeForce RTX 3090",
+      "sm": "8.6",
+      "vram_mb": 24576,
+      "role": "VRAM donor \u2014 P2P PCIe4 staging buffer"
+    },
+    "p2p_bw_gb_s": 11.56,
+    "p2p_peer_access": false,
+    "pcie_gen": 4,
+    "theoretical_pcie5_bw_gb_s": 22.0
+  },
+  "lending": {
+    "lending_enabled": true,
+    "lender_gpu": 1,
+    "compute_gpu": 0,
+    "lend_requested_gb": 12.884901888,
+    "lease_id": "6e04944624eb",
+    "p2p_bw_gb_s": 11.56,
+    "p2p_peer_access": false,
+    "lender_info": {
+      "name": "NVIDIA GeForce RTX 3090",
+      "sm": "8.6",
+      "total_mb": 24576,
+      "free_mb": 24111,
+      "used_mb": 464
+    },
+    "compute_info": {
+      "name": "NVIDIA GeForce RTX 5070 Ti",
+      "sm": "12.0",
+      "total_mb": 16303,
+      "free_mb": 15826,
+      "used_mb": 476
+    },
+    "lend_actual_gb": 12.884901888,
+    "staging_materialized": false,
+    "p2p_data_plane": {
+      "lender_to_compute_gb_s": 11.73,
+      "compute_to_lender_gb_s": 11.77,
+      "iterations": 10,
+      "size_mb": 256,
+      "ok": true
+    }
+  },
+  "vllm_config": {
+    "tensor_parallel_size": 1,
+    "cpu_offload_gb": 24.0,
+    "max_model_len": 4096,
+    "kv_cache_dtype": "auto",
+    "enforce_eager": true
+  },
+  "vram_after_load": {
+    "gpu0": {
+      "used_mb": 13979,
+      "total_mb": 16303
+    },
+    "gpu1": {
+      "used_mb": 772,
+      "total_mb": 24576
+    }
+  },
+  "dram_after_load_mb": 1446,
+  "results": [
+    {
+      "ctx_target": 512,
+      "prompt_chars": 2048,
+      "max_new": 32,
+      "dt_s": 132.84,
+      "tok_s": 0.24,
+      "vram_before": {
+        "gpu0": {
+          "used_mb": 13979,
+          "total_mb": 16303
+        },
+        "gpu1": {
+          "used_mb": 772,
+          "total_mb": 24576
+        }
+      },
+      "vram_after": {
+        "gpu0": {
+          "used_mb": 13979,
+          "total_mb": 16303
+        },
+        "gpu1": {
+          "used_mb": 772,
+          "total_mb": 24576
+        }
+      },
+      "vram_deltas_mb": {
+        "gpu0": 0,
+        "gpu1": 0
+      },
+      "dram_before_mb": 1446,
+      "dram_after_mb": 1446,
+      "dram_delta_mb": 0
+    },
+    {
+      "ctx_target": 1024,
+      "prompt_chars": 4096,
+      "max_new": 32,
+      "dt_s": 6.447,
+      "tok_s": 4.96,
+      "vram_before": {
+        "gpu0": {
+          "used_mb": 13979,
+          "total_mb": 16303
+        },
+        "gpu1": {
+          "used_mb": 772,
+          "total_mb": 24576
+        }
+      },
+      "vram_after": {
+        "gpu0": {
+          "used_mb": 13979,
+          "total_mb": 16303
+        },
+        "gpu1": {
+          "used_mb": 772,
+          "total_mb": 24576
+        }
+      },
+      "vram_deltas_mb": {
+        "gpu0": 0,
+        "gpu1": 0
+      },
+      "dram_before_mb": 1446,
+      "dram_after_mb": 1446,
+      "dram_delta_mb": 0
+    },
+    {
+      "ctx_target": 2048,
+      "prompt_chars": 8192,
+      "max_new": 32,
+      "dt_s": 6.106,
+      "tok_s": 5.24,
+      "vram_before": {
+        "gpu0": {
+          "used_mb": 13979,
+          "total_mb": 16303
+        },
+        "gpu1": {
+          "used_mb": 772,
+          "total_mb": 24576
+        }
+      },
+      "vram_after": {
+        "gpu0": {
+          "used_mb": 13979,
+          "total_mb": 16303
+        },
+        "gpu1": {
+          "used_mb": 772,
+          "total_mb": 24576
+        }
+      },
+      "vram_deltas_mb": {
+        "gpu0": 0,
+        "gpu1": 0
+      },
+      "dram_before_mb": 1446,
+      "dram_after_mb": 1446,
+      "dram_delta_mb": 0
+    }
+  ]
+}

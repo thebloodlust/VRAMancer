@@ -173,7 +173,7 @@ class StreamManager:
                 return False
 
     def prefetch_layers(self, current_layers: List[int], lookahead: int = 3) -> int:
-        """Predict and preload upcoming layers asynchronously (Anticipatory Brain).
+        """Predict and preload upcoming layers asynchronously (adaptive prefetch).
 
         Parameters
         ----------
@@ -214,7 +214,7 @@ class StreamManager:
 
         self._stats["prefetches"] += prefetched
         if self.verbose and prefetched > 0:
-            self.logger.info(" Anticipatory Brain scheduled %d layers for prefetching (predicted: %s) without blocking.", prefetched, predicted)
+            self.logger.info("Adaptive prefetcher scheduled %d layers (predicted: %s) without blocking.", prefetched, predicted)
         return prefetched
 
     def unload_unused(self, active_layer_names: List[str]) -> int:
@@ -349,7 +349,7 @@ class StreamManager:
                         self.paged_kv.compress_page_bulk(pid)
                         break  # compress one page per cycle to avoid blocking
             except Exception:
-                pass
+                _logger.debug("KV page compression failed", exc_info=True)
 
         with self._lock:
             candidates = [

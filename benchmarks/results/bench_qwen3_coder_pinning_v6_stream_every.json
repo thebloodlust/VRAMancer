@@ -1,0 +1,132 @@
+{
+  "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8",
+  "backend": "vllm",
+  "phase": "V6.E Phase B-1",
+  "vramancer_capability": "FP8 MoE expert pinning: hot experts on compute GPU, cold experts mirrored to lender via P2P; per-call staging restreams cold experts hit by topk_ids.",
+  "vllm_config": {
+    "tensor_parallel_size": 1,
+    "cpu_offload_gb": 20.0,
+    "max_model_len": 2560,
+    "kv_cache_dtype": "auto",
+    "enforce_eager": true,
+    "v1_multiprocessing": false
+  },
+  "pinning": {
+    "pinning_enabled": true,
+    "compute_gpu": 0,
+    "lender_gpu": 1,
+    "lend_requested_gb": 23.622320128,
+    "topk_pct": 20.0,
+    "histogram_path": "benchmarks/results/qwen3_coder_expert_histogram.json",
+    "lease_id": "1b04e7b2ba0b",
+    "p2p_bw_gb_s": 11.25,
+    "p2p_peer_access": false,
+    "compute_info": {
+      "name": "NVIDIA GeForce RTX 5070 Ti",
+      "sm": "12.0",
+      "total_mb": 16303,
+      "free_mb": 15826,
+      "used_mb": 476
+    },
+    "lender_info": {
+      "name": "NVIDIA GeForce RTX 3090",
+      "sm": "8.6",
+      "total_mb": 24576,
+      "free_mb": 24111,
+      "used_mb": 464
+    },
+    "lend_actual_gb": 23.622320128,
+    "staging_materialized": true,
+    "topk_per_layer": 25,
+    "num_layers": 48,
+    "num_experts_per_layer": 128,
+    "hot_share_observed": 0.5597
+  },
+  "pinning_runtime_post_load": {
+    "layers_hooked": 48,
+    "bytes_mirrored_to_lender": 23693230080,
+    "apply_calls": 96,
+    "apply_calls_with_cold": 96,
+    "cold_experts_streamed": 1630,
+    "cold_bytes_streamed": 7691304960,
+    "cold_cache_hits": 0,
+    "first_apply_t": 320489.731416287,
+    "last_apply_t": 320495.613420122,
+    "staging_mode": "stream_every",
+    "layers_in_state": 48
+  },
+  "pinning_runtime_final": {
+    "layers_hooked": 48,
+    "bytes_mirrored_to_lender": 23693230080,
+    "apply_calls": 4704,
+    "apply_calls_with_cold": 4704,
+    "cold_experts_streamed": 36162,
+    "cold_bytes_streamed": 170633723904,
+    "cold_cache_hits": 0,
+    "first_apply_t": 320489.731416287,
+    "last_apply_t": 320520.37066842,
+    "staging_mode": "stream_every",
+    "layers_in_state": 48
+  },
+  "vram_after_load": {
+    "gpu0": {
+      "used_mb": 13914,
+      "total_mb": 16303
+    },
+    "gpu1": {
+      "used_mb": 23482,
+      "total_mb": 24576
+    }
+  },
+  "dram_after_load_mb": 30350,
+  "results": [
+    {
+      "ctx_target": 512,
+      "prompt_chars": 2048,
+      "max_new": 32,
+      "dt_s": 8.175,
+      "tok_s": 3.91,
+      "vram_deltas_mb": {
+        "gpu0": 2,
+        "gpu1": 0
+      },
+      "dram_delta_mb": 214,
+      "apply_calls": 1536,
+      "cold_experts_streamed": 11859,
+      "cold_bytes_streamed_mb": 55957.78,
+      "p2p_per_token_mb": 1748.68
+    },
+    {
+      "ctx_target": 1024,
+      "prompt_chars": 4096,
+      "max_new": 32,
+      "dt_s": 7.343,
+      "tok_s": 4.36,
+      "vram_deltas_mb": {
+        "gpu0": 0,
+        "gpu1": 0
+      },
+      "dram_delta_mb": 0,
+      "apply_calls": 1536,
+      "cold_experts_streamed": 11206,
+      "cold_bytes_streamed_mb": 52876.54,
+      "p2p_per_token_mb": 1652.39
+    },
+    {
+      "ctx_target": 2048,
+      "prompt_chars": 8192,
+      "max_new": 32,
+      "dt_s": 8.068,
+      "tok_s": 3.97,
+      "vram_deltas_mb": {
+        "gpu0": 0,
+        "gpu1": 0
+      },
+      "dram_delta_mb": 1,
+      "apply_calls": 1536,
+      "cold_experts_streamed": 11467,
+      "cold_bytes_streamed_mb": 54108.09,
+      "p2p_per_token_mb": 1690.88
+    }
+  ]
+}

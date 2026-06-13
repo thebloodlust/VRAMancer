@@ -170,7 +170,7 @@ class DirectFP4Linear(nn.Module):
                 unswizzled = unswizzled * nvfp4_weight.per_tensor_scale.float()
             mod.w_scale_row = unswizzled.to(torch.bfloat16)
         except Exception:
-            pass  # w_scale_row stays None, GEMV bypass disabled
+            logger.debug("w_scale_row unswizzle failed, GEMV bypass disabled", exc_info=True)
 
         mod._init_views()
         return mod
@@ -241,7 +241,7 @@ class DirectFP4Linear(nn.Module):
 
             return a_qdata, a_scale, act_per_tensor_scale
         except Exception:
-            pass  # Fall through
+            logger.debug("Fast path 1 quantize_activation failed", exc_info=True)
 
         # --- Fast path 2: VRAMancer fused CUDA kernel (works on Blackwell) ---
         try:
@@ -249,7 +249,7 @@ class DirectFP4Linear(nn.Module):
             a_qdata, a_scale, act_per_tensor_scale = fused_quantize_activation_nvfp4(x_2d)
             return a_qdata, a_scale, act_per_tensor_scale
         except Exception:
-            pass  # Fall through
+            logger.debug("Fast path 2 fused_quantize_activation failed", exc_info=True)
 
         # --- Standard path: torchao's triton_quantize_nvfp4 ---
         # Per-tensor scale
@@ -335,7 +335,7 @@ class DirectFP4Linear(nn.Module):
                         result = result + self.bias.to(self._orig_dtype)
                     return result.reshape(*orig_shape[:-1], self.out_features)
                 except Exception:
-                    pass
+                    logger.debug("Priority A fp4_dequant_gemm failed", exc_info=True)
 
                 # Priority B: Triton fused GEMM (fallback if CUDA JIT fails)
                 try:
@@ -346,7 +346,7 @@ class DirectFP4Linear(nn.Module):
                         result = result + self.bias.to(self._orig_dtype)
                     return result.reshape(*orig_shape[:-1], self.out_features)
                 except Exception:
-                    pass  # Fall through to legacy paths
+                    logger.debug("Priority B fp4_fused_gemm failed", exc_info=True)
 
         # --- Path 1: M=1 GEMV (W4A16, non-Blackwell fallback) ---
         if self.w_scale_row is not None:
@@ -361,7 +361,7 @@ class DirectFP4Linear(nn.Module):
                         result = result.reshape(*x.shape[:-1], self.out_features)
                     return result
                 except Exception:
-                    pass  # Fall through
+                    logger.debug("GEMV nvfp4_gemv failed", exc_info=True)
 
         # --- Path 2: W4A4 via torch._scaled_mm (M>1 prefill) ---
         if self._w_fp4_t is None:
@@ -409,7 +409,7 @@ class DirectFP4Linear(nn.Module):
                     result = result + self.bias.to(self._orig_dtype)
                 return result.reshape(*orig_shape[:-1], self.out_features)
             except Exception:
-                pass
+                logger.debug("fp4_dequant_gemm fallback failed", exc_info=True)
 
         raise RuntimeError("No viable FP4 computation path available")
 

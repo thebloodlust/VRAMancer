@@ -26,7 +26,7 @@
 ## Quantization
 
 - **BF16** — Précision par défaut
-- **NF4** — 4-bit NormalFloat via BitsAndBytes. **75% plus rapide** que BF16 pour 14B (modèle tient sur 1 GPU)
+- **NF4** — 4-bit NormalFloat via BitsAndBytes. **~70% de VRAM en moins** que BF16 pour un 14B (tient sur 1 seul GPU), au prix d'un débit ~35% plus lent que BF16 2-GPU
 - **INT8** — LLM.int8 via BitsAndBytes
 - **NVFP4 Blackwell** — Quantization native FP4 via torchao sur CC≥10.0 (RTX 5070 Ti). Kernel cublas `_scaled_mm` avec `float4_e2m1fn_x2`
 - **DirectFP4 Bypass** — Remplace les NVFP4Tensor par des plain buffers + `_scaled_mm` direct, éliminant le overhead `__torch_dispatch__`. **+7% vs torchao**, 0 VRAM extra (`nvfp4_direct.py`)
@@ -38,18 +38,18 @@
 - **Paged Attention** — Cache KV paginé avec pages physiques/virtuelles, allocation dynamique (`paged_attention.py`)
 - **Kernel CUDA PagedAttention** — Warp-level online softmax, GQA, fp16/fp32. **8.8x vs PyTorch @ctx64** (`csrc/paged_attention_kernel.cu`)
 - **TurboQuant KV Compression** — Walsh-Hadamard → polar recursif → QJL 1-bit sur résidu. **~3.5 bits/dim, ~4.6x réduction** (`turboquant.py`, `VRM_KV_COMPRESSION=turboquant`)
-- **VRAM Lending** — Pool coopératif de prêt VRAM inter-GPU : leases, scoring, reclaim automatique (`vram_lending.py`, `VRM_VRAM_LENDING=1`)
-- **Hierarchical Memory** — 6 niveaux : VRAM → DRAM → NVMe → réseau, scoring LRU/LFU hybride (`hierarchical_memory.py`)
+- **VRAM Lending** *(experimental, `VRM_EXPERIMENTAL=1`)* — Pool coopératif de prêt VRAM inter-GPU : leases, scoring, reclaim automatique (`experimental/vram_lending.py`, `VRM_VRAM_LENDING=1`)
+- **Hierarchical Memory** *(experimental, `VRM_EXPERIMENTAL=1`)* — 6 niveaux : VRAM → DRAM → NVMe → réseau, scoring LRU/LFU hybride (`experimental/hierarchical_memory.py`)
 - **Stream Manager** — Prefetch, swap, eviction avec monitoring background (`stream_manager.py`)
 
 ## Transport GPU-to-GPU
 
 Chaîne de stratégies (fallback automatique) :
 
-1. **Strategy 0 — Cross-Vendor Bridge** — AMD↔NVIDIA via PipelinedTransport double-buffer async
+1. **Strategy 0 — Cross-Vendor Bridge** *(experimental)* — AMD↔NVIDIA via PipelinedTransport double-buffer async
 2. **Strategy 1 — CUDA P2P** — `cudaMemcpyPeerAsync()` direct si P2P accessible
 3. **Strategy 1.5 — Rust DtoD/Pipeline** — Bypass via `vramancer_rust` async pipeline (Tokio + CUDA FFI)
-4. **Strategy 1.7 — ReBAR Full-Window** — Activation si BAR0 > 4 GB, DMA chunks jusqu'à 64 MB (`cross_vendor_bridge.py`)
+4. **Strategy 1.7 — ReBAR Full-Window** *(experimental)* — Activation si BAR0 > 4 GB, DMA chunks jusqu'à 64 MB (`experimental/cross_vendor_bridge.py`)
 5. **Strategy 2 — CPU-Pipelined** — Double-buffer GPU→pinned→GPU en recouvrement
 6. **Strategy 3 — NCCL** — Distribué multi-nœuds (quand MASTER_ADDR set)
 7. **Strategy 4 — CPU-staged** — Fallback simple via RAM pinned (seule option en VM Proxmox IOMMU)
@@ -75,12 +75,14 @@ Chaîne de stratégies (fallback automatique) :
 
 ## Réseau & Cluster
 
-- **Cluster Discovery** — mDNS + UDP broadcast + Bully leader election, JSONL membership (`cluster_discovery.py`)
-- **RDMA Transport** — RDMA verbs (ibverbs/RoCE), GPUDirect RDMA si nvidia_peermem, zero-copy TCP (`fibre_fastpath.py`)
-- **NAT Traversal** — STUN RFC 5389, UDP hole punch, relay, ULA IPv6 (`nat_traversal.py`)
+> Les briques ci-dessous sont **expérimentales** (`VRM_EXPERIMENTAL=1`, voir [experimental/README.md](experimental/README.md)) :
+non testées hors du périmètre cœur (inférence single-node multi-GPU) ou sans matériel dédié.
+
+- **Cluster Discovery** — mDNS + UDP broadcast + Bully leader election, JSONL membership (`experimental/cluster_discovery.py`)
+- **RDMA Transport** — RDMA verbs (ibverbs/RoCE), GPUDirect RDMA si nvidia_peermem, zero-copy TCP (`experimental/fibre_fastpath.py`)
+- **NAT Traversal** — STUN RFC 5389, UDP hole punch, relay, ULA IPv6 (`experimental/nat_traversal.py`)
 - **Transport Factory** — Sélection automatique NCCL (même nœud) ou RDMA/TCP (réseau) selon localité (`transport_factory.py`)
-- **AITP Protocol** — AI Transport Protocol UDP/IPv6 avec FEC Reed-Solomon (`aitp_protocol.py`, `aitp_fec.py`)
-- **Wake-on-Inference** — Réveil de nœuds dormants via WoL magic packets (`wake_on_inference.py`)
+- **Wake-on-Inference** — Réveil de nœuds dormants via WoL magic packets (`experimental/wake_on_inference.py`)
 
 ## Extension Rust (vramancer_rust)
 
@@ -104,10 +106,12 @@ Chaîne de stratégies (fallback automatique) :
 
 | Test | Résultat |
 |------|----------|
-| Qwen2.5-14B 2-GPU (impossible sur 1 GPU) | **6.0 tok/s** |
-| Qwen2.5-14B NF4 single GPU | **10.5 tok/s** (+75% vs BF16 2-GPU) |
+| Qwen2.5-14B 2-GPU (impossible sur 1 GPU) | **16.1 tok/s** |
+| Qwen2.5-14B NF4 single GPU | **10.5 tok/s** (-35% vs BF16 2-GPU, mais -70% VRAM) |
 | GGUF Q4_K_M 7B (llama.cpp) | **106.8 tok/s** |
 | DirectFP4 vs torchao NVFP4 | **+7% speedup**, 0 VRAM extra |
 | CUDA kernel PagedAttention | **8.8x** vs PyTorch @ctx64 |
 | TurboQuant KV compression | **~4.6x** reduction, ~3.5 bits/dim |
-| Tests | **853 passed**, 38 skipped, 0 failed |
+| Tests | voir `pytest tests/ -m "not gpu and not real_torch and not heavy and not chaos"` (suite stub, sans GPU) |
+
+Détails et méthodologie : [benchmarks/BENCHMARK_RESULTS.md](benchmarks/BENCHMARK_RESULTS.md)

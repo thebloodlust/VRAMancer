@@ -11,10 +11,12 @@ utilisés ailleurs doivent toujours être créés via `get_tracer()`.
 Si opentelemetry n'est pas installé, le module tombe en no-op.
 """
 from __future__ import annotations
+import logging
 import os
 from contextlib import contextmanager
 import json
 
+_logger = logging.getLogger(__name__)
 _started = False
 
 try:  # Import lazy pour ne pas casser l'environnement minimal
@@ -50,7 +52,7 @@ def start_tracing():  # pragma: no cover - simple initialisation
         try:
             attrs.update(json.loads(extra))
         except Exception:
-            pass
+            _logger.debug("Tracing extra attrs JSON parse failed", exc_info=True)
     provider = TracerProvider(resource=Resource.create(attrs))
     processor = BatchSpanProcessor(ConsoleSpanExporter())
     provider.add_span_processor(processor)
@@ -60,7 +62,7 @@ def start_tracing():  # pragma: no cover - simple initialisation
             otlp = OTLPSpanExporter()
             provider.add_span_processor(BatchSpanProcessor(otlp))
         except Exception:
-            pass
+            _logger.debug("OTLP exporter setup failed", exc_info=True)
     trace.set_tracer_provider(provider)
     _started = True
 

@@ -1,0 +1,143 @@
+{
+  "model": "unsloth/Devstral-Small-2505-bnb-4bit",
+  "hardware": "RTX 5070 Ti (CUDA0, 16GB) \u2014 single GPU NF4 BnB",
+  "n_predict": 256,
+  "results": [
+    {
+      "load_time_s": 19.5,
+      "tokens_per_sec": 10.89,
+      "n_generated_tokens": 260,
+      "gen_time_s": 23.9,
+      "config": "A_baseline_8k",
+      "n_ctx": 8192,
+      "vram_before_gb": [
+        0.02,
+        0.01
+      ],
+      "vram_after_gb": [
+        0.02,
+        0.01
+      ],
+      "total_wall_time_s": 52.8,
+      "env_overrides": {
+        "VRM_MINIMAL_TEST": "",
+        "VRM_BACKEND_ALLOW_STUB": ""
+      }
+    },
+    {
+      "load_time_s": 9.4,
+      "tokens_per_sec": 11.03,
+      "n_generated_tokens": 260,
+      "gen_time_s": 23.6,
+      "config": "A_baseline_32k",
+      "n_ctx": 32768,
+      "vram_before_gb": [
+        0.02,
+        0.01
+      ],
+      "vram_after_gb": [
+        0.02,
+        0.01
+      ],
+      "total_wall_time_s": 53.3,
+      "env_overrides": {
+        "VRM_MINIMAL_TEST": "",
+        "VRM_BACKEND_ALLOW_STUB": ""
+      }
+    },
+    {
+      "load_time_s": 9.4,
+      "tokens_per_sec": 10.01,
+      "n_generated_tokens": 259,
+      "gen_time_s": 25.9,
+      "config": "B_turboquant_8k",
+      "n_ctx": 8192,
+      "vram_before_gb": [
+        0.02,
+        0.01
+      ],
+      "vram_after_gb": [
+        0.02,
+        0.01
+      ],
+      "total_wall_time_s": 43.7,
+      "env_overrides": {
+        "VRM_MINIMAL_TEST": "",
+        "VRM_BACKEND_ALLOW_STUB": "",
+        "VRM_KV_COMPRESSION": "turboquant",
+        "VRM_KV_COMPRESSION_BITS": "3"
+      }
+    },
+    {
+      "load_time_s": 9.4,
+      "tokens_per_sec": 9.97,
+      "n_generated_tokens": 258,
+      "gen_time_s": 25.9,
+      "config": "B_turboquant_32k",
+      "n_ctx": 32768,
+      "vram_before_gb": [
+        0.02,
+        0.01
+      ],
+      "vram_after_gb": [
+        0.02,
+        0.01
+      ],
+      "total_wall_time_s": 43.6,
+      "env_overrides": {
+        "VRM_MINIMAL_TEST": "",
+        "VRM_BACKEND_ALLOW_STUB": "",
+        "VRM_KV_COMPRESSION": "turboquant",
+        "VRM_KV_COMPRESSION_BITS": "3"
+      }
+    },
+    {
+      "load_time_s": 17.3,
+      "tokens_per_sec": 10.05,
+      "n_generated_tokens": 259,
+      "gen_time_s": 25.8,
+      "config": "C_tq_sparsev_8k",
+      "n_ctx": 8192,
+      "vram_before_gb": [
+        0.02,
+        0.01
+      ],
+      "vram_after_gb": [
+        0.02,
+        0.01
+      ],
+      "total_wall_time_s": 51.4,
+      "env_overrides": {
+        "VRM_MINIMAL_TEST": "",
+        "VRM_BACKEND_ALLOW_STUB": "",
+        "VRM_KV_COMPRESSION": "turboquant",
+        "VRM_KV_COMPRESSION_BITS": "3",
+        "VRM_SPARSE_V_RATIO": "0.1"
+      }
+    },
+    {
+      "load_time_s": 7.3,
+      "tokens_per_sec": 10.04,
+      "n_generated_tokens": 259,
+      "gen_time_s": 25.8,
+      "config": "C_tq_sparsev_32k",
+      "n_ctx": 32768,
+      "vram_before_gb": [
+        0.02,
+        0.01
+      ],
+      "vram_after_gb": [
+        0.02,
+        0.01
+      ],
+      "total_wall_time_s": 43.5,
+      "env_overrides": {
+        "VRM_MINIMAL_TEST": "",
+        "VRM_BACKEND_ALLOW_STUB": "",
+        "VRM_KV_COMPRESSION": "turboquant",
+        "VRM_KV_COMPRESSION_BITS": "3",
+        "VRM_SPARSE_V_RATIO": "0.1"
+      }
+    }
+  ]
+}

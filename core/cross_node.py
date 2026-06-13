@@ -154,7 +154,7 @@ def _make_forward_callback():
                 if _registry.is_loaded:
                     model = _registry._pipeline.backend.model
             except Exception:
-                pass
+                logger.debug("production_api registry lookup failed", exc_info=True)
         if model is None:
             # Return a zero-length tensor on GPU
             dummy = torch.empty(0, device='cuda:0')
@@ -239,7 +239,7 @@ class VTPWorkerServer:
             try:
                 self._rust_server.stop()
             except Exception:
-                pass
+                logger.debug("Rust VTP server stop failed", exc_info=True)
             self._rust_server = None
         if self._thread:
             self._thread.join(timeout=5)
@@ -247,7 +247,7 @@ class VTPWorkerServer:
             try:
                 self._sock.close()
             except Exception:
-                pass
+                logger.debug("VTP worker socket close failed", exc_info=True)
         logger.info("VTP worker server stopped")
 
     def _accept_loop(self):
@@ -262,7 +262,7 @@ class VTPWorkerServer:
                     conn.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF,
                                     4 * 1024 * 1024)
                 except Exception:
-                    pass
+                    logger.debug("VTP socket buffer resize failed", exc_info=True)
                 threading.Thread(target=self._handle_conn,
                                  args=(conn, addr), daemon=True).start()
             except socket.timeout:
@@ -308,7 +308,7 @@ class VTPWorkerServer:
                         if _registry.is_loaded:
                             model = _registry._pipeline.backend.model
                     except Exception:
-                        pass
+                        logger.debug("production_api registry lookup failed in VTP handler", exc_info=True)
                 if model is None:
                     # Echo mode: return input tensor unchanged (bench transport)
                     logger.debug("VTP: no model, echo mode")
@@ -343,7 +343,7 @@ class VTPWorkerServer:
             try:
                 conn.close()
             except Exception:
-                pass
+                logger.debug("VTP connection close failed from %s", addr, exc_info=True)
             logger.info("VTP: connection closed from %s", addr)
 
 
@@ -418,7 +418,7 @@ class VTPRemoteWorker:
             self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF,
                                   4 * 1024 * 1024)
         except Exception:
-            pass
+            logger.debug("VTP client socket buffer resize failed", exc_info=True)
         self._sock.settimeout(120)
         self._sock.connect((self.host, self.port))
         logger.info("VTP: connected to %s:%d", self.host, self.port)
@@ -505,13 +505,13 @@ class VTPRemoteWorker:
             try:
                 self._bridge.close()
             except Exception:
-                pass
+                logger.debug("VTP Rust bridge close failed", exc_info=True)
             self._bridge = None
         if self._sock is not None:
             try:
                 self._sock.close()
             except Exception:
-                pass
+                logger.debug("VTP client socket close failed", exc_info=True)
             self._sock = None
 
 
@@ -635,7 +635,7 @@ def _worker_forward_tensor(model, hidden: "torch.Tensor",
                     hidden.to(re_dev), position_ids.to(re_dev))
                 position_embeddings = tuple(t.to(device) for t in pe)
             except Exception:
-                pass
+                logger.debug("rotary_emb computation failed in run_partial_model", exc_info=True)
 
     with torch.no_grad():
         for i in range(start_layer, end_layer):
@@ -776,7 +776,7 @@ def distributed_generate(
                         position_embeddings = tuple(
                             t.to(hidden.device) for t in pe)
                     except Exception:
-                        pass
+                        logger.debug("rotary_emb computation failed in pipeline parallel", exc_info=True)
 
             # ── Layer segments ────────────────────────────────────
             for seg in segments:

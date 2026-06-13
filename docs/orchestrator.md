@@ -91,7 +91,7 @@ Endpoints sensibles (éviction forcée, rotation HA) requièrent rôle (header `
 ## Build Lite
 Réduit dépendances UI lourdes. Installation:
 ```bash
-pip install -r requirements-lite.txt
+pip install -e .
 python -m vramancer.main --mode cli
 ```
 

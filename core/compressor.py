@@ -110,12 +110,12 @@ class Compressor:
                 dctx = _zstd.ZstdDecompressor()
                 return dctx.decompress(data)
             except Exception:
-                pass
+                _logger.debug("zstd decompression failed, falling back", exc_info=True)
         if self._codec == "lz4" and _lz4 is not None:
             try:
                 return _lz4.decompress(data)
             except Exception:
-                pass
+                _logger.debug("lz4 decompression failed, falling back", exc_info=True)
         # Fallback: gzip
         import gzip
         try:

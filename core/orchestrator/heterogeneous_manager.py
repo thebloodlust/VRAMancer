@@ -112,9 +112,29 @@ class HeterogeneousManager:
                     'memory_mb': device.get('total_memory', 0) // (1024**2) if device.get('total_memory') else 0,
                     'architecture': self._get_gpu_architecture(device['name'])
                 }
+                # Enrichir avec les propriétés matérielles RÉELLES (vendor-neutre).
+                # Évite le scoring par table de noms hardcodée : SM count +
+                # compute capability sont mesurés directement.
+                self._augment_hw_props(device, gpu_info)
                 gpus.append(gpu_info)
         
         return gpus
+
+    @staticmethod
+    def _augment_hw_props(device: Dict[str, Any], gpu_info: Dict[str, Any]) -> None:
+        """Ajoute sm_count et compute_capability depuis torch (best-effort)."""
+        idx = device.get('index')
+        if device['backend'] not in ('cuda', 'rocm') or idx is None:
+            return
+        try:
+            import torch
+            props = torch.cuda.get_device_properties(idx)
+            gpu_info['sm_count'] = int(getattr(props, 'multi_processor_count', 0) or 0)
+            major = int(getattr(props, 'major', 0) or 0)
+            minor = int(getattr(props, 'minor', 0) or 0)
+            gpu_info['compute_capability'] = major + minor / 10.0
+        except Exception:
+            pass
     
     def _get_gpu_architecture(self, name: str) -> str:
         """Détermine l'architecture GPU à partir du nom."""
@@ -183,43 +203,58 @@ class HeterogeneousManager:
             return "standard"
     
     def _estimate_compute_score(self, backend: str, gpus: List[Dict], cpu_cores: int) -> float:
-        """Score de capacité de calcul (0.1 à 10.0)."""
+        """Score de capacité de calcul (0.1 à 10.0).
+
+        Dérivé de propriétés matérielles MESURÉES plutôt que d'une table de
+        noms de cartes hardcodée — fonctionne donc pour les GPU récents
+        (Blackwell, RDNA4, etc.) sans patch. Pour CUDA/ROCm :
+
+            score_gpu = (sm_count / 60) * capability_factor
+
+        où ``sm_count`` (multi_processor_count) et ``compute_capability`` sont
+        lus via ``torch.cuda.get_device_properties``. 60 SM ≈ une carte
+        milieu/haut de gamme contemporaine (référence 1.0 avant pondération
+        capability). Fallback sur la VRAM si les SM ne sont pas exposés.
+        """
         base_score = cpu_cores / 8.0  # 8 cores = score 1.0
-        
-        # Bonus GPU
+
         for gpu in gpus:
-            if backend == 'cuda':
-                # RTX 4090 = +8, RTX 3090 = +6, etc.
-                if 'rtx 4090' in gpu['name'].lower():
-                    base_score += 8.0
-                elif 'rtx 4080' in gpu['name'].lower():
-                    base_score += 6.0
-                elif 'rtx 3090' in gpu['name'].lower():
-                    base_score += 6.0
-                elif 'rtx 3080' in gpu['name'].lower():
-                    base_score += 4.0
-                elif '4060 ti' in gpu['name'].lower():
-                    base_score += 3.0
-                else:
-                    base_score += 2.0
-            elif backend == 'rocm':
-                # AMD MI series
-                if 'mi50' in gpu['name'].lower():
-                    base_score += 5.0
-                elif 'mi60' in gpu['name'].lower():
-                    base_score += 7.0
-                else:
-                    base_score += 2.0
+            if backend in ('cuda', 'rocm'):
+                base_score += self._gpu_hw_score(gpu)
             elif backend == 'mps':
-                # Apple Silicon
-                if 'm4' in gpu['name'].lower():
-                    base_score += 4.0
-                elif 'm3' in gpu['name'].lower():
-                    base_score += 3.0
-                elif 'm1' in gpu['name'].lower():
-                    base_score += 2.0
-        
+                # Apple Silicon : VRAM unifiée, pas de SM exposés.
+                vram_gb = gpu.get('memory_mb', 0) / 1024.0
+                base_score += min(4.0, 1.0 + vram_gb / 16.0)
+
         return min(base_score, 10.0)
+
+    @staticmethod
+    def _gpu_hw_score(gpu: Dict[str, Any]) -> float:
+        """Score d'un GPU CUDA/ROCm à partir de métriques matérielles réelles."""
+        sm = gpu.get('sm_count', 0) or 0
+        cap = gpu.get('compute_capability', 0.0) or 0.0
+
+        # Facteur de capability : Pascal(6)=0.7, Turing/Ampere(7-8)=1.0,
+        # Ada(8.9)=1.15, Hopper/Blackwell(9-10+)=1.3. Linéaire borné.
+        if cap >= 9.0:
+            cap_factor = 1.3
+        elif cap >= 8.9:
+            cap_factor = 1.15
+        elif cap >= 7.0:
+            cap_factor = 1.0
+        elif cap >= 6.0:
+            cap_factor = 0.7
+        elif cap > 0:
+            cap_factor = 0.5
+        else:
+            cap_factor = 1.0  # capability inconnue : neutre
+
+        if sm > 0:
+            return (sm / 60.0) * cap_factor
+
+        # Fallback : aucune info SM (ROCm parfois) → score par VRAM.
+        vram_gb = gpu.get('memory_mb', 0) / 1024.0
+        return min(8.0, 1.0 + vram_gb / 8.0)
     
     def _estimate_memory_score(self, ram_gb: float, gpus: List[Dict]) -> float:
         """Score de capacité mémoire (0.1 à 10.0)."""

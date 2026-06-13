@@ -187,6 +187,7 @@ class LlamaCppBackend(BaseLLMBackend):
             top_p=top_p,
             top_k=top_k,
             repeat_penalty=repeat_penalty,
+            stop=kwargs.get("stop"),
             echo=False,
         )
 
@@ -218,6 +219,7 @@ class LlamaCppBackend(BaseLLMBackend):
             top_p=top_p,
             top_k=top_k,
             repeat_penalty=repeat_penalty,
+            stop=kwargs.get("stop"),
             echo=False,
             stream=True,
         ):
@@ -370,7 +372,7 @@ class LlamaCppBackend(BaseLLMBackend):
                     vals.append(info.free / (1024 ** 3))
                 return vals
         except Exception:
-            pass
+            logger.debug("pynvml GPU memory query failed", exc_info=True)
 
         logger.warning("Cannot detect GPU VRAM for tensor_split")
         return None
@@ -414,7 +416,7 @@ class LlamaCppBackend(BaseLLMBackend):
                             logger.info("P2P available between GPU %d and %d → row split", i, j)
                             return 2
         except Exception:
-            pass
+            logger.debug("P2P detection failed", exc_info=True)
         return 1  # default: layer split (safe without P2P)
 
 

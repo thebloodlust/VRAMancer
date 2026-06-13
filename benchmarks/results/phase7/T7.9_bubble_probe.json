@@ -1,0 +1,19 @@
+{
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "n_decode_steps": 50,
+  "wall_time_ms": 2266.1,
+  "busy_ms_per_gpu": {
+    "cuda:0": 709.25,
+    "cuda:1": 1183.93
+  },
+  "busy_fraction_per_gpu": {
+    "cuda:0": 0.313,
+    "cuda:1": 0.5225
+  },
+  "idleness_per_gpu": {
+    "cuda:0": 0.687,
+    "cuda:1": 0.4775
+  },
+  "tok_s": 22.06,
+  "verdict": "BULLE_SIGNIFICATIVE"
+}

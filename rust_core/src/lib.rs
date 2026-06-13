@@ -16,6 +16,43 @@ use std::sync::Mutex;
 // Définition de notre type HMAC
 type HmacSha256 = Hmac<Sha256>;
 
+/// Borne de sécurité sur les tailles lues depuis le réseau. Un pair distant
+/// envoie une longueur dans l'en-tête ; sans borne, `vec![0u8; n]` permet un
+/// OOM-kill trivial à distance (et `total_len - 32` peut sous-déborder en u64
+/// si total_len < 32, donnant ~18 Eo). 16 GiB couvre les plus gros tenseurs
+/// réalistes ; au-delà on rejette la connexion.
+const MAX_PAYLOAD_BYTES: u64 = 16 * 1024 * 1024 * 1024;
+
+/// Valide une longueur (octets utiles) lue du réseau avant toute allocation.
+#[inline]
+fn check_payload_len(n: u64) -> Result<usize, String> {
+    if n > MAX_PAYLOAD_BYTES {
+        return Err(format!(
+            "Payload size {} bytes exceeds maximum {} bytes (peer malveillant ?)",
+            n, MAX_PAYLOAD_BYTES
+        ));
+    }
+    Ok(n as usize)
+}
+
+/// Runtime Tokio global partagé. Avant, chaque transfert P2P créait un
+/// `Runtime::new()` (thread pool + scheduler + I/O driver) — ~200-500µs de
+/// surcoût fixe par appel, dominant sur les petits transferts. Un seul runtime
+/// partagé via OnceLock supprime ce coût.
+fn shared_runtime() -> &'static tokio::runtime::Runtime {
+    use std::sync::OnceLock;
+    static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+    RT.get_or_init(|| {
+        tokio::runtime::Runtime::new().expect("Echec création du runtime Tokio global")
+    })
+}
+
+/// Timeouts réseau (cohérents avec GpuNetBridge : 30s connect, 120s I/O).
+/// Bornent les `.await` face à un pair bloqué/malveillant pour éviter qu'un
+/// transfert ne fige indéfiniment un thread du runtime partagé.
+const NET_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+const NET_IO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
 /// Hiérarchie des Tiers de Transport VRAMancer
 #[pyclass]
 #[derive(Clone, Debug, PartialEq)]
@@ -28,13 +65,14 @@ pub enum TransportTier {
 /// Détecte le meilleur tier réseau disponible sur ce nœud host
 #[pyfunction]
 fn detect_best_transport() -> TransportTier {
-    // Plus tard, nous ajouterons ici la détection de "nvidia_peermem" / "ibverbs".
-    // Pour l'instant, on active notre nouveau "Niveau 2" par défaut (ZeroCopy TCP) !
+    // Probe RDMA verbs availability at runtime via libibverbs
+    let has_rdma = unsafe { libloading::Library::new("libibverbs.so.1").is_ok() };
+    if has_rdma {
+        return TransportTier::DirectRdma;
+    }
     TransportTier::ZeroCopyTcp
 }
 
-#[cfg(feature = "cuda")]
-use cudarc::driver::CudaDevice;
 
 // =========================================================================
 // CUDA Driver API — direct FFI for P2P and async transfers
@@ -46,13 +84,37 @@ mod cuda_ffi {
 
     type CUresult = i32;
 
-    static CUDA_LIB: OnceLock<libloading::Library> = OnceLock::new();
+    static CUDA_LIB: OnceLock<Option<libloading::Library>> = OnceLock::new();
+
+    /// Try to load libcuda.so.1 (Linux) / nvcuda.dll (Windows).
+    /// Returns None when CUDA is unavailable, instead of panicking.
+    fn try_lib() -> Option<&'static libloading::Library> {
+        CUDA_LIB
+            .get_or_init(|| unsafe {
+                #[cfg(unix)]
+                let names = ["libcuda.so.1", "libcuda.so"];
+                #[cfg(windows)]
+                let names = ["nvcuda.dll"];
+                for n in names.iter() {
+                    if let Ok(l) = libloading::Library::new(n) {
+                        return Some(l);
+                    }
+                }
+                None
+            })
+            .as_ref()
+    }
 
     fn lib() -> &'static libloading::Library {
-        CUDA_LIB.get_or_init(|| unsafe {
-            libloading::Library::new("libcuda.so.1")
-                .expect("Cannot load libcuda.so.1")
-        })
+        try_lib().expect(
+            "libcuda not loadable — cuda feature requested but no driver found. \
+             Use cuda_available() before calling CUDA APIs.",
+        )
+    }
+
+    /// True if libcuda.so.1 / nvcuda.dll is loadable on the current system.
+    pub fn cuda_available() -> bool {
+        try_lib().is_some()
     }
 
     /// cuInit(0) — initialize CUDA driver. Safe to call multiple times.
@@ -89,6 +151,22 @@ mod cuda_ffi {
             let res = sym(dst, src, bytes);
             if res != 0 {
                 return Err(format!("cuMemcpyDtoD_v2 returned {res}"));
+            }
+            Ok(())
+        }
+    }
+
+    /// cuMemcpyDtoDAsync_v2(dst, src, ByteCount, hStream)
+    /// Asynchronous device-to-device copy. With stream=0 (null stream),
+    /// subsequent GPU operations on the same device will serialize after it.
+    pub fn memcpy_dtod_async(dst: u64, src: u64, bytes: usize, stream: u64) -> Result<(), String> {
+        unsafe {
+            let sym: libloading::Symbol<unsafe extern "C" fn(u64, u64, usize, u64) -> CUresult> =
+                lib().get(b"cuMemcpyDtoDAsync_v2\0")
+                    .map_err(|e| format!("cuMemcpyDtoDAsync_v2 not found: {e}"))?;
+            let res = sym(dst, src, bytes, stream);
+            if res != 0 {
+                return Err(format!("cuMemcpyDtoDAsync_v2 returned {res}"));
             }
             Ok(())
         }
@@ -534,7 +612,18 @@ impl GpuPipeline {
     ///   chunk_mb: chunk size in MiB (default 16)
     #[new]
     fn new(src_gpu: i32, dst_gpu: i32, chunk_mb: Option<usize>) -> PyResult<Self> {
-        let chunk_bytes = chunk_mb.unwrap_or(16) * 1024 * 1024;
+        let chunk_mb = chunk_mb.unwrap_or(16);
+        // Guard against absurd chunk sizes: the 3rd arg is MEGABYTES, not bytes.
+        // A common misuse is passing 1<<20 (intending "1 MB" in bytes), which
+        // would request 1 TiB per buffer × triple-buffering → a cryptic
+        // `cuMemAllocHost returned 2` (CUDA_ERROR_OUT_OF_MEMORY). Fail clearly.
+        if chunk_mb == 0 || chunk_mb > 4096 {
+            return Err(PyValueError::new_err(format!(
+                "GpuPipeline chunk_mb={chunk_mb} is out of range (1..=4096 MiB). \
+                 Note: the 3rd argument is the chunk size in MEGABYTES, not bytes."
+            )));
+        }
+        let chunk_bytes = chunk_mb * 1024 * 1024;
         let n_bufs = 3usize;  // Triple-buffering for full overlap
 
         let src_ctx = cuda_ffi::device_primary_ctx_retain(src_gpu)
@@ -743,19 +832,17 @@ impl Drop for GpuPipeline {
 /// P.O.C: Écriture directe des octets depuis le réseau vers la VRAM du GPU.
 #[cfg(feature = "cuda")]
 #[pyfunction]
-fn direct_vram_load(py: Python, payload: &[u8]) -> PyResult<u64> {
-    py.allow_threads(|| {
-        let dev = CudaDevice::new(0)
-            .map_err(|e| PyValueError::new_err(format!("CUDA Error: {:?}", e)))?;
-        
-        let d_buf = dev.htod_sync_copy(payload)
-            .map_err(|e| PyValueError::new_err(format!("CUDA Memcpy Error: {:?}", e)))?;
-        
-        // Leak the CudaSlice so PyTorch can own the memory
-        std::mem::forget(d_buf);
-        // Note: for a real implementation, use DLPack or return a capsule
-        Ok(0u64) // placeholder — real ptr extraction needs DLPack
-    })
+fn direct_vram_load(_py: Python, _payload: &[u8]) -> PyResult<u64> {
+    // Ancien comportement : copiait le payload en VRAM puis `mem::forget` du
+    // buffer + retour de `0u64` — fuite de VRAM silencieuse ET pointeur inutile
+    // (0 n'est pas l'adresse réelle). Tant que l'extraction du vrai pointeur
+    // device (DLPack / PyCapsule) n'est pas implémentée, on échoue franchement
+    // au lieu de fuir. Pour copier en VRAM, utiliser direct_vram_copy.
+    Err(PyValueError::new_err(
+        "direct_vram_load non implémenté: l'extraction du pointeur device nécessite \
+         DLPack/PyCapsule. L'ancienne version fuyait la VRAM et retournait 0. \
+         Utilisez direct_vram_copy ou GpuNetBridge.",
+    ))
 }
 
 #[cfg(not(feature = "cuda"))]
@@ -788,13 +875,14 @@ fn send_tensor_p2p(
     // 2. Relâche du GIL Python et passage en I/O asynchrone natif
     let result: Result<Vec<u8>, String> = py.allow_threads(|| {
         // Lancement d'un runtime Tokio temporaire dédié au transfert massif
-        let rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = shared_runtime();
         
         rt.block_on(async {
             let addr = format!("{}:{}", host, port);
             
             // Connexion asynchrone
-            let mut stream = TcpStream::connect(&addr).await
+            let mut stream = tokio::time::timeout(NET_CONNECT_TIMEOUT, TcpStream::connect(&addr)).await
+                .map_err(|_| format!("Timeout connexion TCP vers {}", addr))?
                 .map_err(|e| format!("Echec connexion TCP vers {}: {}", addr, e))?;
 
             // Envoi optimisé du Header (Total Len)
@@ -813,8 +901,8 @@ fn send_tensor_p2p(
             let resp_len = stream.read_u64().await
                 .map_err(|e| format!("Echec lecture réponse Header: {}", e))?;
 
-            // Allocation et lecture de la réponse
-            let mut resp_data = vec![0u8; resp_len as usize];
+            // Allocation et lecture de la réponse (bornée — anti-OOM)
+            let mut resp_data = vec![0u8; check_payload_len(resp_len)?];
             stream.read_exact(&mut resp_data).await
                 .map_err(|e| format!("Echec lecture réponse Body: {}", e))?;
 
@@ -837,7 +925,7 @@ fn receive_tensor_p2p(py: Python, port: u16, secret: &[u8]) -> PyResult<Py<PyByt
     
     // On relâche le GIL pour ne pas bloquer le serveur web Python
     let result: Result<Vec<u8>, String> = py.allow_threads(|| {
-        let rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = shared_runtime();
         rt.block_on(async {
             let addr = format!("0.0.0.0:{}", port);
             let listener = tokio::net::TcpListener::bind(&addr).await
@@ -847,22 +935,30 @@ fn receive_tensor_p2p(py: Python, port: u16, secret: &[u8]) -> PyResult<Py<PyByt
             let (mut socket, _) = listener.accept().await
                 .map_err(|e| format!("Echec acceptation de la connexion TCP: {}", e))?;
                 
-            let total_len = socket.read_u64().await
+            let total_len = tokio::time::timeout(NET_IO_TIMEOUT, socket.read_u64()).await
+                .map_err(|_| "Timeout lecture en-tête distant".to_string())?
                 .map_err(|e| format!("Echec lecture de l'en-tête distant: {}", e))?;
                 
             // Lecture des 32 octets de signature
             let mut signature = vec![0u8; 32];
-            socket.read_exact(&mut signature).await
+            tokio::time::timeout(NET_IO_TIMEOUT, socket.read_exact(&mut signature)).await
+                .map_err(|_| "Timeout lecture signature HMAC".to_string())?
                 .map_err(|e| format!("Echec lecture signature HMAC: {}", e))?;
                 
-            // Lecture intégrale du Gigabytes de VRAM/Tenseur
-            let payload_len = total_len - 32;
-            let mut payload = vec![0u8; payload_len as usize];
-            socket.read_exact(&mut payload).await
+            // Lecture intégrale du Gigabytes de VRAM/Tenseur.
+            // Garde anti-underflow (total_len doit contenir au moins les 32
+            // octets de signature) + borne anti-OOM.
+            if total_len < 32 {
+                return Err(format!("En-tête invalide: total_len={} < 32 octets", total_len));
+            }
+            let payload_len = check_payload_len(total_len - 32)?;
+            let mut payload = vec![0u8; payload_len];
+            tokio::time::timeout(NET_IO_TIMEOUT, socket.read_exact(&mut payload)).await
+                .map_err(|_| "Timeout lecture du payload Tensor".to_string())?
                 .map_err(|e| format!("Echec lecture du payload de données Tensor: {}", e))?;
                 
             // Vérification de sécurité (Si un hacker tente d'envoyer du code corrompu, ça dégage ici)
-            let mut mac = HmacSha256::new_from_slice(&secret_vec).unwrap();
+            let mut mac = HmacSha256::new_from_slice(&secret_vec).map_err(|e| format!("Clé HMAC invalide: {}", e))?;
             mac.update(&payload);
             if mac.verify_slice(&signature).is_err() {
                 return Err("ALERTE INTRUSION : Signature HMAC-SHA256 Invalide ! Tentative de transfert P2P rejetée.".to_string());
@@ -914,6 +1010,14 @@ fn verify_hmac_fast(_py: Python, secret: &[u8], payload: &[u8], signature: &[u8]
 /// ⚡ Software CXL Offload (Rust equivalent of pure C++ dump)
 #[pyfunction]
 fn cxl_direct_memory_dump(py: Python, path: String, ptr: usize, num_bytes: usize) -> PyResult<()> {
+    // Garde basique sur le pointeur brut fourni par Python : non-null, taille
+    // non-nulle et bornée. Ne prouve pas la validité de la plage (impossible
+    // sans sonder l'OS) mais bloque les footguns évidents (segfault sur null/0).
+    if ptr == 0 || num_bytes == 0 || num_bytes > MAX_PAYLOAD_BYTES as usize {
+        return Err(PyValueError::new_err(format!(
+            "cxl_direct_memory_dump: pointeur/taille invalide (ptr={:#x}, bytes={})", ptr, num_bytes
+        )));
+    }
     py.allow_threads(|| {
         // SAFETY: We assume the caller provides a valid pointer and length. Risk of segfault if incorrect,
         // but Rust handles the file writing safely and bypassing the GIL.
@@ -929,6 +1033,13 @@ fn cxl_direct_memory_dump(py: Python, path: String, ptr: usize, num_bytes: usize
 /// ⚡ Software CXL Onload (Rust equivalent of pure C++ load)
 #[pyfunction]
 fn cxl_direct_memory_load(py: Python, path: String, ptr: usize, num_bytes: usize) -> PyResult<()> {
+    // Même garde que dump : la lecture écrit dans la mémoire pointée (plus
+    // dangereux encore qu'une lecture) — refuser null/0/oversize d'emblée.
+    if ptr == 0 || num_bytes == 0 || num_bytes > MAX_PAYLOAD_BYTES as usize {
+        return Err(PyValueError::new_err(format!(
+            "cxl_direct_memory_load: pointeur/taille invalide (ptr={:#x}, bytes={})", ptr, num_bytes
+        )));
+    }
     py.allow_threads(|| {
         // SAFETY: Same as above.
         let slice = unsafe { std::slice::from_raw_parts_mut(ptr as *mut u8, num_bytes) };
@@ -940,9 +1051,10 @@ fn cxl_direct_memory_load(py: Python, path: String, ptr: usize, num_bytes: usize
     })
 }
 
-/// Fast XOR for Holographic Parity (bypassing GIL)
+/// Fast XOR parity over N data shards (releases the GIL).
+/// Single-fault-tolerance erasure coding (RAID-5 style).
 #[pyfunction]
-fn generate_holographic_parity(py: Python, shards: Vec<&[u8]>) -> PyResult<Py<PyBytes>> {
+fn generate_xor_parity(py: Python, shards: Vec<&[u8]>) -> PyResult<Py<PyBytes>> {
     // We can confidently release the GIL because we only have immutable slices.
     let (parity, max_len) = py.allow_threads(|| {
         let max_len = shards.iter().map(|s| s.len()).max().unwrap_or(0);
@@ -967,9 +1079,15 @@ fn generate_holographic_parity(py: Python, shards: Vec<&[u8]>) -> PyResult<Py<Py
     Ok(PyBytes::new(py, &parity).into())
 }
 
-/// Reconstructs a missing tensor chunk from Parity
+/// Deprecated alias for ``generate_xor_parity`` (kept for backward compat).
 #[pyfunction]
-fn heal_holograph(py: Python, valid_shards: Vec<&[u8]>, parity: &[u8]) -> PyResult<Py<PyBytes>> {
+fn generate_holographic_parity(py: Python, shards: Vec<&[u8]>) -> PyResult<Py<PyBytes>> {
+    generate_xor_parity(py, shards)
+}
+
+/// Reconstruct a single missing data shard from the remaining shards + parity.
+#[pyfunction]
+fn repair_xor_shard(py: Python, valid_shards: Vec<&[u8]>, parity: &[u8]) -> PyResult<Py<PyBytes>> {
     let reconstructed = py.allow_threads(|| {
         let mut rec_buf = parity.to_vec();
         for shard in valid_shards {
@@ -981,6 +1099,12 @@ fn heal_holograph(py: Python, valid_shards: Vec<&[u8]>, parity: &[u8]) -> PyResu
     });
     
     Ok(PyBytes::new(py, &reconstructed).into())
+}
+
+/// Deprecated alias for ``repair_xor_shard`` (kept for backward compat).
+#[pyfunction]
+fn heal_holograph(py: Python, valid_shards: Vec<&[u8]>, parity: &[u8]) -> PyResult<Py<PyBytes>> {
+    repair_xor_shard(py, valid_shards, parity)
 }
 
 /// C'est ici que l'on déclare officiellement notre module Python.
@@ -1009,10 +1133,11 @@ fn send_tensor_chunked(
     let payload_vec = payload.to_vec();
 
     let result: Result<u64, String> = py.allow_threads(move || {
-        let rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = shared_runtime();
         rt.block_on(async move {
             let addr = format!("{}:{}", host, port);
-            let mut stream = TcpStream::connect(&addr).await
+            let mut stream = tokio::time::timeout(NET_CONNECT_TIMEOUT, TcpStream::connect(&addr)).await
+                .map_err(|_| format!("Timeout connect to {}", addr))?
                 .map_err(|e| format!("Connect to {}: {}", addr, e))?;
 
             let total_len = payload_vec.len() as u64;
@@ -1026,7 +1151,7 @@ fn send_tensor_chunked(
             let mut acked: u64 = 0;
             for (i, chunk) in payload_vec.chunks(chunk_sz).enumerate() {
                 // Sign each chunk
-                let mut mac = HmacSha256::new_from_slice(&secret_vec).unwrap();
+                let mut mac = HmacSha256::new_from_slice(&secret_vec).map_err(|e| format!("Clé HMAC invalide: {}", e))?;
                 mac.update(chunk);
                 let sig = mac.finalize().into_bytes();
 
@@ -1065,7 +1190,7 @@ fn receive_tensor_chunked(
     let max_conn = max_connections.unwrap_or(8) as usize;
 
     let result: Result<Vec<u8>, String> = py.allow_threads(move || {
-        let rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = shared_runtime();
         rt.block_on(async move {
             let addr = format!("0.0.0.0:{}", port);
             let listener = tokio::net::TcpListener::bind(&addr).await
@@ -1075,23 +1200,33 @@ fn receive_tensor_chunked(
             let (mut socket, _) = listener.accept().await
                 .map_err(|e| format!("Accept: {}", e))?;
 
-            let total_len = socket.read_u64().await.map_err(|e| format!("Header: {}", e))?;
-            let num_chunks = socket.read_u32().await.map_err(|e| format!("Header: {}", e))?;
-            let _chunk_size = socket.read_u32().await.map_err(|e| format!("Header: {}", e))?;
+            let total_len = tokio::time::timeout(NET_IO_TIMEOUT, socket.read_u64()).await
+                .map_err(|_| "Timeout Header total_len".to_string())?.map_err(|e| format!("Header: {}", e))?;
+            let num_chunks = tokio::time::timeout(NET_IO_TIMEOUT, socket.read_u32()).await
+                .map_err(|_| "Timeout Header num_chunks".to_string())?.map_err(|e| format!("Header: {}", e))?;
+            let _chunk_size = tokio::time::timeout(NET_IO_TIMEOUT, socket.read_u32()).await
+                .map_err(|_| "Timeout Header chunk_size".to_string())?.map_err(|e| format!("Header: {}", e))?;
 
-            let mut payload = Vec::with_capacity(total_len as usize);
+            // Borne anti-OOM sur la pré-allocation totale.
+            let mut payload = Vec::with_capacity(check_payload_len(total_len)?);
 
             for i in 0..num_chunks {
                 // Read per-chunk signature
                 let mut sig = vec![0u8; 32];
-                socket.read_exact(&mut sig).await.map_err(|e| format!("Chunk {} sig: {}", i, e))?;
+                tokio::time::timeout(NET_IO_TIMEOUT, socket.read_exact(&mut sig)).await
+                    .map_err(|_| format!("Timeout chunk {} sig", i))?.map_err(|e| format!("Chunk {} sig: {}", i, e))?;
 
-                let chunk_len = socket.read_u32().await.map_err(|e| format!("Chunk {} len: {}", i, e))? as usize;
+                let chunk_len = check_payload_len(
+                    tokio::time::timeout(NET_IO_TIMEOUT, socket.read_u32()).await
+                        .map_err(|_| format!("Timeout chunk {} len", i))?
+                        .map_err(|e| format!("Chunk {} len: {}", i, e))? as u64
+                )?;
                 let mut chunk = vec![0u8; chunk_len];
-                socket.read_exact(&mut chunk).await.map_err(|e| format!("Chunk {} data: {}", i, e))?;
+                tokio::time::timeout(NET_IO_TIMEOUT, socket.read_exact(&mut chunk)).await
+                    .map_err(|_| format!("Timeout chunk {} data", i))?.map_err(|e| format!("Chunk {} data: {}", i, e))?;
 
                 // Verify HMAC
-                let mut mac = HmacSha256::new_from_slice(&secret_vec).unwrap();
+                let mut mac = HmacSha256::new_from_slice(&secret_vec).map_err(|e| format!("Clé HMAC invalide: {}", e))?;
                 mac.update(&chunk);
                 if mac.verify_slice(&sig).is_err() {
                     // Send NACK
@@ -1149,6 +1284,30 @@ fn direct_vram_copy(py: Python, src_ptr: u64, dst_ptr: u64, size_bytes: usize) -
 #[pyfunction]
 #[cfg(not(feature = "cuda"))]
 fn direct_vram_copy(_py: Python, _src_ptr: u64, _dst_ptr: u64, _size_bytes: usize) -> PyResult<bool> {
+    Err(PyValueError::new_err("Compilé sans feature CUDA."))
+}
+
+/// Async P2P GPU-to-GPU copy via cuMemcpyDtoDAsync_v2 on the null stream.
+/// Does NOT block the host CPU. Subsequent PyTorch operations enqueued on the
+/// same CUDA device will naturally serialize after this copy via the default
+/// stream. Gate behind VRM_TRANSFER_ASYNC=1 in transfer_manager.py.
+#[cfg(feature = "cuda")]
+#[pyfunction]
+fn direct_vram_copy_async(py: Python, src_ptr: u64, dst_ptr: u64, size_bytes: usize) -> PyResult<bool> {
+    py.allow_threads(|| {
+        // Enqueue async DtoD on stream=0 (null/default stream).
+        // The host returns immediately; GPU operations on this device that
+        // follow will implicitly wait for this copy to complete.
+        match cuda_ffi::memcpy_dtod_async(dst_ptr, src_ptr, size_bytes, 0) {
+            Ok(()) => Ok(true),
+            Err(e) => Err(PyValueError::new_err(format!("CUDA DtoDAsync failed: {e}")))
+        }
+    })
+}
+
+#[pyfunction]
+#[cfg(not(feature = "cuda"))]
+fn direct_vram_copy_async(_py: Python, _src_ptr: u64, _dst_ptr: u64, _size_bytes: usize) -> PyResult<bool> {
     Err(PyValueError::new_err("Compilé sans feature CUDA."))
 }
 
@@ -1242,7 +1401,9 @@ fn async_gpu_transfer(
 
 /// Benchmark GPU-to-GPU transfer using GpuPipeline.
 /// Allocates temporary GPU memory, runs warmup + timed iterations,
-/// returns dict with bandwidth_gbps, avg_ms, method (p2p/staged), etc.
+/// returns dict with bandwidth_gbit_s (giga-bits/s) + bandwidth_gbyte_s
+/// (giga-bytes/s), avg_ms, method (p2p/staged), etc. The legacy keys
+/// bandwidth_gbps (=gbit_s) and bandwidth_gbs (=gbyte_s) are kept for compat.
 ///
 /// Args:
 ///   src_gpu: source GPU ordinal
@@ -1313,8 +1474,12 @@ fn bench_gpu_transfer(
     m.insert("method".into(), if pipe.p2p_enabled { "p2p" } else { "staged" }.into());
     m.insert("n_buffers".into(), pipe.host_bufs.len().to_string());
     m.insert("avg_ms".into(), format!("{:.3}", avg_s * 1000.0));
+    // Noms historiques (ambigus : "gbps" est en giga-BITS, "gbs" en giga-OCTETS).
     m.insert("bandwidth_gbps".into(), format!("{:.2}", bw_gbps));
     m.insert("bandwidth_gbs".into(), format!("{:.2}", bw_gbs));
+    // Noms explicites (à préférer ; les deux ci-dessus restent pour compat).
+    m.insert("bandwidth_gbit_s".into(), format!("{:.2}", bw_gbps));
+    m.insert("bandwidth_gbyte_s".into(), format!("{:.2}", bw_gbs));
     m.insert("iterations".into(), n_iter.to_string());
     Ok(m)
 }
@@ -1989,6 +2154,7 @@ fn vramancer_rust(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(detect_best_transport, m)?)?;
     m.add_function(wrap_pyfunction!(direct_vram_load, m)?)?;
     m.add_function(wrap_pyfunction!(direct_vram_copy, m)?)?;
+    m.add_function(wrap_pyfunction!(direct_vram_copy_async, m)?)?;
     m.add_function(wrap_pyfunction!(staged_gpu_transfer, m)?)?;
     m.add_function(wrap_pyfunction!(async_gpu_transfer, m)?)?;
     m.add_function(wrap_pyfunction!(bench_gpu_transfer, m)?)?;
@@ -2001,13 +2167,28 @@ fn vramancer_rust(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(receive_tensor_chunked, m)?)?;
     m.add_function(wrap_pyfunction!(cxl_direct_memory_dump, m)?)?;
     m.add_function(wrap_pyfunction!(cxl_direct_memory_load, m)?)?;
+    m.add_function(wrap_pyfunction!(generate_xor_parity, m)?)?;
+    m.add_function(wrap_pyfunction!(repair_xor_shard, m)?)?;
+    // Deprecated aliases (backward compat):
     m.add_function(wrap_pyfunction!(generate_holographic_parity, m)?)?;
     m.add_function(wrap_pyfunction!(heal_holograph, m)?)?;
     m.add_function(wrap_pyfunction!(inject_to_vram_ptr, m)?)?;
     m.add_function(wrap_pyfunction!(batch_tokenize_fast, m)?)?;
     m.add_function(wrap_pyfunction!(tokenize_fast, m)?)?;
     m.add_function(wrap_pyfunction!(tokenizer_vocab_size, m)?)?;
+    m.add_function(wrap_pyfunction!(cuda_available, m)?)?;
     Ok(())
+}
+
+/// Returns True iff libcuda.so.1 / nvcuda.dll is loadable on this host.
+/// Always available; returns False when the crate was built without
+/// the `cuda` feature.
+#[pyfunction]
+fn cuda_available() -> bool {
+    #[cfg(feature = "cuda")]
+    { cuda_ffi::cuda_available() }
+    #[cfg(not(feature = "cuda"))]
+    { false }
 }
 
 /// Injecte un buffer CPU directement dans la VRAM via cuMemcpyHtoD (GIL released)

@@ -1,166 +1,213 @@
-# VRAMancer Roadmap
+# VRAMancer — TODO (refresh 2026-05-10, post V6.E)
 
-## Completed (v1.5.0)
-
-### NVFP4 Performance
-- [x] Identify bottleneck (`torch._scaled_mm` overhead on M=1 / Decode)
-- [x] Implement `core/triton_gemv_nvfp4.py` — custom LUT kernel, nibble unpacking, per-device cache
-- [x] Implement `core/nvfp4_direct.py` — DirectFP4 bypass (plain buffers + `_scaled_mm`), +7% vs torchao
-- [x] M=1 decode: Triton GEMV auto-selected, fallback to cuBLAS for batch > 1
-
-### TurboQuant KV Compression
-- [x] `core/turboquant.py` — Walsh-Hadamard, recursive polar, QJL 1-bit, asymmetric estimator
-- [x] Wired into `core/paged_attention.py` — compress-on-write, compress-on-evict, `compute_attention_turbo()`
-- [x] Env vars `VRM_KV_COMPRESSION=turboquant`, `VRM_KV_COMPRESSION_BITS=3`
-- [x] ~3.5 bits/dim, ~4.6x KV reduction, 0 regressions (821 tests pass)
-
-### ReBAR Full-Window Transfers
-- [x] Detection: sysfs BAR0 size, activation threshold > 4 GB
-- [x] `ReBarTransport.transfer()` — Rust async pipeline / PipelinedTransport with BAR-optimal chunks
-- [x] Wired as explicit Strategy 1.7 in TransferManager (between Rust DtoD and plain CPU-staged)
-
-### VRAM Lending
-- [x] `core/vram_lending.py` — lease state machine, scoring, borrow/reclaim/release
-- [x] Wired into `inference_pipeline.py` — register_gpu at load, background monitoring
-- [x] Wired into `paged_attention.py` — overflow borrow, lease release on eviction
-- [x] Env vars: `VRM_LEND_RATIO`, `VRM_RECLAIM_THRESHOLD`, `VRM_LENDING_INTERVAL`
+État courant : 1.5.0, branche `feat/v6-lending-cooperative`.
+~70% du code est réel et fonctionnel, ~15% incomplet, ~15% stub/dead code.
+Légende effort : **(S)** <1h • **(M)** 1–4h • **(L)** >4h • **(XL)** plusieurs jours
 
 ---
 
-## Future Roadmap
+## ✅ Récemment livré (session 2026-05-10)
 
-### P1 — Wire Existing Code (DONE — all 6 items completed)
+Audit cleanup + auto-detection + Rust hardening :
 
-- [x] **Tensor Parallel default activation** — Wired into `inference_pipeline.py` via `VRM_PARALLEL_MODE=tp`. Step 6b in load() calls `apply_tensor_parallel()`, generate/infer use TP model when active. PP split skipped when TP.
-- [x] **VRAM Lending stress test** — `tests/test_lending_stress.py` (6 tests): concurrent borrow/release (8 threads), borrow+reclaim races, budget consistency (100 cycles), exhaust/recover, close cleanup, 16-thread deadlock detection. All pass.
-- [x] **Dashboard CLI fix** — Port 8000→5030, auth token header, correct GPU/status response parsing, added `/api/pipeline/status` section.
-- [x] **Dashboard web real data** — Fixed `/api/swarm/status` for missing metrics, added `/api/gpu` endpoint with real torch data, added `/api/pipeline/status` connecting to global pipeline.
-- [x] **batch_inference real batching** — `_do_batch()` in production_api batch endpoint now uses `continuous_batcher.submit()` for concurrent processing when batcher running, falls back to sequential otherwise.
-- [x] **Swarm Ledger integration** — Wired into `block_orchestrator.py`: `ledger.reward_node()` on successful network migration, `blocks_processed`/`ledger_available` in `get_state()`.
+- [x] §audit #2 WebGPU "Production Ready" → "experimental — POC, not production-ready" (`core/webgpu_backend.py`)
+- [x] §audit #3 `swarm_ledger.py` orphelin → redirect explicite vers `_deprecated/`
+- [x] §audit #4 `supervision_api.py` NODES hardcodés → `NODES = []` dynamique (heartbeat/discovery)
+- [x] §audit #5 docstrings honnêtes : `cross_vendor_bridge.py` plus de "true zero-copy" trompeur, csrc DMA-BUF + `file_offload.cpp` (ex `software_cxl.cpp`) headers explicites
+- [x] §audit #6 centralisation env vars : `core/env_flags.py` registry de **140 flags** + `dump_flags()` / `dump_active()` / `unknown_env_flags()` / CLI debug
+- [x] §1 SQLite schema versioning v2 (`core/persistence.py`, `schema_version` table + `created_at`)
+- [x] §2 `recommend_quantization()` SM/VRAM → nvfp4/bf16/nf4/int8/gguf (`core/auto_detect.py`)
+- [x] §2 `VRM_QUANTIZATION=auto` câblé dans HuggingFaceBackend
+- [x] §2 `detect_virtualization()` + `should_disable_p2p()` (Proxmox Q35/i440FX, KVM, VMware, Hyper-V) câblé dans `TransferManager.__init__`
+- [x] §5 Rust crate : `cuda_available()` exposé + chargement `Option<libloading::Library>` (plus de `.expect` qui crash) + support `nvcuda.dll` Windows
+- [x] §5 `core/rust_bridge.py` : façade Python qui ne lève jamais d'exception (`has_rust()`, `cuda_available()`, `hmac_verify()`)
+- [x] §5 Bench HMAC Rust vs Python avec test de réalité (`benchmarks/bench_hmac_rust_vs_python.py`)
+- [x] §6 `admin/admin` default → mot de passe random sur disque mode 0600 ou `VRM_DEFAULT_ADMIN_PASS`, refus en prod (`core/auth_strong.py`)
 
-### P2 — Implement Missing Features (DONE — all 6 items completed)
+Session 2026-05-11 (suite):
 
-- [x] **DMA-BUF cross-vendor zero-copy** — `csrc/dmabuf_bridge.c` C extension with DRM PRIME ioctls (`drmPrimeHandleToFD`/`drmPrimeFDToHandle`). `DMABufTransport.transfer()` wired: native probe → open → transfer → close, CUDA IPC fallback. Makefile target `native-dmabuf`.
-- [x] **ReBAR mmap direct VRAM access** — `csrc/rebar_mmap.c` C extension for PCIe BAR0 mmap (WC mapping, read/write/copy). `ReBarTransport` loads native lib, opens mappings per GPU BDF. Makefile target `native-rebar`.
-- [x] **WebGPU Swarm compute** — `backends_webgpu.py` `generate()` implements draft-verify speculative decoding. `_verify_speculative_tokens()` re-runs each draft token through sequential forward pass, accepts only verified prefix.
-- [x] **WebGPU Node browser runtime** — `web/vramancer_worker.js` (VRAMancerWorker class with tiled 16×16 WGSL GEMM shader, WebSocket binary protocol, capability reporting) + `web/index.html` (browser UI with connect/disconnect, stats, log).
-- [x] **VTP Network Protocol** — `VTPServer._handle_client()` rewritten: full CONTROL-opcode handshake (JSON node info), `_recv_loop()` (HEARTBEAT ack, TENSOR/KV_CACHE decode+store, credit grants). `LLMTransport.connect_peer_tcp()` performs client-side handshake.
-- [x] **Parity recovery in PagedAttention** — `_evict_lru()` encodes page data via `parity_kv.store_engram()` (3 XOR shards) before eviction. `recover_page()` method heals evicted pages from parity engrams.
+- [x] §0 Doc piège "0 streams" en B-2 warmup → header explicite ajouté dans `core/expert_pinning.py` (section "Metrics gotcha")
+- [x] §5 PyO3 maturin wheel CI → ajout `build-sdist` + job `publish` PyPI OIDC déclenché sur tag dans `.github/workflows/build-rust.yml` ; clippy assoupli pour les warnings PyO3 macro-generated
+- [x] §7 Grafana dashboards validés : 25 métriques utilisées toutes exposées dans `core/metrics.py` ; 16 alerting rules valides
+- [x] §7 Healthcheck K8s : `/ready` retourne maintenant 503 si modèle non chargé (`VRM_READY_REQUIRE_MODEL=0` pour bypass) ; `monitoring/k8s-deployment-example.yaml` ajouté avec liveness/readiness/startup probes
+- [x] §9 `_deprecated/` exclu du wheel via `[tool.setuptools.packages.find].exclude` + `MANIFEST.in` créé pour la sdist (validé : 0 package `_deprecated` détecté)
+- [x] §11 Quickstart 5 min : `docs/QUICKSTART.md` existe déjà (110 lignes, complet)
 
-### P3 — Dead Code Cleanup (DONE — all 3 items completed)
+Session 2026-05-11 (suite 2 — "fais au mieux") :
 
-- [x] **Move to `_deprecated/`**: `network/packets.py` (dead, 0 imports), `network/interface_selector.py` (dead, 0 imports), `network/vramancer_link.py` (7-line re-export shim, inlined in block_orchestrator.py → `from core.network.transmission`). `core/telemetry.py` KEPT (active in supervision_api, telemetry_cli, tests). `network/resource_aggregator.py` already deprecated prior session.
-- [x] **Fix or remove**: `network/interface_selector.py` moved to `_deprecated/`. `network/security.py` KEPT (test-only, logging bug already fixed prior session). Fixed `core/network/__init__.py` (removed interface_selector import) and `tests/test_imports.py`.
-- [x] **Clean dead code in `inference_pipeline.py` + `backends.py`**: Removed WebGPUNodeManager init/assignment/shutdown (~30 LOC), orphaned Connectome startup, and 2 WebGPU intercept blocks in backends.py (~100 LOC). Total ~150 LOC removed.
+- [x] §2 **Backend auto-pick** : `recommend_backend()` dans `core/auto_detect.py` (heuristiques gguf → llamacpp, awq/gptq/fp8 → vllm, ollama:// → ollama, sinon huggingface ; fallback si non-installé) + 10 tests `tests/test_auto_detect_backend.py`
+- [x] §2 **Hot-plug GPU/RAM** : `core/utils.py` détecte changement de `torch.cuda.device_count()` et invalide `_get_logical_mapping()` automatiquement + `invalidate_device_cache()` public
+- [x] §6 **Audit log persistant** : `core/security/audit_log.py` (SQLite WAL, token hashé sha256[:16] jamais en clair, 3 index, thread-safe, never-raise) + before/after_request hooks dans `core/security/__init__.py` + 6 tests `tests/test_security_audit_log.py`
+- [x] §7 **Alerting rules complémentaires** : 6 nouvelles règles dans `monitoring/alerting_rules.yml` (KV cache pressure/borrowing, batcher queue depth, circuit breaker open/flapping) → 22 rules / 9 groupes
+- [x] §7 **Circuit breaker instrumenté** : `core/metrics.py` expose `CIRCUIT_BREAKER_STATE` (gauge 0/1/2) + `CIRCUIT_BREAKER_TRIPS` (counter), `core/api/circuit_breaker.py` publie l'état à chaque transition
+- [x] §9 **README compatibility matrix** : ajout d'une matrice 16 lignes (backends + features) × 7 colonnes (OS + accelerators) dans `README.md`
+- [x] **Bug fix critique** : `core/health.py` variable shadowing `result` → `nvml_result` (le NVML handle dict écrasait le dict de retour, surfaced via `pynvml` désormais installé)
 
-### P4 — Performance & Research (DONE — all 5 items completed)
-
-- [x] **CUDA Graph capture for decode** — `core/cuda_graph_decode.py`: `CUDAGraphRunner` with per-batch-size graph cache, warmup-then-capture, automatic replay. Wired into `inference_pipeline.py` (`_init_cuda_graph_runner`, `_protected_infer`). Opt-in via `VRM_CUDA_GRAPH=1`. Skipped for vLLM/Ollama/llama.cpp backends.
-- [x] **Speculative decoding auto-tuning** — `SwarmSpeculativeDecoder` now has `adaptive=True` (default), rolling window of last N rounds, adjusts gamma between `gamma_min=2` and `gamma_max=12`. High acceptance (>80%) → increase K, low (<30%) → decrease. Env: `VRM_SPEC_ADAPTIVE=0` to disable, `VRM_SPEC_WINDOW=10`.
-- [x] **GGUF multi-GPU** — `_compute_tensor_split()` now weights by VRAM × compute capability (SM count × clock). 3-level fallback: hetero_config → `torch.cuda.mem_get_info` → pynvml. `_select_split_mode()` auto-detects P2P via `can_device_access_peer` → row split (mode 2) if available, layer split (mode 1) otherwise.
-- [x] **TurboQuant CUDA kernel** — `paged_attention_decode_q4_kernel` in `csrc/paged_attention_kernel.cu`: inline 4-bit dequantization (packed uint8 nibbles, per-group fp16 scale/zero-point, group_size=32) fused with warp-level online softmax. Python wrapper `paged_attention_decode_q4()` in `paged_attention_cuda.py` with PyTorch fallback.
-- [x] **Continuous batching async tokenizer** — `ContinuousBatcher` Phase 1b now uses `ThreadPoolExecutor` (default 4 workers, `VRM_TOKENIZER_WORKERS` env) for parallel tokenization. Falls back to sequential for single requests. Pool shutdown in `stop()`.
-
-### P5 — Infrastructure (DONE — all 4 items completed)
-
-- [x] **Rust vramancer_rust CI** — Enhanced `build-rust.yml`: added `lint` job (cargo fmt + clippy), `test` job (cargo test), Rust toolchain setup (dtolnay/rust-toolchain), Python import verification after wheel build. Build-wheels now depends on lint+test passing.
-- [x] **Schema versioning** — `core/persistence.py`: added `schema_version` table, `CURRENT_SCHEMA_VERSION=2`, `_get_schema_version()`, `_apply_migrations()` with sequential migration system. V2 adds `created_at` column to workflows. Legacy v1 databases auto-migrated. `get_schema_version()` public API.
-- [x] **Config hot-reload subsystem restart** — `core/config.py`: added `register_reload_hook(fn)`, `unregister_reload_hook(fn)`. `reload_config()` now calls all hooks with `(old_config, new_config)`. Hooks called outside lock, exceptions caught per-hook. Duplicate registration prevention.
-- [x] **Metrics lifecycle** — `core/metrics.py`: added `reset_metrics()` that clears labeled gauges (removes stale GPU label sets) and zeros simple gauges. 40+ metrics tracked in `_LABELED_GAUGES`/`_SIMPLE_GAUGES`. Wired into `InferencePipeline.shutdown()`. Counters/Histograms left monotonic per Prometheus convention.
-
-### Post-Audit — Honest Naming & UX (DONE — all 4 items completed)
-
-- [x] **One-command CLI** — Added `vramancer run <model>` command: auto-detects GPUs, loads model with VRAM-proportional split, supports interactive mode (REPL) and one-shot (`-p "prompt"`). Options: `--gpus`, `-q` (quantization), `--backend`, `--temperature`, `--max-tokens`.
-- [x] **README rewrite** — Complete rewrite focused on the core use case. 10-line quickstart showing `vramancer run`, real benchmark table (14B OOM proof), install/usage/backends/config sections. Replaced marketing D- README with honest B+ documentation.
-- [x] **Rename marketing modules** — `core/turboquant.py` → `core/kv_quantizer.py` (`KVCacheCompressor` class), `core/network/fibre_fastpath.py` → `core/network/network_transport.py`. Backward-compat shims in old locations. All 20+ imports updated in production code and tests. Env var `VRM_KV_COMPRESSION=turboquant` preserved for backward compat.
-- [x] **Benchmark vs accelerate** — `benchmarks/bench_vs_accelerate.py`: side-by-side comparison of `accelerate device_map="balanced"` vs VRAMancer VRAM-proportional split. Measures tok/s, VRAM usage, supports quantization modes. JSON results output.
+**Suite tests : 1090 passed, 0 failed, 69 skipped** (gain +16 nouveaux tests, +1 bug pré-existant corrigé).
 
 ---
 
-## Prochaines améliorations
-
-### Stabilité des tests (DONE — 3/3)
-
-- [x] **Isolation test suite** — Fixtures `gpu_monitor`, `stream_manager`, `flask_test_client` dans `conftest.py` ont maintenant un teardown propre (`stop_polling()`, `stop_monitoring()`, `executor.shutdown()`). `PipelineRegistry.shutdown()` arrête aussi `ClusterDiscovery`. Session-scoped fixture nettoie les threads daemon résiduels.
-- [x] **Race condition batcher** — Ajout `threading.Event` (`_ready`) dans `ContinuousBatcher`. `start()` attend `_ready.wait(5s)` jusqu'à ce que `_loop()` signale qu'il est prêt. `stop()` notifie la Condition pour débloquer le loop immédiatement.
-- [x] **Timeout pynvml dans health.py** — Tous les appels pynvml (`nvmlInit`, `nvmlDeviceGetHandleByIndex`, `nvmlDeviceGetTemperature`) wrappés dans `_call_with_timeout()` (ThreadPoolExecutor, défaut 5s configurable via `VRM_PYNVML_TIMEOUT`).
-
-### Bugs & correctifs modules Grade C (DONE — 4/4)
-
-- [x] **backends_vllm.py OOM retry** — Le retry OOM réduit maintenant `gpu_memory_utilization` (-0.10, min 0.50) au lieu de diviser `max_tokens`. Le vrai problème est la pression mémoire du moteur, pas la longueur de séquence.
-- [x] **backends_ollama.py resource leak** — `generate_async()` supprimé (dead code non câblé). Import `aiohttp` et `_session` retirés. Plus de fuite de connexions.
-- [x] **block_router.py load_block_from_disk** — Charge maintenant réellement via `torch.load(path, weights_only=True)` au lieu de retourner un `Identity()` stub. Fallback gracieux si fichier manquant. Label "zero-copy" retiré du commentaire de désérialisation.
-- [x] **stream_manager.py eviction priority** — Le tri d'éviction était **inversé** : `sort(key=-priority)` + `[0]` prenait le bloc de plus haute priorité au lieu de la plus basse. Corrigé en `sort(key=priority)` + `[0]` dans `swap_if_needed()` et `_evict_lowest_priority()`.
-
-### Multi-accélérateur (DONE — 3/3)
-
-- [x] **routes_ops.py ROCm/MPS** — Les endpoints `/api/gpu` et `/api/nodes` utilisent maintenant `core/utils.py:enumerate_devices()` et `detect_backend()` au lieu de `torch.cuda.*` direct. Supporte CUDA, ROCm (via HIP) et MPS. Réponse JSON inclut `backend`, `vendor`, `hip_version` si applicable.
-- [x] **monitor.py ROCm validation** — Documentation ajoutée sur les limitations du fallback ROCm-SMI (non testé sur AMD réel, mapping d'index card→torch.cuda potentiellement divergent avec HIP_VISIBLE_DEVICES). Documentation du contrat d'index dans `_query_allocated()`.
-- [x] **tensor_parallel.py robustesse** — Fallback CPU all-reduce corrigé (`torch.no_grad()` + `torch.zeros_like` au lieu de `sum()`). GQA gère les cas non-divisibles (repeat_interleave + slice). Architecture inconnue log un warning. `apply_tensor_parallel()` utilise `detect_backend()` et refuse MPS (single-device).
-
-### Performance (DONE — 3/3)
-
-- [x] **layer_profiler.py bande passante** — Détection dynamique PCIe via nvidia-smi (rapide, sans init GPU) → pynvml fallback → défaut conservateur Gen3 x16 (15.75 GB/s). Résultat caché. `compute_optimal_placement()` et `PlacementEngine.place_model()` utilisent auto-detect au lieu du 25 GB/s hardcodé. Nouveau export `detect_pcie_bandwidth()`.
-- [x] **continuous_batcher.py lock contention** — Audit confirmé : tokenisation et forward GPU sont déjà hors lock. Seules les mutations de queue (append/evict) sont sous lock. Fix : le `ThreadPoolExecutor` tokenizer est maintenant toujours créé (min 1 worker) pour que `_finish_request_decode()` ne bloque jamais la boucle batcher en mode synchrone.
-- [x] **cuda_graph_decode.py KV update** — Ajout de `_GraphState` avec buffers statiques pour `attention_mask`, `position_ids` et `cache_position`. Capture utilise des buffers pré-alloués à `max_seq_len`. Replay met à jour les buffers in-place (même adresses mémoire) et incrémente `cur_pos`. Fallback eager si `cur_pos >= max_seq_len`.
-
-### Sécurité (DONE — 3/3)
-
-- [x] **auth_strong.py credentials par défaut** — Mot de passe admin aléatoire écrit dans un fichier `.vrm_admin_creds` (mode 0600) au lieu d'être loggé en clair. Ajout `must_change_password` (User dataclass + JWT payload `pwd_change`). Nouvelle fonction `change_password()`. `create_user()` accepte `must_change_password`. En prod, refus de créer un admin par défaut (déjà le cas).
-- [x] **production_api.py circuit breaker SSE** — Ajout timeout SSE configurable (`VRM_SSE_TIMEOUT`, défaut 300s). Le générateur `_guarded_sse()` vérifie le temps écoulé à chaque chunk et coupe le stream avec un event d'erreur JSON en cas de dépassement. Circuit breaker enregistre un failure sur timeout.
-- [x] **production_api.py queue depth** — Nouveau `_QueueCounter` : thread-safe par défaut (lock interne), cross-process via `VRM_SHARED_QUEUE=1` (file lock `fcntl` sur compteur binaire 4 octets). Remplace `queue_depth[0]` + `queue_lock` partout (factory, routes, SSE, status endpoint).
-
-### Nettoyage code natif (DONE — 3/3)
-
-- [x] **software_cxl.cpp renommé** — Fichier renommé en `file_offload.cpp`. Commentaires nettoyés : clairement identifié comme du file I/O simple (`std::ofstream`/`std::ifstream`), pas du CXL matériel. Module pybind11 conserve le nom `software_cxl` pour compatibilité avec le Rust crate.
-- [x] **dmabuf_bridge.c documenté** — Header augmenté avec section STATUS : REAL (open/close/export/import/probe/transfer mmap read) vs STUB (`vrm_dmabuf_copy` pointer-based = returns -1, dst mmap write non implémenté). Documente que le chemin cross-GPU effectif est CUDA IPC ou CPU-staged.
-- [x] **vtp_core.cpp L3+ clarifiés** — Header réécrit : REAL (L1/L2 P2P CUDA via `fast_p2p_transfer_cuda`) vs STUB (L3-L7 = `src.clone()`). Commentaires inline pour chaque stub pointant vers les implémentations Python réelles (`core/network/`). L'enum L1-L7 conservé pour l'API.
-
-### Dashboard (DONE — 2/2)
-
-- [x] **dashboard_web.py données réelles** — Template 3D graph remplacé : les nœuds hardcodés (RTX 4090, RTX 3090, Apple M3, WebGPU Edge) sont supprimés. Le graphe charge dynamiquement les GPUs réels via `fetch('/api/gpu')`. Méthode Alpine renommée `updateMockMetrics` → `updateMetrics`.
-- [x] **dashboard/launcher.py** — Corrigé : le branch `web` appelait `dashboard_web()` (le module) au lieu de `dashboard_web.launch()`. Imports nettoyés (retrait `importlib.util`, `subprocess` inutilisés). Import `dashboard_web` déplacé dans le branch pour éviter l'import au top-level.
-
-### Réseau (DONE — 3/3)
-
-- [x] **nat_traversal.py compléter** — Docstring réécrite avec section STATUS détaillant REAL (STUN client, IPv6 detection, LAN ULA), FUNCTIONAL (hole punch — requiert coordination simultanée, relay send — one-shot unidirectionnel sans serveur), NOT IMPLEMENTED (relay server, NAT type classification, 6in4/Teredo tunnel). Conclusion : VRAMancer est conçu pour LAN ou WAN direct, multi-site NAT nécessite un VPN.
-- [x] **supervision_api.py HA sync** — `/api/ha/apply` est COMPLET (HMAC auth, anti-replay, compression zstd/lz4/zlib, full+delta sync, journal rotation). Docstring ajoutée documentant que le sender side (push périodique vers pairs) n'est PAS implémenté — un orchestrateur externe doit appeler `/api/ha/apply`. NODES se peuple dynamiquement via heartbeat/edge_report/telemetry_ingest.
-- [x] **aitp_receiver.py XDP cleanup** — `_xdp_available()` et `_loop_xdp()` utilisent maintenant `getattr(socket, "AF_XDP", 44)` au lieu du magic number `44`. Docstring ajoutée expliquant les prérequis (Linux >= 4.18, root/CAP_NET_ADMIN, BPF program pré-chargé). Le fallback gracieux (XDP → raw → UDP) était déjà correct.
+## 0. Court terme — finir V6.E proprement
+- [ ] **Phase B-3** : préfetch prédictif des cold experts (router-history-based) pour overlap PCIe ↔ compute en `stream_every`. Cible : combler les 56-69% de gap mesurés vs B-2 sans payer le miroir 24.8 GB. *(L)*
+- [ ] **Cohorte 5070 Ti FP8 KV** : trouver le ceiling ctx (`VRM_BENCH_MAX_MODEL_LEN=12288/16384`) avec B-2 warmup. *(S)*
+- [x] ~~**Documenter le piège "0 streams" en B-2 warmup**~~ *(S)* — fait : header "Metrics gotcha" dans `core/expert_pinning.py`
+- [ ] **Push de la branche `feat/v6-lending-cooperative`** + PR vers `main` avec résumé honnête (B-1 vs B-2, limitations, calibration). *(M)*
 
 ---
 
-## Le Dernier Mile
-
-### DM1 — llama.cpp backend principal ✅
-
-- [x] **Auto-détection GGUF dans select_backend()** — `_is_gguf_model()` détecte `.gguf` extension + HF GGUF repos. Priorité : explicit > GGUF detect > vLLM > HuggingFace.
-- [x] **Recommandation dans select_backend()** — Log tip quand llama.cpp est disponible mais modèle est HF format.
-- [x] **Documentation** — README.md mis à jour : llama.cpp listé "(recommended)", GGUF auto-select documenté.
-
-### DM2 — Câbler le Rust GpuPipeline dans TransferManager ✅
-
-- [x] **Strategy 1.5 fonctionne déjà** — `direct_vram_copy()` et `GpuPipeline` exposés via PyO3 (audit était obsolète). `transfer_manager.py` les appelle correctement avec fallback cascade.
-- [x] **Test d'intégration** — `test_rust_pipeline_cascade` ajouté dans `test_all_bricks.py`.
-
-### DM3 — Nettoyage stubs morts ✅
-
-- [x] **Déplacé vers `_deprecated/`** — `backends_webgpu.py`, `webgpu_node.py`, `batch_inference.py`. `_deprecated/__init__.py` créé.
-- [x] **Imports nettoyés** — `production_api.py` (webgpu_node import supprimé), `test_backend_webgpu.py`, `test_production_improvements.py`, `test_observability.py` (imports mis à jour vers `_deprecated.*`).
-- [x] **build-rust.yml** — Ajouté jobs lint (cargo clippy/fmt) + test (cargo test) + Python import verify + dtolnay/rust-toolchain.
+## 1. Stabiliser le cœur (toujours pertinent)
+- [ ] Test e2e multi-GPU réel pour `core/transfer_manager.py` (P2P + CPU-staged fallback). *(L)*
+- [ ] Plan de secours OOM dans `InferencePipeline` pour modèles répartis (eviction → CPU offload graceful). *(M)*
+- [ ] Race condition pré-existante dans `test_chaos_concurrency.py::test_pipeline_concurrent_load` — désélectionnée en CI, à fixer ou retirer. *(M)*
+- [x] ~~Schema versioning `core/persistence.py` (SQLite).~~ *(S)* — fait, v2 avec `schema_version` table + `created_at`
+- [ ] Distribuer le circuit breaker (actuellement local par process, casse en gunicorn multi-worker). *(M)*
 
 ---
 
-## TurboQuant + Sparse V ✅
+## 2. Auto-détection (axe transverse, important pour onboarding)
+- [ ] **Détection topologie GPU au démarrage** : NVLink, P2P matrix, NUMA, PCIe gen/lanes, vendor mix → exposer dans `/api/system` et écrire un `topology.json` à côté de `config.yaml`. *(M)*
+- [x] ~~**Backend auto-pick**~~ *(M)* — fait : `recommend_backend()` dans `core/auto_detect.py` (10 tests)
+- [x] ~~**Quantization auto-pick** selon GPU~~ *(S)* — fait via `core/auto_detect.recommend_quantization()` + `VRM_QUANTIZATION=auto` câblé dans HuggingFaceBackend
+- [ ] **Auto-tune `cpu_offload_gb`** en fonction de `model_size + max_model_len + free_vram`. *(M)*
+- [x] ~~**Hot-plug GPU/RAM**~~ *(M)* — fait : `invalidate_device_cache()` + détection auto via `_LOGICAL_MAPPING_DEVICE_COUNT` dans `core/utils.py`
+- [ ] **Détection ReBAR** dans `experimental/cross_vendor_bridge.py` : déjà détecté, pas exploité — câbler à `transfer_manager` Strategy 1.5. *(L)*
+- [x] ~~**VM Proxmox détection auto**~~ *(S)* — fait via `core/auto_detect.detect_virtualization()` + `should_disable_p2p()` câblé dans `TransferManager`
 
-### Sparse V Optimization (Mars 2026)
+---
 
-Implémentation de l'optimisation Sparse V inspirée du papier Google TurboQuant (ICLR 2026)
-et du travail de Tom Turney : après le softmax sur les scores d'attention compressés, seuls
-~10% des tokens portent un poids significatif. On skip la décompression des 90% restants.
+## 3. Interfaces LLM utilisateur (gap majeur pour adoption)
+- [ ] **CLI unifiée** : `vramancer serve <model>` / `vramancer chat` / `vramancer bench` / `vramancer gpu-list`. Aujourd'hui éparpillé entre `vramancer/main.py`, scripts ad-hoc et bench scripts. *(L)*
+- [ ] **OpenAI-compat client SDK** : juste un wrapper `from vramancer import Client` autour de la route Flask, avec retries + streaming. *(M)*
+- [ ] **Chat REPL terminal** propre (Rich/Textual) avec historique persistent, sliders température/top-p, switch de modèle live. *(M)*
+- [ ] **Dashboard web** : retirer le GPU data hardcodé dans les templates, brancher sur `/api/gpu` réel. *(M)*
+- [ ] **Model browser** : intégration HF Hub avec filtre par taille / quant supportée par les GPU détectés (lien avec axe Auto-détection). *(M)*
+- [ ] **Mode "deux modèles"** : draft + verifier en speculative decoding via UI cocher 1 modèle = activation auto du draft compagnon (Qwen→0.5B, Llama→1B). *(M)*
+- [ ] **Endpoints OpenAI manquants** : `/v1/embeddings`, `/v1/audio/*` (placeholder), function calling complet. *(L)*
+- [ ] **Multi-tenant simple** : namespacing par token API, quotas par tenant. *(L)*
 
-- [x] **`kv_quantizer.py` — méthode `sparse_v_attend()`** — Prend query, compressed keys, list de compressed values, `sparse_v_ratio`. Top-k sélection → décompression sélective → renormalisation → weighted sum. API standalone pour usage direct.
-- [x] **`paged_attention.py` — `compute_attention_turbo()` avec Sparse V** — Après softmax, si `sparse_v_ratio < 1.0`, seuls les top-k% tokens sont décompressés. Renormalisation automatique des poids.
-- [x] **`PagedKVConfig.sparse_v_ratio`** — Nouveau champ (defaut `1.0` = all). Env var `VRM_SPARSE_V_RATIO`. Propagé via `from_model()`.
-- [x] **Tests unitaires** — 7 tests : shape, quality (cosine sim > 0.75), decompression count (10/100), single token, short sequence, ratio=1.0 identity. Classe `TestSparseV` dans `test_turboquant.py`.
-- [x] **Tests intégration** — 5 tests : config default, custom ratio, env var, `compute_attention_turbo()` avec Sparse V, shape consistency. Classe `TestSparseVIntegration` dans `test_turboquant_integration.py`.
-- [x] **957 tests passent, 0 échec.**
+---
+
+## 4. Swarm & Cluster (le plus prometteur, le moins fini)
+- [ ] **Câbler `swarm_ledger.py` à l'orchestrateur** : aujourd'hui SQLite ledger fonctionnel mais orphelin. Routing des requêtes vers contributeurs réels, payout virtuel/monétaire. *(XL)*
+- [ ] **Supervision API : retirer les NODES hardcodés** (`raspberrypi`, `jetson`, `workstation` fictifs dans `core/network/supervision_api.py`). Brancher sur `cluster_discovery.py` réel. *(M)*
+- [ ] **Auto-join cluster** : un nouveau worker fait `vramancer join --leader <ip>` ou découverte mDNS auto, négocie ses capabilities, reçoit des layers. *(L)*
+- [ ] **Layer sharding cross-node** : aujourd'hui la PP cross-node passe par VTP mais pas de scheduler global. Étendre `BlockOrchestrator` au multi-node. *(XL)*
+- [ ] **Failover live** : si un node tombe, redistribuer ses layers sur les survivants sans drop la requête en cours. État interne dans `gpu_fault_tolerance.py` à étendre cluster-wide. *(XL)*
+- [ ] **WebGPU node** (`webgpu_node.py`, 800 LOC) : task dispatcher incomplet, mock auto-complete. À finir si on veut vraiment des navigateurs comme workers. *(L)*
+- [ ] **AITP/RAID stress test cross-node réel** : 3+ machines, mesure recovery FEC sous packet loss simulé. *(M)*
+- [ ] **Bench cross-node WAN** : on a `bench_wan_4g.py` (memo) — refaire avec setup actuel (LAN gigabit, 10G, WAN 4G/5G). *(M)*
+
+---
+
+## 5. Rust core / Tokio (potentiel énorme, peu exploité)
+État : `rust_core/` compile (1.6 MB .so), CUDA FFI réel via `libloading`, HMAC 100x plus rapide que Python, triple-buffering DtoD non câblé.
+
+- [ ] **Câbler `direct_vram_copy()` Rust → `transfer_manager.py` Strategy 1.5** : aujourd'hui le triple-buffer Rust existe mais n'est pas exposé via PyO3 vers la couche Python (memo dit "non câblé"). Vérifier l'état réel et finir le binding. *(L)*
+- [ ] **Tokio runtime pour `network_raid.py`** : actuellement ThreadPoolExecutor. Réécrire le shard dispatch en Rust async/Tokio → gain attendu sur les très grosses sharded transfers. *(L)*
+- [ ] **Rust event loop pour `cluster_discovery.py`** : Bully election + heartbeat = candidat parfait pour Tokio (low-latency, beaucoup de timers concurrents). *(L)*
+- [ ] **Rust kernel pour `kv_quantizer.py`** : 56 compress/token sur 7B, GIL lock cher. CUDA via cudarc + cargo feature. *(XL)*
+- [x] ~~**Fallback Python gracieux quand `rust_core` absent**~~ *(S)* — fait : `core/rust_bridge.py` façade safe, `cuda_available()` exposé, `Option<Library>` côté Rust
+- [ ] **Linux-only contrainte** : `libcuda.so.1` seulement. ~~Ajouter Windows (`nvcuda.dll`)~~ partiellement fait (Rust try `nvcuda.dll` sur Windows) + macOS (Metal via `metal-rs`?). *(L)*
+- [x] ~~**Bench Rust HMAC vs Python**~~ *(S)* — fait : `benchmarks/bench_hmac_rust_vs_python.py` avec warning si <3x speedup
+- [ ] **PyO3 + maturin wheel CI** : déjà existante, vérifier qu'elle publie vraiment des wheels usables sur PyPI. *(S)*
+
+---
+
+## 6. Sécurité durcie (bloquant pour prod B2B)
+- [x] ~~**Retirer `admin/admin` default en dev**~~ *(S)* — fait : random password sur disque mode 0600 ou `VRM_DEFAULT_ADMIN_PASS`, refus explicite en prod
+- [ ] **MFA / SSO** : aujourd'hui `auth_strong.py` = JWT + PBKDF2 seul. Au minimum SSO OIDC pour entreprises. *(L)*
+- [x] ~~**Audit log persistent**~~ *(M)* — fait : `core/security/audit_log.py` (SQLite WAL, token hashé, hooks Flask) + 6 tests
+- [ ] **Rate limiting distribué** (Redis backend) au lieu du local per-IP actuel. *(M)*
+- [ ] **Tests sécurité** : `verify_request()`, `enforce_startup_checks()`, prompt injection detection. *(M)*
+- [ ] **Secrets management** : aujourd'hui ENV vars. Intégration Vault / AWS Secrets / SOPS optionnelle. *(M)*
+
+---
+
+## 7. Observabilité production
+- [ ] **OpenTelemetry traces complètes** : `core/tracing.py` est OK mais pas instrumenté partout (pipeline → backend → transfer). *(M)*
+- [x] ~~**Grafana dashboards prêts à l'emploi**~~ *(S)* — validé : 25 métriques toutes exposées, 16 alerting rules valides, provisioning OK
+- [x] ~~**Alerting rules**~~ *(M)* — fait : 22 rules / 9 groupes (KV cache pressure, borrowing, batcher queue, circuit breaker open/flapping)
+- [x] ~~**Healthcheck Kubernetes-ready**~~ *(S)* — fait : `/ready` retourne 503 si modèle absent (override `VRM_READY_REQUIRE_MODEL=0`), manifest `monitoring/k8s-deployment-example.yaml` avec liveness/readiness/startupProbe
+
+---
+
+## 8. Performances (axe permanent)
+- [ ] **Bare-metal vs VM Proxmox** : mesurer overhead VFIO. Si <5%, tant mieux ; si >15%, documenter clairement. *(M)*
+- [ ] **CUDA Graph multi-GPU** : actuellement single-GPU only (`cuda_graph_decode.py`). *(XL)*
+- [ ] **Transfer overlap PP** : prefetch couche N+1 pendant compute couche N. Aujourd'hui PP sériel. *(L)*
+- [ ] **Sync points pipeline parallel** : profiler avec Nsight, identifier les barrières inutiles. *(L)*
+- [ ] **Triton fused sampling** : `triton_sampling.py` fallback PyTorch toujours utilisé en pratique, le triton_full path est peu emprunté. Diagnostiquer pourquoi (cf. `VRM_DEBUG_SAMPLING=1`). *(M)*
+- [ ] **Benchmark continuous batcher concurrent** : 10/50/100 utilisateurs concurrents, mesurer p50/p95/p99 latency. *(L)*
+
+---
+
+## 9. Qualité code & dette technique
+- [x] ~~**Module central `core/env_flags.py`**~~ *(M)* — fait : 140 flags registry + dump_flags/dump_active/unknown_env_flags + CLI
+- [ ] **Supprimer / re-implémenter le dead code** :
+  - [ ] `core/backends_webgpu.py` POC (déjà marqué "Production Ready = FAUX") *(S delete / XL implement)*
+  - [x] ~~`core/telemetry.py`~~ — **PAS orphelin** : 3 consommateurs réels (`vramancer/cli/telemetry_cli.py`, `core/network/supervision_api.py`, tests). Audit corrigé.
+  - [ ] `core/orchestrator/heterogeneous_manager.py` GPU scoring hardcodé string-match → mesure réelle. *(M)*
+  - [ ] `core/orchestrator/block_orchestrator.py` benchmarks single-block trompeurs *(M)*
+- [ ] **Docstrings honnêtes** : déjà commencé (RemoteExecutor "zero-copy" → corrigé, `cross_vendor_bridge.py` DMA-BUF → corrigé). Étendre à tous les modules grade C. *(M)*
+- [x] ~~**Renommer `software_cxl.cpp` → `file_offload.cpp`**~~ *(S)* — fait, header explicite "plain file I/O, NOT CXL hardware"
+- [x] ~~**Archiver `_deprecated/`** dans le packaging~~ *(S)* — fait : `pyproject.toml` `[tool.setuptools.packages.find].exclude` + `MANIFEST.in` `prune _deprecated` (validé : 0 package détecté)
+- [x] ~~**Matrice de compat backend/OS/GPU dans le README**~~ *(M)* — fait : tableau 16×7 (backends + features × OS + accelerators) dans `README.md` ; distinction production-ready vs experimental reste à affiner.
+
+---
+
+## 10. Packaging & distribution
+- [ ] **`pip install vramancer && vramancer serve <model>` en 5 min** : c'est l'objectif onboarding. Aujourd'hui il faut config + launchers + vérifs. *(L)*
+- [ ] **Docker multi-stage officiel** : `Dockerfile` existe, vérifier qu'il marche pour cuda+rocm en image unique ou splitter. *(M)*
+- [ ] **Wheels PyPI** : auto-publish sur tag `v*`. *(M)*
+- [ ] **Conda-forge package** (bonus). *(M)*
+- [ ] **Homebrew tap macOS** (CPU/MPS). *(M)*
+- [ ] **Helm chart Kubernetes** pour déploiement cluster. *(L)*
+
+---
+
+## 11. Documentation utilisateur (axe sous-investi)
+- [x] ~~**Quickstart 5 min**~~ *(S)* — `docs/QUICKSTART.md` existe (110 lignes, install + verify + serve + curl OpenAI-compat)
+- [ ] **Use cases tutorials** :
+  - "Faire tourner Llama-70B sur 2× RTX 3090"
+  - "Mix RTX 5090 + 3090 sans perdre 30% des perfs"
+  - "Self-hosted ChatGPT pour mon équipe"
+  - "Edge deployment Jetson + dashboard remote"
+- [ ] **API reference auto-générée** (Sphinx ou MkDocs avec mkdocstrings). *(M)*
+- [ ] **Architecture decision records** : pourquoi PP par défaut vs TP, pourquoi pas torchrun, etc. *(M)*
+- [ ] **Migration guide vLLM → VRAMancer** pour adoption. *(M)*
+
+---
+
+## 12. Validation externe (bloquant pour crédibilité)
+- [ ] **Bench rigoureux vs vLLM/TGI/llama.cpp/Ollama** sur même hardware, mêmes prompts, mêmes modèles. Publier brut sans cherry-picking. *(L)*
+- [ ] **2-3 early adopters production** (open-source projects, étudiants/labs, indie devs). *(L)*
+- [ ] **Stress test multi-user 24h** : continuous batcher sous charge réelle 50+ users concurrents. *(L)*
+- [ ] **Soumission HF Spaces / Replicate** : un demo public. *(M)*
+- [ ] **Article technique honnête** : ce qui marche, ce qui ne marche pas, les chiffres. *(M)*
+
+---
+
+## Priorités stratégiques (proposition)
+
+**Sprint immédiat (1-2 semaines)** : 0 + 3 (CLI unifiée + chat REPL) + 11 (quickstart) → rendre le projet *essayable* en 5 min.
+
+**Sprint moyen (1-2 mois)** :
+- 2 (auto-détection)
+- 5 (Tokio/Rust câblage des chemins existants — ce qui rend le projet techniquement différenciant)
+- 9 (nettoyage dead code)
+
+**Sprint long (3-6 mois)** :
+- 4 (swarm — c'est *the killer feature* si fini)
+- 12 (validation externe — sans early adopters le projet n'existe pas)
+- 6 (sécurité durcie — bloquant B2B)
+
+**Toujours en arrière-plan** : 1, 7, 8, 10.
+
+---
+
+## Notes axe par axe (réponse à ta question)
+
+- **Swarm** → axe le plus différenciant et le moins fini. `cluster_discovery.py` réel mais `swarm_ledger.py` orphelin et `supervision_api.py` plein de nodes fictifs. Ce serait *the moat*, mais c'est XL.
+- **Interfaces LLM** → gros gap onboarding. CLI unifiée + chat REPL + dashboard nettoyé = quick wins moyenne taille.
+- **Auto-détection** → indispensable pour le "pip install && ça marche". Topologie + backend pick + quant pick = chemin clair.
+- **Tokio/Rust** → bon levier perf mais beaucoup déjà "présent et non câblé". Plus de gain à câbler le triple-buffer existant qu'à réécrire en Rust ce qui marche déjà en Python (HMAC, network_raid).

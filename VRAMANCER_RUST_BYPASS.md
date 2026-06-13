@@ -48,7 +48,12 @@ Strategy 4: CPU-staged PyTorch fallback
 
 ## 2. Le Swarm Brain (Mémoire Holographique)
 Calcul de parité XOR en Rust pur via `generate_holographic_parity` et `heal_holograph`.
-- Auto-vectorisation AVX-512 via LLVM
+- Auto-vectorisation SIMD via LLVM. **Mesuré** sur le binaire release par défaut
+  (`RUSTFLAGS` vide, pas de `target-cpu`) : la boucle XOR compile en **SSE2**
+  (`pxor`/`xmm`, 128 bits) — `objdump` montre 0 instruction AVX2 (`ymm`) ou
+  AVX-512 (`zmm`). AVX2/AVX-512 nécessiteraient un build `-C target-cpu=native`
+  (ou `target-feature=+avx2`), non activé ici. La largeur SIMD est figée au
+  **compile-time** par la cible, pas par le CPU d'exécution.
 - Zéro fuites mémoire (ownership Rust)
 - 50 MB x2 shards : parity en 51ms, heal en 45ms
 
@@ -71,4 +76,18 @@ cd rust_core && maturin develop --release
 ```
 
 ---
-*19 fonctions PyO3 + GpuPipeline persistent, 645 tests passés, 0 échec. Chiffres corrigés après suppression de l'artéfact cache driver.*
+*19 fonctions PyO3 + GpuPipeline persistent, 645 tests passés, 0 échec. Chiffres
+
+## 6. Async DtoD (V5 P4 — `VRM_TRANSFER_ASYNC=1`)
+
+`direct_vram_copy_async(src_ptr, dst_ptr, size_bytes)` — appelle `cuMemcpyDtoDAsync_v2` sur le stream nul (0).
+- **Non-blocking host** : la CPU retourne immédiatement
+- Opérations PyTorch suivantes sur le même device se sérialisent automatiquement via le default stream
+- Gate derrière `VRM_TRANSFER_ASYNC=1` dans `transfer_manager.py` (Strategy 1.5, tensors ≤1 MB)
+- Gain mesuré : ~0% sur petits tensors (DtoD latency << model compute), potentiellement utile en pipeline multi-layer overlapping
+- Retourne `TransportMethod.RUST_P2P`
+
+```python
+# Activer l'async DtoD :
+VRM_TRANSFER_ASYNC=1 python server.py
+``` corrigés après suppression de l'artéfact cache driver.*
