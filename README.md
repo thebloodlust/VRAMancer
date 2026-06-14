@@ -241,8 +241,8 @@ vramancer split Qwen/Qwen2.5-14B-Instruct --gpus 2  # Preview model split
 ## How it works
 
 1. **Auto-detect GPUs** — enumerates all CUDA/ROCm/MPS devices with free VRAM
-2. **VRAM-proportional split** — assigns model layers to GPUs based on available memory (e.g., 23 layers to 24 GB GPU, 28 layers to 16 GB GPU)
-3. **Block-by-block inference** — sequential forward pass through blocks, transferring activations between GPUs via CPU-staged pinned memory
+2. **Configure the split** — wires up accelerate `device_map="auto"` (Transformers) or tensor-split (GGUF/llama.cpp), which assigns layers across GPUs by available memory (e.g., 23 layers to the 24 GB GPU, 28 to the 16 GB GPU). The split and the multi-GPU forward are handled by the underlying engine, not by VRAMancer.
+3. **Run inference on the chosen engine** — accelerate/llama.cpp/vLLM execute the forward (activations are CPU-staged between GPUs when consumer P2P is unavailable). VRAMancer layers its own measured optimizations on top (prompt-lookup, TurboQuant KV, lending, auto-heal).
 4. **Quantization** — optional NF4/INT8/NVFP4 to reduce VRAM footprint
 5. **KV cache management** — paged attention with optional PolarQuant+QJL compression (~3.5 bits/dim, ~4.6x reduction)
 
