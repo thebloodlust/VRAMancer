@@ -28,7 +28,7 @@ def _gen_light(model, tok):
     return txt, dt
 
 
-def test_light():
+def run_light():
     import vramancer
     from transformers import AutoModelForCausalLM, AutoTokenizer
     res = {"variant": "light", "ok": False}
@@ -65,7 +65,7 @@ def test_light():
     return res
 
 
-def test_heavy():
+def run_heavy():
     import vramancer
     from transformers import AutoModelForCausalLM
     res = {"variant": "heavy", "ok": False}
@@ -99,8 +99,8 @@ def test_heavy():
 
 if __name__ == "__main__":
     print(f"[S1 test] modèle={MODEL}\n", flush=True)
-    light = test_light()
+    light = run_light()
     print("LIGHT:", json.dumps(light, ensure_ascii=False, indent=2), flush=True)
-    heavy = test_heavy()
+    heavy = run_heavy()
     print("\nHEAVY:", json.dumps(heavy, ensure_ascii=False, indent=2), flush=True)
     print("\nRESULT_JSON:" + json.dumps({"light": light, "heavy": heavy}, ensure_ascii=False))

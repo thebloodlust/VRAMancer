@@ -2,7 +2,8 @@
 """S2 — test de la logique de sélection quickstart (VRAM mockée, sans GPU).
 
 Vérifie que recommend() choisit le plus gros modèle qui TIENT dans la VRAM, avec
-le bon quant selon le matériel. La sélection est la partie qui décide tout.
+le bon quant selon le matériel. Collectable par pytest (pas de GPU requis) ET
+exécutable en script.
 """
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -23,26 +24,40 @@ CASES = [
     (40.0, False, "summarize",      14, "bf16"),   # gros VRAM, usage plafonné 14B → bf16 (qualité)
 ]
 
-failures = 0
-for total, bw, uc, want_p, want_q in CASES:
-    _mock(total, bw)
-    r = qs.recommend(uc)
-    ok = (r["params_b"] == want_p and r["quant"] == want_q
-          and r["vram_need_gb"] <= total + 0.05)
-    tag = "OK " if ok else "FAIL"
-    if not ok:
-        failures += 1
-    print(f"[{tag}] {uc:14s} {total:>5}GB bw={bw!s:5} → {r['model'].split('/')[-1]:32s} "
-          f"{r['params_b']}B {r['quant']:5} need~{r['vram_need_gb']}GB "
-          f"(attendu {want_p}B {want_q})")
 
-# Cas serré : rien ne tient → plus petit modèle, flag tight
-_mock(1.0, False)
-r = qs.recommend("chat")
-tight_ok = r.get("tight") is True
-print(f"[{'OK ' if tight_ok else 'FAIL'}] VRAM 1GB → tight={r.get('tight')} modèle={r['model'].split('/')[-1]}")
-if not tight_ok:
-    failures += 1
+def test_quickstart_selection():
+    """Chaque cas : bon modèle, bon quant, et le besoin VRAM tient dans le budget."""
+    for total, bw, uc, want_p, want_q in CASES:
+        _mock(total, bw)
+        r = qs.recommend(uc)
+        assert r["params_b"] == want_p, f"{uc} {total}GB: {r['params_b']}B != {want_p}B attendu"
+        assert r["quant"] == want_q, f"{uc} {total}GB: quant {r['quant']} != {want_q}"
+        assert r["vram_need_gb"] <= total + 0.05, f"{uc} {total}GB: besoin {r['vram_need_gb']} > budget"
 
-print(f"\n{'TOUS OK' if failures == 0 else str(failures) + ' ÉCHECS'}")
-sys.exit(1 if failures else 0)
+
+def test_tight_case():
+    """VRAM minuscule → plus petit modèle + flag tight."""
+    _mock(1.0, False)
+    r = qs.recommend("chat")
+    assert r.get("tight") is True
+
+
+def _run_as_script():
+    fails = 0
+    for total, bw, uc, want_p, want_q in CASES:
+        _mock(total, bw)
+        r = qs.recommend(uc)
+        ok = (r["params_b"] == want_p and r["quant"] == want_q and r["vram_need_gb"] <= total + 0.05)
+        fails += 0 if ok else 1
+        print(f"[{'OK ' if ok else 'FAIL'}] {uc:14s} {total:>5}GB bw={bw!s:5} → "
+              f"{r['model'].split('/')[-1]:32s} {r['params_b']}B {r['quant']:5} need~{r['vram_need_gb']}GB")
+    _mock(1.0, False)
+    tight = qs.recommend("chat").get("tight") is True
+    fails += 0 if tight else 1
+    print(f"[{'OK ' if tight else 'FAIL'}] cas serré → tight={tight}")
+    print(f"\n{'TOUS OK' if fails == 0 else str(fails) + ' ÉCHECS'}")
+    return fails
+
+
+if __name__ == "__main__":
+    sys.exit(1 if _run_as_script() else 0)
