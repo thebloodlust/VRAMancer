@@ -13,7 +13,9 @@ vramancer run Qwen/Qwen2.5-14B-Instruct -q nf4
 vramancer run Qwen/Qwen2.5-7B-Instruct -p "Explain gradient descent in 3 sentences"
 ```
 
-VRAMancer auto-detects all GPUs, splits the model proportionally to available VRAM, and runs inference block-by-block with CPU-staged transfers between GPUs. No config files, no YAML, no manual device maps.
+VRAMancer auto-detects all GPUs and configures the multi-GPU split for you — via Hugging Face **accelerate** (`device_map="auto"`) for Transformers models, or tensor-split for GGUF/llama.cpp — then picks the backend automatically. One command, no YAML, no manual device maps.
+
+VRAMancer is an **orchestrator** on top of proven engines (accelerate, llama.cpp, vLLM), not a from-scratch inference engine. Its value is the one-command UX, automatic GPU/backend selection, and its own measured optimizations (prompt-lookup decoding, TurboQuant KV compression, VRAM lending, auto-heal). The heterogeneous split itself is done by accelerate.
 
 ## Benchmarks
 
