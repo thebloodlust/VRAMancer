@@ -29,8 +29,9 @@ MAXNEW = 80
 tok = AutoTokenizer.from_pretrained(MODEL)
 if tok.pad_token_id is None:
     tok.pad_token_id = tok.eos_token_id
-print("[load] device_map=auto ...", flush=True)
-model = AutoModelForCausalLM.from_pretrained(MODEL, torch_dtype=torch.bfloat16, device_map="auto")
+print("[load] device_map=auto + max_memory ...", flush=True)
+model = AutoModelForCausalLM.from_pretrained(MODEL, torch_dtype=torch.bfloat16,
+    device_map="auto", max_memory={0: "21GiB", 1: "13GiB", "cpu": "40GiB"})
 
 cfg = model.config
 NUM_EXPERTS = getattr(cfg, "num_experts", getattr(cfg, "n_routed_experts", None))
@@ -44,11 +45,13 @@ decode_tokens = collections.Counter()                   # layer -> nb tokens dé
 
 def make_hook(lidx):
     def hook(module, inp, out):
-        logits = out[0] if isinstance(out, tuple) else out
-        rl = logits.reshape(-1, logits.shape[-1])        # [tokens, num_experts]
-        seq = rl.shape[0]
-        topk = torch.topk(rl, k=TOPK, dim=-1).indices    # [tokens, top_k]
-        flat = topk.reshape(-1).tolist()
+        # Qwen2MoeTopKRouter renvoie (router_logits, router_scores, router_indices)
+        idx = out[2] if isinstance(out, tuple) and len(out) >= 3 else None
+        if idx is None:
+            return
+        idx = idx.reshape(-1, idx.shape[-1])             # [tokens, top_k]
+        seq = idx.shape[0]
+        flat = idx.reshape(-1).tolist()
         counts[lidx].update(flat)
         if seq > 1:
             prefill_unique[lidx] = len(set(flat))
@@ -56,13 +59,12 @@ def make_hook(lidx):
             decode_tokens[lidx] += 1
     return hook
 
-# Hook chaque couche dont le mlp a un `gate`
+# Hook le routeur de chaque couche MoE (mlp avec gate + experts)
 n_moe = 0
 for i, layer in enumerate(model.model.layers):
     mlp = getattr(layer, "mlp", None)
-    gate = getattr(mlp, "gate", None)
-    if gate is not None and isinstance(gate, torch.nn.Linear):
-        gate.register_forward_hook(make_hook(i))
+    if mlp is not None and hasattr(mlp, "gate") and hasattr(mlp, "experts"):
+        mlp.gate.register_forward_hook(make_hook(i))
         n_moe += 1
 print(f"{n_moe} couches MoE hookées", flush=True)
 
