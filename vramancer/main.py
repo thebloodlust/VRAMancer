@@ -88,6 +88,14 @@ def main(argv=None):
     p_split.add_argument("--no-profile", dest="profile", action="store_false",
                          help="Split VRAM-proportionnel simple")
 
+    # ---- quickstart ----
+    p_qs = sub.add_parser("quickstart",
+                          help="Choisir un USAGE (code-assistant, chat…) — VRAMancer recommande le modele")
+    p_qs.add_argument("use_case", nargs="?", default=None,
+                      help="Usage: code-assistant, chat, summarize")
+    p_qs.add_argument("--run", action="store_true", help="Charger et lancer directement le modele recommande")
+    p_qs.add_argument("--serve", action="store_true", help="Proposer la commande 'serve' (API REST)")
+
     # ---- hub ----
     p_hub = sub.add_parser("hub", help="Explorer le catalogue de modeles HuggingFace")
     p_hub.add_argument("model", help="Identifiant du modele sur HF (ex: HuggingFaceH4/zephyr-7b-beta)")
@@ -128,6 +136,8 @@ def main(argv=None):
         _cmd_benchmark(args)
     elif args.command == "discover":
         _cmd_discover(args)
+    elif args.command == "quickstart":
+        _cmd_quickstart(args)
     elif args.command == "hub":
         _cmd_hub(args)
     elif args.command == "split":
@@ -175,6 +185,16 @@ def _cmd_status():
     except ImportError:
         pass
     print("=" * 50)
+
+
+def _cmd_quickstart(args):
+    """Recommande (et lance avec --run) un modele adapte a un USAGE."""
+    from vramancer.quickstart import run_quickstart, USE_CASES
+    if not args.use_case:
+        print("Usage: vramancer quickstart <use-case>")
+        print("Usages disponibles : " + ", ".join(USE_CASES))
+        return
+    sys.exit(run_quickstart(args.use_case, launch=args.run, serve=args.serve))
 
 
 def _cmd_run(args):
