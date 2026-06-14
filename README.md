@@ -70,13 +70,25 @@ Full benchmark scripts: [benchmarks/](benchmarks/)
 
 ## Install
 
+One-liner (detects your GPU/CUDA, sets up an isolated venv, installs the matching
+PyTorch wheel, builds the Rust core, and adds the `vramancer` command):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/thebloodlust/VRAMancer/main/install.sh | bash
+vramancer quickstart code-assistant      # picks a model that fits your hardware
+```
+
+Or manually:
+
 ```bash
 git clone https://github.com/thebloodlust/VRAMancer.git
 cd VRAMancer
 pip install -e .
 ```
 
-Requires Python 3.10+, PyTorch 2.1+.
+Requires Python 3.10+, an NVIDIA driver (for CUDA), PyTorch 2.1+. The installer wraps
+the existing `install.py` auto-detector; it does not bundle PyTorch/CUDA into a binary
+(the host NVIDIA driver is kernel-level and cannot be bundled).
 
 ### Platform-specific setup
 
