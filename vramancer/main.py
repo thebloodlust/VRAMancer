@@ -121,11 +121,14 @@ def main(argv=None):
     p_hist.add_argument("--limit", type=int, default=20, help="Nombre de requetes a afficher")
 
     # ---- cluster ----
-    p_clu = sub.add_parser("cluster", help="Cluster data-parallel (multi-process local, puis cross-vendor/cross-noeud)")
-    p_clu.add_argument("action", choices=["serve"], help="serve = lancer le routeur data-parallel + API")
-    p_clu.add_argument("model", help="Modele HF (ex: Qwen/Qwen2.5-0.5B-Instruct)")
-    p_clu.add_argument("--gpus", type=str, default=None, help="GPU ids (ex: 0,1) - defaut: tous")
-    p_clu.add_argument("--port", type=int, default=5040)
+    p_clu = sub.add_parser("cluster", help="Cluster data-parallel (local multi-process, ou cross-noeud via gateway)")
+    p_clu.add_argument("action", choices=["serve", "gateway"],
+                       help="serve = workers locaux (1/GPU) ; gateway = route vers des noeuds distants")
+    p_clu.add_argument("model", nargs="?", default=None, help="Modele HF (serve) ; ignore pour gateway")
+    p_clu.add_argument("--gpus", type=str, default=None, help="serve: GPU ids (ex: 0,1) - defaut tous")
+    p_clu.add_argument("--nodes", type=str, default=None, help="gateway: URLs noeuds (ex: http://laptop:5040,http://mac:5040)")
+    p_clu.add_argument("--discover", action="store_true", help="gateway: auto-decouverte mDNS des noeuds")
+    p_clu.add_argument("--port", type=int, default=None, help="serve defaut 5040, gateway defaut 5050")
     p_clu.add_argument("--host", type=str, default="0.0.0.0")
 
     # ---- auth ----
@@ -240,16 +243,28 @@ def _cmd_dashboard(args):
 
 
 def _cmd_cluster(args):
-    """Lance le routeur cluster data-parallel (serve)."""
-    if args.action != "serve":
-        print(f"Action inconnue: {args.action}"); return
+    """Cluster data-parallel : serve (workers locaux) ou gateway (noeuds distants)."""
+    if args.action == "gateway":
+        nodes = [u.strip() for u in args.nodes.split(",")] if args.nodes else None
+        if not nodes and not args.discover:
+            print("gateway: fournis --nodes url1,url2  ou  --discover"); return
+        try:
+            from core.cluster_gateway import cluster_gateway
+        except Exception as e:
+            print(f"ERROR: gateway indisponible ({e})", file=sys.stderr); sys.exit(1)
+        cluster_gateway(nodes=nodes, discover=args.discover, host=args.host,
+                        port=args.port or 5050)
+        return
+    # serve
+    if not args.model:
+        print("serve: fournis un modele (ex: vramancer cluster serve Qwen/Qwen2.5-0.5B-Instruct)"); return
     gpu_ids = [int(x) for x in args.gpus.split(",")] if args.gpus else None
     try:
         from core.cluster_router import serve_cluster
     except Exception as e:
         print(f"ERROR: cluster indisponible ({e})", file=sys.stderr)
         sys.exit(1)
-    serve_cluster(args.model, gpu_ids=gpu_ids, host=args.host, port=args.port)
+    serve_cluster(args.model, gpu_ids=gpu_ids, host=args.host, port=args.port or 5040)
 
 
 def _cmd_history(args):

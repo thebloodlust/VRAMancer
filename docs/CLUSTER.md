@@ -26,6 +26,25 @@ curl http://localhost:5040/v1/completions -H "Content-Type: application/json" \
   équilibrage automatique vers le GPU le plus rapide, zéro placement manuel.
 - **Requêtes entières** routées (data-parallel) → 0 transfert d'activation entre GPU.
 
+## Cross-nœud (plusieurs machines) — passerelle
+Chaque machine (laptop, Mac, desktop) fait tourner `vramancer serve <model>` **avec son
+propre backend** (CUDA, MPS…). Une passerelle route les requêtes entières vers le nœud le
+moins chargé (data-parallel, 0 crossing). **Le cross-nœud contourne le problème
+d'interpréteur du cross-vendor** : chaque machine a son propre torch/venv, la passerelle ne
+parle qu'en HTTP.
+
+```bash
+# Sur chaque machine (nœud) :
+vramancer serve Qwen/Qwen2.5-7B-Instruct --port 5040
+
+# Sur la passerelle (n'importe quelle machine) :
+vramancer cluster gateway --nodes http://laptop:5040,http://mac:5040
+#   ou auto-découverte mDNS :
+vramancer cluster gateway --discover
+# → API agrégée sur :5050, health-aware, least-loaded
+```
+Un nœud Mac (MPS) + un nœud CUDA fonctionnent ensemble — **cross-backend** sans venv partagé.
+
 ## Résilience & observabilité
 - **Health-check** : un worker mort (OOM, crash) est **relancé automatiquement** (`/health`
   expose `alive`/`restarts`). Les requêtes continuent sur les autres workers entre-temps.
