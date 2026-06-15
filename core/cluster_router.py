@@ -147,6 +147,15 @@ class ClusterRouter:
                 if not self._started:
                     break
                 if w["proc"] is not None and not w["proc"].is_alive():
+                    alive = sum(1 for x in self._workers
+                                if x["proc"] is not None and x["proc"].is_alive())
+                    try:  # M4 — alerte webhook (no-op si non configuré)
+                        from core.alerts import notify
+                        notify(f"worker GPU{w['gpu_id']} mort — relance auto en cours · "
+                               f"cluster dégradé {alive}/{len(self._workers)} workers "
+                               f"(les requêtes continuent sur les autres)", level="warn")
+                    except Exception:
+                        pass
                     try:
                         new_p = self._spawn_worker(w["gpu_id"], w["vendor"], ready_q, timeout=300.0)
                         w["proc"] = new_p
