@@ -116,6 +116,10 @@ def main(argv=None):
     # ---- doctor ----
     sub.add_parser("doctor", help="Diagnostic complet (GPU, P2P, versions, sante, reco) - chiffres mesures")
 
+    # ---- history ----
+    p_hist = sub.add_parser("history", help="Historique local des requetes (tok/s, OOM, tendances)")
+    p_hist.add_argument("--limit", type=int, default=20, help="Nombre de requetes a afficher")
+
     # ---- auth ----
     p_auth = sub.add_parser("auth", help="Générer une identité Swarm Ledger (sk-VRAM-...)")
 
@@ -161,6 +165,8 @@ def main(argv=None):
     elif args.command == "doctor":
         from core.doctor import run_doctor
         sys.exit(run_doctor())
+    elif args.command == "history":
+        _cmd_history(args)
     else:
         parser.print_help()
 
@@ -221,6 +227,30 @@ def _cmd_dashboard(args):
         print("Installe les deps GUI: pip install flask flask-socketio", file=sys.stderr)
         sys.exit(1)
     launch_web(port=args.port, host=args.host)
+
+
+def _cmd_history(args):
+    """Affiche l'historique local des requetes (tok/s, statut, tendances)."""
+    from core.request_history import recent, stats
+    st = stats()
+    print("=" * 60)
+    print("  VRAMancer — historique des requetes")
+    print("=" * 60)
+    if "error" in st:
+        print(f"  (indisponible: {st['error']})"); return
+    print(f"  Requetes OK: {st['count_ok']}  |  erreurs: {st['count_error']}  |  "
+          f"tok/s moyen: {st['avg_tok_s']}  |  duree moy: {st['avg_duration_ms']} ms")
+    print("-" * 60)
+    rows = recent(args.limit)
+    if not rows:
+        print("  (aucune requete enregistree — lance 'vramancer serve' et genere)")
+    import time as _t
+    for r in rows:
+        ts = _t.strftime("%m-%d %H:%M", _t.localtime(r["ts"]))
+        icon = "OK " if r["status"] == "ok" else r["status"][:3]
+        print(f"  {ts}  [{icon}] {r['model'][:28]:28s} {r['prompt_tokens']:>5}->{r['generated_tokens']:<4} tok  "
+              f"{r['tok_s']:>6} tok/s")
+    print("=" * 60)
 
 
 def _cmd_quickstart(args):

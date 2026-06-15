@@ -977,6 +977,12 @@ class InferencePipeline:
             "GPU %d FAILED (%s) — triggering emergency rebalance",
             gpu_id, fault_type.name if hasattr(fault_type, 'name') else fault_type,
         )
+        try:  # M4 — alerte webhook (no-op si non configuré)
+            from core.alerts import notify
+            _ft = fault_type.name if hasattr(fault_type, 'name') else fault_type
+            notify(f"GPU {gpu_id} en panne ({_ft}) — rebalance d'urgence", level="error")
+        except Exception:
+            pass
         # Mark GPU as unavailable in scheduler
         if self.scheduler and hasattr(self.scheduler, 'mark_gpu_unavailable'):
             self.scheduler.mark_gpu_unavailable(gpu_id)

@@ -252,6 +252,17 @@ def api_cluster_nodes():
     return jsonify({"ok": True, "node_count": len(out), "total_gpus": total_gpus, "nodes": out})
 
 
+@app.route("/api/history")
+def api_history():
+    """M3 — historique récent + stats (tok/s moyen, OOM…)."""
+    try:
+        from core.request_history import recent, stats
+        limit = int(request.args.get("limit", 50))
+        return jsonify({"ok": True, "stats": stats(), "recent": recent(limit)})
+    except Exception as e:
+        return jsonify({"ok": False, "msg": str(e)})
+
+
 @app.route("/cluster")
 @app.route("/dash")
 def cluster_page():

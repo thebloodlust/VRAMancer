@@ -525,6 +525,14 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
             prompt_tokens = _count_tokens(prompt, tokenizer)
             completion_tokens = _count_tokens(text, tokenizer)
 
+            try:  # M3 — historique local léger (n'impacte jamais la réponse)
+                from core.request_history import record
+                record(model=_registry.model_name or model_name,
+                       prompt_tokens=prompt_tokens, generated_tokens=completion_tokens,
+                       duration_ms=elapsed * 1000.0, status="ok")
+            except Exception:
+                pass
+
             try:
                 API_LATENCY.labels(path='/v1/completions', method='POST', status='200').observe(elapsed)
             except Exception:
