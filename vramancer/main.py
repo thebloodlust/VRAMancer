@@ -113,6 +113,9 @@ def main(argv=None):
     # ---- health ----
     sub.add_parser("health", help="Verifier la sante du systeme")
 
+    # ---- doctor ----
+    sub.add_parser("doctor", help="Diagnostic complet (GPU, P2P, versions, sante, reco) - chiffres mesures")
+
     # ---- auth ----
     p_auth = sub.add_parser("auth", help="Générer une identité Swarm Ledger (sk-VRAM-...)")
 
@@ -155,6 +158,9 @@ def main(argv=None):
         _cmd_split(args)
     elif args.command == "health":
         _cmd_health()
+    elif args.command == "doctor":
+        from core.doctor import run_doctor
+        sys.exit(run_doctor())
     else:
         parser.print_help()
 
