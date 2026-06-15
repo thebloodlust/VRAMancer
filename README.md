@@ -13,7 +13,7 @@ vramancer run Qwen/Qwen2.5-14B-Instruct -q nf4
 vramancer run Qwen/Qwen2.5-7B-Instruct -p "Explain gradient descent in 3 sentences"
 ```
 
-VRAMancer auto-detects all GPUs, splits the model proportionally to available VRAM, and runs inference block-by-block with CPU-staged transfers between GPUs. No config files, no YAML, no manual device maps.
+VRAMancer auto-detects all GPUs and runs the model across them using the standard engines — HuggingFace `accelerate` (`device_map="auto"`), llama.cpp, or vLLM — with a compute-aware `max_memory` map that avoids the load-time OOM tight-fit models hit. It is an **orchestration + UX layer** on top of those engines (it does not reimplement the inference engine), plus measured optimisations (prompt-lookup decoding, KV compression, a VRAM lending pool). No config files, no YAML, no manual device maps.
 
 ## Benchmarks
 
@@ -26,17 +26,24 @@ VRAMancer auto-detects all GPUs, splits the model proportionally to available VR
 | **Qwen3-Coder-Next Q3** | **80B (3B active)** | **38 GB** | **~60** | GGUF Q3_K_XL, 2-GPU tensor split, MoE |
 | Qwen2.5-7B GGUF Q4_K_M | 7B | 4.5 GB | **106.8** | llama.cpp, 1 GPU |
 
-> Qwen3-Coder-Next: 80B MoE model (3B active params per token), GGUF Q3_K_XL split across RTX 3090 (23.4 GB) + RTX 5070 Ti (15 GB). First token: 66–92 ms. Faster than a 14B dense model despite 6× more total parameters — MoE sparsity wins.
+> Qwen3-Coder-Next: 80B MoE model (3B active params per token), GGUF Q3_K_XL split across RTX 3090 (23.4 GB) + RTX 5070 Ti (15 GB). First token: 66–92 ms. It runs faster than the 14B dense row above because only ~3B params are computed per token (MoE sparsity), not because of any VRAMancer-specific trick — llama.cpp does the work.
 
-### GPU-to-GPU transfer bandwidth (Proxmox PCIe P2P)
+### GPU-to-GPU transfer bandwidth
 
-`nvidia-smi topo -p2p r` shows P2P OK between GPUs. `torch.cuda.can_device_access_peer()` returns False (CUDA API lies in VM) — VRAMancer probes nvidia-smi as ground truth.
+On these consumer GPUs (RTX 3090 Ampere + RTX 5070 Ti Blackwell, no NVLink, VFIO
+passthrough), **direct GPU↔GPU P2P is not available** — measured: `can_device_access_peer()`
+returns False, and the driver call `cuCtxEnablePeerAccess` returns
+`CUDA_ERROR_PEER_ACCESS_UNSUPPORTED` (217). So **all transfers are CPU-staged** (through
+pinned host RAM over PCIe). The Rust pipeline just does it faster via double-buffered
+pinned memory:
 
 | Method | Bandwidth | Notes |
 |--------|-----------|-------|
-| Rust `cuMemcpyPeerAsync` | **~25 GB/s** | True PCIe P2P DMA |
-| PyTorch `.to()` | ~12 GB/s | CPU-staged fallback |
-| Python pinned CPU | ~10 GB/s | 2-hop: GPU→CPU→GPU |
+| Rust pinned double-buffer (`GpuPipeline`) | ~25 GB/s | CPU-staged, overlapped (large contiguous transfers) |
+| PyTorch `.to()` | ~11.6 GB/s | CPU-staged, naive (measured, 256 MB) |
+
+There is no P2P DMA path here; a faster transport would need NVLink or, for cross-node,
+Thunderbolt/USB4 (~16–20 Gbps).
 
 ### KV cache migration (VRAM Lending Pool preemption)
 
@@ -123,7 +130,7 @@ vramancer status
 
 **Optional backends:**
 ```bash
-pip install llama-cpp-python    # GGUF models (fastest, 106 tok/s)
+pip install llama-cpp-python    # GGUF models (fast — 106 tok/s on a 7B here)
 pip install bitsandbytes        # NF4/INT8 quantization
 pip install vllm                # Batched serving
 ```
@@ -231,7 +238,7 @@ vramancer run Qwen/Qwen2.5-14B-Instruct -q nf4
 # Force specific GPU count
 vramancer run meta-llama/Llama-3-8B --gpus 2
 
-# GGUF models auto-select llama.cpp (17x faster than HuggingFace)
+# GGUF models auto-select llama.cpp (faster than HF for GGUF: ~106 vs ~35 tok/s on a 7B here)
 vramancer run bartowski/Qwen2.5-7B-Instruct-GGUF
 ```
 
@@ -261,16 +268,22 @@ vramancer split Qwen/Qwen2.5-14B-Instruct --gpus 2  # Preview model split
 ## How it works
 
 1. **Auto-detect GPUs** — enumerates all CUDA/ROCm/MPS devices with free VRAM
-2. **VRAM-proportional split** — assigns model layers to GPUs based on available memory (e.g., 23 layers to 24 GB GPU, 28 layers to 16 GB GPU)
-3. **Block-by-block inference** — sequential forward pass through blocks, transferring activations between GPUs via CPU-staged pinned memory
+2. **Compute-aware memory map** — computes a `max_memory` budget per GPU (favouring the faster GPU) and hands it to `accelerate` / llama.cpp / vLLM, which do the actual layer placement and dispatch. This avoids the fp32-upcast OOM that the naive 97% formula triggers on tight-fit models.
+3. **Inference via the chosen engine** — accelerate runs the forward pass (pipeline-parallel across GPUs); VRAMancer does not reimplement it.
 4. **Quantization** — optional NF4/INT8/NVFP4 to reduce VRAM footprint
 5. **KV cache management** — paged attention with optional PolarQuant+QJL compression (~3.5 bits/dim, ~4.6x reduction)
+
+> Honest scope: VRAMancer's value is the orchestration, the OOM-avoiding placement, the
+> measured optimisations and the UX (one-command install, `quickstart`, `doctor`, dashboard,
+> mDNS cluster) — **not** a from-scratch inference engine. Weight-tiering, MoE expert
+> streaming and prefill/decode disaggregation were prototyped and **measured to not beat
+> the standard engines** on this hardware; they are not claimed as features.
 
 ## Backends
 
 | Backend | Install | Best for |
 |---------|---------|----------|
-| **llamacpp** (recommended) | `pip install llama-cpp-python` | GGUF models, fastest inference (106 tok/s) |
+| **llamacpp** (recommended) | `pip install llama-cpp-python` | GGUF models, fast inference (106 tok/s on a 7B here) |
 | **huggingface** | `pip install transformers accelerate` | General use, multi-GPU split |
 | **vllm** | `pip install vllm` | High-throughput batched serving |
 | **ollama** | Install [Ollama](https://ollama.ai) | Easy local models |
@@ -291,7 +304,7 @@ vramancer split Qwen/Qwen2.5-14B-Instruct --gpus 2  # Preview model split
 | Multi-GPU pipeline parallel | ✅ | N/A | ✅ | ✅ | ✅ | N/A | N/A |
 | Multi-GPU tensor parallel (NCCL) | ✅ | ❌ | ⚠️ | ✅ | ⚠️ | ❌ | ❌ |
 | VRAM Lending Pool | ✅ | N/A | ✅ | ✅ (P2P or ReBAR) | ⚠️ | N/A | N/A |
-| Rust P2P bypass (CUDA FFI) | ✅ | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ |
+| Rust pinned GPU transfer (CUDA FFI) | ✅ | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ |
 | Continuous batcher | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 Legend: ✅ supported & tested · ⚠️ partial / experimental · ❌ not supported · N/A not applicable.
