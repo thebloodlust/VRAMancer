@@ -69,7 +69,8 @@ gguf = [
     "llama-cpp-python>=0.3.0"
 ]
 cluster = [
-    "zeroconf>=0.130"
+    "zeroconf>=0.130",
+    "pyudev>=0.24; sys_platform == 'linux'"
 ]
 automation = [
     "graphene>=3.3",
