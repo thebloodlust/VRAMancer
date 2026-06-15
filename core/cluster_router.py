@@ -21,10 +21,29 @@ from typing import Any, Dict, List, Optional
 
 import multiprocessing as _mp
 
+# Cross-vendor prep : chaque vendeur masque ses GPU via une variable différente.
+_VISIBLE_VAR = {"cuda": "CUDA_VISIBLE_DEVICES", "rocm": "HIP_VISIBLE_DEVICES", "mps": None}
 
-def _worker_main(gpu_id: int, model_name: str, dtype: str, req_q, res_q, ready_q):
-    """Process worker : possède 1 GPU, charge le modèle, sert les requêtes de la file."""
-    os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)  # AVANT torch -> le worker ne voit que SON GPU
+
+def detect_gpu_vendor() -> str:
+    """Vendeur des GPU locaux (cuda / rocm / mps / cpu) — pour poser la bonne variable."""
+    try:
+        import torch
+        if torch.cuda.is_available():
+            # torch ROCm expose hip via torch.version.hip
+            return "rocm" if getattr(torch.version, "hip", None) else "cuda"
+        if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+            return "mps"
+    except Exception:
+        pass
+    return "cpu"
+
+
+def _worker_main(gpu_id: int, vendor: str, model_name: str, dtype: str, req_q, res_q, ready_q):
+    """Process worker : possède 1 GPU (1 vendeur), charge le modèle, sert la file."""
+    var = _VISIBLE_VAR.get(vendor, "CUDA_VISIBLE_DEVICES")
+    if var:  # AVANT torch -> le worker ne voit que SON GPU. ROCm: HIP_VISIBLE_DEVICES.
+        os.environ[var] = str(gpu_id)
     os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
     try:
         import torch
@@ -70,42 +89,77 @@ def _worker_main(gpu_id: int, model_name: str, dtype: str, req_q, res_q, ready_q
 class ClusterRouter:
     """Route des requêtes entières vers des workers mono-GPU isolés (data-parallel)."""
 
-    def __init__(self, model_name: str, gpu_ids: List[int], dtype: str = "float16"):
+    def __init__(self, model_name: str, gpu_ids: List[int], dtype: str = "float16",
+                 vendors: Optional[List[str]] = None):
         self.model_name = model_name
         self.gpu_ids = gpu_ids
         self.dtype = dtype
+        # Cross-vendor prep : 1 vendeur par worker (défaut = vendeur local détecté).
+        v = detect_gpu_vendor()
+        self.vendors = vendors if vendors is not None else [v] * len(gpu_ids)
         self._ctx = _mp.get_context("spawn")  # OBLIGATOIRE pour CUDA (fork casse CUDA)
         self._req_q = self._ctx.Queue()
         self._res_q = self._ctx.Queue()
-        self._procs: List[Any] = []
+        self._workers: List[Dict[str, Any]] = []  # [{gpu_id, vendor, proc}]
         self._started = False
         # Démux concurrent : un collector lit res_q et réveille le bon appelant par req_id.
         self._pending: Dict[int, Dict[str, Any]] = {}
         self._counter = 0
         self._lock = threading.Lock()
         self._collector: Optional[threading.Thread] = None
+        self._monitor: Optional[threading.Thread] = None
+        self._restarts = 0
+
+    def _spawn_worker(self, gpu_id: int, vendor: str, ready_q, timeout: float = 300.0):
+        """Lance UN worker et attend son signal 'ready'. Renvoie le Process."""
+        p = self._ctx.Process(target=_worker_main,
+                              args=(gpu_id, vendor, self.model_name, self.dtype,
+                                    self._req_q, self._res_q, ready_q), daemon=True)
+        p.start()
+        r = ready_q.get(timeout=timeout)
+        if not r.get("ok"):
+            raise RuntimeError(f"worker GPU{gpu_id} ({vendor}) en échec: {r.get('error')}")
+        return p
 
     def start(self, timeout: float = 300.0) -> Dict[str, Any]:
         ready_q = self._ctx.Queue()
-        for gid in self.gpu_ids:
-            p = self._ctx.Process(target=_worker_main,
-                                  args=(gid, self.model_name, self.dtype,
-                                        self._req_q, self._res_q, ready_q), daemon=True)
-            p.start(); self._procs.append(p)
-        ready = []
-        t0 = time.perf_counter()
-        while len(ready) < len(self.gpu_ids):
-            if time.perf_counter() - t0 > timeout:
-                raise RuntimeError(f"workers non prêts ({len(ready)}/{len(self.gpu_ids)})")
-            ready.append(ready_q.get(timeout=timeout))
-        failed = [r for r in ready if not r.get("ok")]
-        if failed:
-            self.shutdown()
-            raise RuntimeError(f"worker(s) en échec: {failed}")
+        for gid, vendor in zip(self.gpu_ids, self.vendors):
+            try:
+                p = self._spawn_worker(gid, vendor, ready_q, timeout)
+            except Exception:
+                self.shutdown(); raise
+            self._workers.append({"gpu_id": gid, "vendor": vendor, "proc": p})
         self._started = True
         self._collector = threading.Thread(target=self._collect_loop, daemon=True)
         self._collector.start()
-        return {"workers": len(self._procs), "gpu_ids": self.gpu_ids}
+        self._monitor = threading.Thread(target=self._monitor_loop, daemon=True)
+        self._monitor.start()
+        return {"workers": len(self._workers), "gpu_ids": self.gpu_ids, "vendors": self.vendors}
+
+    def _monitor_loop(self) -> None:
+        """Health-check : relance automatiquement un worker mort (OOM, crash driver)."""
+        ready_q = self._ctx.Queue()
+        while self._started:
+            time.sleep(3.0)
+            if not self._started:
+                break
+            for w in self._workers:
+                if not self._started:
+                    break
+                if w["proc"] is not None and not w["proc"].is_alive():
+                    try:
+                        new_p = self._spawn_worker(w["gpu_id"], w["vendor"], ready_q, timeout=300.0)
+                        w["proc"] = new_p
+                        self._restarts += 1
+                        try:
+                            import logging
+                            logging.getLogger("vramancer").warning(
+                                "ClusterRouter: worker GPU%s relancé (restart #%d)",
+                                w["gpu_id"], self._restarts)
+                        except Exception:
+                            pass
+                    except Exception:
+                        pass  # réessai au tick suivant
 
     def _collect_loop(self) -> None:
         while self._started:
@@ -153,18 +207,27 @@ class ClusterRouter:
             s["event"].wait(timeout)
         return [s["result"] for s in slots]
 
+    def status(self) -> Dict[str, Any]:
+        """État des workers (vivants, restarts) — pour /health."""
+        alive = sum(1 for w in self._workers if w["proc"] is not None and w["proc"].is_alive())
+        return {"workers": len(self._workers), "alive": alive,
+                "restarts": self._restarts, "gpu_ids": self.gpu_ids, "vendors": self.vendors}
+
     def shutdown(self) -> None:
         self._started = False
-        for _ in self._procs:
+        for _ in self._workers:
             try:
                 self._req_q.put(None)
             except Exception:
                 pass
-        for p in self._procs:
+        for w in self._workers:
+            p = w.get("proc")
+            if p is None:
+                continue
             p.join(timeout=10)
             if p.is_alive():
                 p.terminate()
-        self._procs = []
+        self._workers = []
 
 
 def serve_cluster(model_name: str, gpu_ids: Optional[List[int]] = None,
@@ -189,7 +252,7 @@ def serve_cluster(model_name: str, gpu_ids: Optional[List[int]] = None,
 
     @app.route("/health")
     def health():
-        return jsonify({"ok": True, "workers": len(gpu_ids), "gpu_ids": gpu_ids, "model": model_name})
+        return jsonify({"ok": True, "model": model_name, **router.status()})
 
     @app.route("/v1/completions", methods=["POST"])
     @app.route("/api/generate", methods=["POST"])
@@ -205,6 +268,12 @@ def serve_cluster(model_name: str, gpu_ids: Optional[List[int]] = None,
             return jsonify({"error": str(e)}), 500
         if not r.get("ok"):
             return jsonify({"error": r.get("error")}), 500
+        try:  # M3 — historique (n'impacte jamais la réponse)
+            from core.request_history import record
+            record(model=model_name, generated_tokens=r.get("gen_tokens", 0),
+                   duration_ms=r.get("dt", 0.0) * 1000.0, status="ok")
+        except Exception:
+            pass
         return jsonify({
             "object": "text_completion", "model": model_name,
             "choices": [{"text": r["text"], "index": 0, "finish_reason": "stop"}],
