@@ -258,12 +258,26 @@ curl http://localhost:5030/v1/completions \
 ### Other commands
 
 ```bash
+vramancer doctor      # Full diagnostic (GPU, P2P, versions, health) — measured numbers only
 vramancer status      # Show GPUs, memory, backend
 vramancer health      # System health check
+vramancer dashboard   # Real-time web dashboard (GPU/VRAM/tok-s)
+vramancer history     # Recent requests (tok/s, OOM, trends)
 vramancer hub Qwen/Qwen2.5-14B-Instruct  # Browse model formats on HF
 vramancer benchmark   # GPU matmul benchmark
 vramancer split Qwen/Qwen2.5-14B-Instruct --gpus 2  # Preview model split
 ```
+
+### Cluster (data-parallel across GPUs)
+
+```bash
+# Data-parallel: one worker process per GPU, requests routed by work-stealing (~2× on 2 GPUs).
+vramancer cluster serve Qwen/Qwen2.5-14B-Instruct   # OpenAI API on :5040, dashboard on :5041/dash
+```
+
+Auto-restarts dead workers, records history, alerts on failure (`VRM_ALERT_WEBHOOK`). The same
+brick is the foundation for cross-vendor (NVIDIA+AMD) and cross-node (Thunderbolt) — both pending
+hardware, not claimed yet. See [docs/CLUSTER.md](docs/CLUSTER.md).
 
 ## How it works
 
