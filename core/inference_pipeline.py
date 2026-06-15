@@ -124,6 +124,7 @@ class InferencePipeline:
         self.hierarchical_memory = None
         self.fault_manager: Optional[Any] = None
         self.turbo_engine: Optional[Any] = None  # TurboEngine for compiled decode
+        self._lora: Optional[Any] = None  # LoraManager (lazy, S5 hot-swap)
         self.cuda_graph_runner: Optional[Any] = None  # CUDA Graph for decode steps
         self.tp_model: Optional[Any] = None  # Tensor Parallel model wrapper
         self._turboquant_cache_factory: Optional[Any] = None  # HF-native TurboQuant cache
@@ -1086,6 +1087,20 @@ class InferencePipeline:
 
     def is_loaded(self) -> bool:
         return self._loaded
+
+    # ------------------------------------------------------------------
+    # LoRA hot-swap (S5)
+    # ------------------------------------------------------------------
+    @property
+    def lora(self):
+        """LoraManager sur le modèle chargé (hot-swap d'adaptateurs <1s)."""
+        if self._lora is None:
+            model = getattr(self.backend, "model", None)
+            if model is None or isinstance(model, str):
+                raise RuntimeError("Aucun modèle HF chargé — appelle pipeline.load(...) d'abord.")
+            from core.lora_manager import LoraManager
+            self._lora = LoraManager(model)
+        return self._lora
 
     # ------------------------------------------------------------------
     # Auto single-GPU bypass

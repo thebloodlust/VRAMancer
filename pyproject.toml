@@ -39,6 +39,7 @@ gpu = [
     "torch>=2.0",
     "transformers>=4.30",
     "accelerate>=0.25",
+    "peft>=0.18.2",
     "nvidia-ml-py>=11.0"
 ]
 gui = [

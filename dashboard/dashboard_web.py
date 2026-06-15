@@ -208,6 +208,75 @@ def api_pipeline_status():
         return jsonify({"loaded": False, "error": str(e)})
 
 
+def _active_pipeline():
+    """Récupère la pipeline active (config dashboard ou globale)."""
+    pipe = app.config.get("pipeline")
+    if pipe is not None:
+        return pipe
+    try:
+        from core.inference_pipeline import get_pipeline
+        return get_pipeline()
+    except Exception:
+        return None
+
+
+@app.route("/api/lora/list")
+def api_lora_list():
+    pipe = _active_pipeline()
+    if pipe is None or not getattr(pipe, "is_loaded", lambda: False)():
+        return jsonify({"ok": False, "msg": "no model loaded"}), 400
+    try:
+        return jsonify({"ok": True, **pipe.lora.list()})
+    except Exception as e:
+        return jsonify({"ok": False, "msg": str(e)}), 500
+
+
+@app.route("/api/lora/load", methods=["POST"])
+def api_lora_load():
+    payload = request.get_json(silent=True) or {}
+    path = (payload.get("path") or payload.get("adapter") or "").strip()
+    name = (payload.get("name") or "").strip() or None
+    if not path:
+        return jsonify({"ok": False, "msg": "path required"}), 400
+    pipe = _active_pipeline()
+    if pipe is None:
+        return jsonify({"ok": False, "msg": "no model loaded"}), 400
+    try:
+        return jsonify(pipe.lora.load(path, name))
+    except Exception as e:
+        return jsonify({"ok": False, "msg": str(e)}), 500
+
+
+@app.route("/api/lora/use", methods=["POST"])
+def api_lora_use():
+    payload = request.get_json(silent=True) or {}
+    name = (payload.get("name") or "").strip()
+    if not name:
+        return jsonify({"ok": False, "msg": "name required"}), 400
+    pipe = _active_pipeline()
+    if pipe is None:
+        return jsonify({"ok": False, "msg": "no model loaded"}), 400
+    try:
+        if name.lower() in ("base", "none", "off"):
+            return jsonify(pipe.lora.disable())
+        return jsonify(pipe.lora.use(name))
+    except Exception as e:
+        return jsonify({"ok": False, "msg": str(e)}), 500
+
+
+@app.route("/api/lora/unload", methods=["POST"])
+def api_lora_unload():
+    payload = request.get_json(silent=True) or {}
+    name = (payload.get("name") or "").strip()
+    pipe = _active_pipeline()
+    if pipe is None or not name:
+        return jsonify({"ok": False, "msg": "name required + model loaded"}), 400
+    try:
+        return jsonify(pipe.lora.unload(name))
+    except Exception as e:
+        return jsonify({"ok": False, "msg": str(e)}), 500
+
+
 @app.route("/chat")
 def chat_ui():
     return render_template("chat.html")
