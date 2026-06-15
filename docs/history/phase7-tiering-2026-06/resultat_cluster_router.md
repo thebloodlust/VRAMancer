@@ -11,9 +11,13 @@ partagée = work-stealing), ça doit vraiment scaler.
 ## Mesuré
 | Config | tok/s agrégé | répartition | speedup |
 |---|---|---|---|
-| 1 worker (GPU0) | 41.4 | 8 req → GPU0 | — |
-| 2 workers (8 req) | 62.2 | 3 → GPU0, **5 → GPU1** | **×1.5** |
-| 2 workers (32 req) | _(run en cours)_ | _équilibrage attendu meilleur_ | _attendu > ×1.6_ |
+| 1 worker (8 req) | 41.4 | 8 → GPU0 | — |
+| 2 workers (8 req) | 62.2 | 3 → GPU0, 5 → GPU1 | ×1.5 |
+| 1 worker (32 req) | 39.3 | 32 → GPU0 | — |
+| **2 workers (32 req)** | **77.6** | **16 / 16** | **×1.97** |
+
+→ Sur 32 requêtes, le work-stealing équilibre **parfaitement (16/16)** et le speedup atteint
+**×1.97** — quasi-linéaire. Le ×1.5 sur 8 req était bien un artefact de petit-N (split discret).
 
 ## Lecture honnête
 - **L'artefact GIL est levé** : threads ×0.97 → process **×1.5**. L'architecture
