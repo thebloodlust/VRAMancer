@@ -14,6 +14,8 @@ peuvent ensuite vivre sur d'autres vendeurs (ROCm) ou d'autres machines (Thunder
 """
 from __future__ import annotations
 import os
+import queue as _queue
+import threading
 import time
 from typing import Any, Dict, List, Optional
 
@@ -37,9 +39,15 @@ def _worker_main(gpu_id: int, model_name: str, dtype: str, req_q, res_q, ready_q
         ready_q.put({"gpu_id": gpu_id, "ok": False, "error": repr(e)})
         return
 
+    import queue as _q
     while True:
-        item = req_q.get()
-        if item is None:  # sentinelle d'arrêt
+        try:
+            item = req_q.get(timeout=2.0)
+        except _q.Empty:
+            if os.getppid() == 1:  # parent mort (SIGKILL/SIGTERM) -> orphelin adopté par init
+                break
+            continue
+        if item is None:  # sentinelle d'arrêt propre
             break
         req_id, prompt, max_tokens = item
         try:
@@ -71,6 +79,11 @@ class ClusterRouter:
         self._res_q = self._ctx.Queue()
         self._procs: List[Any] = []
         self._started = False
+        # Démux concurrent : un collector lit res_q et réveille le bon appelant par req_id.
+        self._pending: Dict[int, Dict[str, Any]] = {}
+        self._counter = 0
+        self._lock = threading.Lock()
+        self._collector: Optional[threading.Thread] = None
 
     def start(self, timeout: float = 300.0) -> Dict[str, Any]:
         ready_q = self._ctx.Queue()
@@ -90,21 +103,58 @@ class ClusterRouter:
             self.shutdown()
             raise RuntimeError(f"worker(s) en échec: {failed}")
         self._started = True
+        self._collector = threading.Thread(target=self._collect_loop, daemon=True)
+        self._collector.start()
         return {"workers": len(self._procs), "gpu_ids": self.gpu_ids}
 
-    def submit_batch(self, prompts: List[str], max_tokens: int = 64) -> List[Dict[str, Any]]:
-        """Soumet N requêtes ; les workers se les volent (work-stealing). Renvoie les résultats."""
+    def _collect_loop(self) -> None:
+        while self._started:
+            try:
+                r = self._res_q.get(timeout=1.0)
+            except _queue.Empty:
+                continue
+            except Exception:
+                break
+            if r is None:
+                break
+            with self._lock:
+                slot = self._pending.pop(r["req_id"], None)
+            if slot is not None:
+                slot["result"] = r
+                slot["event"].set()
+
+    def _new_slot(self, prompt: str, max_tokens: int):
+        slot = {"event": threading.Event(), "result": None}
+        with self._lock:
+            rid = self._counter
+            self._counter += 1
+            self._pending[rid] = slot
+        self._req_q.put((rid, prompt, max_tokens))
+        return rid, slot
+
+    def submit(self, prompt: str, max_tokens: int = 64, timeout: float = 300.0) -> Dict[str, Any]:
+        """Soumet UNE requête (concurrent-safe) et renvoie son résultat."""
         if not self._started:
             raise RuntimeError("start() d'abord")
-        for i, p in enumerate(prompts):
-            self._req_q.put((i, p, max_tokens))
-        results = [None] * len(prompts)
-        for _ in range(len(prompts)):
-            r = self._res_q.get()
-            results[r["req_id"]] = r
-        return results
+        rid, slot = self._new_slot(prompt, max_tokens)
+        if not slot["event"].wait(timeout):
+            with self._lock:
+                self._pending.pop(rid, None)
+            raise TimeoutError(f"requête {rid} expirée après {timeout}s")
+        return slot["result"]
+
+    def submit_batch(self, prompts: List[str], max_tokens: int = 64,
+                     timeout: float = 300.0) -> List[Dict[str, Any]]:
+        """Soumet N requêtes ; les workers se les volent (work-stealing). Ordre préservé."""
+        if not self._started:
+            raise RuntimeError("start() d'abord")
+        slots = [self._new_slot(p, max_tokens)[1] for p in prompts]
+        for s in slots:
+            s["event"].wait(timeout)
+        return [s["result"] for s in slots]
 
     def shutdown(self) -> None:
+        self._started = False
         for _ in self._procs:
             try:
                 self._req_q.put(None)
@@ -115,4 +165,67 @@ class ClusterRouter:
             if p.is_alive():
                 p.terminate()
         self._procs = []
-        self._started = False
+
+
+def serve_cluster(model_name: str, gpu_ids: Optional[List[int]] = None,
+                  host: str = "0.0.0.0", port: int = 5040, dtype: str = "float16") -> None:
+    """Lance un serveur HTTP (OpenAI-compatible) qui route en data-parallel vers les workers.
+
+    `vramancer cluster serve <model>` — utilisable aujourd'hui en local multi-process ;
+    l'AMD (cross-vendor) et Thunderbolt (cross-nœud) s'ajouteront dans la même archi.
+    """
+    import torch
+    from flask import Flask, request, jsonify
+    from werkzeug.serving import make_server
+
+    if gpu_ids is None:
+        gpu_ids = list(range(max(1, torch.cuda.device_count())))
+    router = ClusterRouter(model_name, gpu_ids=gpu_ids, dtype=dtype)
+    print(f"[cluster] démarrage de {len(gpu_ids)} worker(s) (GPU {gpu_ids})…", flush=True)
+    router.start()
+    print(f"[cluster] prêt — routeur data-parallel sur {len(gpu_ids)} GPU.", flush=True)
+
+    app = Flask(__name__)
+
+    @app.route("/health")
+    def health():
+        return jsonify({"ok": True, "workers": len(gpu_ids), "gpu_ids": gpu_ids, "model": model_name})
+
+    @app.route("/v1/completions", methods=["POST"])
+    @app.route("/api/generate", methods=["POST"])
+    def completions():
+        body = request.get_json(silent=True) or {}
+        prompt = body.get("prompt", "")
+        max_tokens = int(body.get("max_tokens", 64))
+        if not prompt:
+            return jsonify({"error": "prompt required"}), 400
+        try:
+            r = router.submit(prompt, max_tokens=max_tokens)
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+        if not r.get("ok"):
+            return jsonify({"error": r.get("error")}), 500
+        return jsonify({
+            "object": "text_completion", "model": model_name,
+            "choices": [{"text": r["text"], "index": 0, "finish_reason": "stop"}],
+            "usage": {"completion_tokens": r["gen_tokens"]},
+            "vramancer": {"gpu_id": r["gpu_id"], "seconds": round(r["dt"], 3)},
+        })
+
+    # Dashboard cluster (best effort) — import direct du sous-module (évite la collision
+    # de nom: `from dashboard import dashboard_web` renverrait une fonction).
+    try:
+        from dashboard.dashboard_web import launch_in_thread
+        launch_in_thread(port=port + 1)
+        print(f"[cluster] dashboard: http://localhost:{port + 1}/dash", flush=True)
+    except Exception as e:
+        print(f"[cluster] (dashboard indisponible: {e})", flush=True)
+
+    print(f"[cluster] API: http://{host}:{port}/v1/completions  ·  /health", flush=True)
+    srv = make_server(host, port, app, threaded=True)
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        print("\n[cluster] arrêt…")
+    finally:
+        router.shutdown()

@@ -120,6 +120,14 @@ def main(argv=None):
     p_hist = sub.add_parser("history", help="Historique local des requetes (tok/s, OOM, tendances)")
     p_hist.add_argument("--limit", type=int, default=20, help="Nombre de requetes a afficher")
 
+    # ---- cluster ----
+    p_clu = sub.add_parser("cluster", help="Cluster data-parallel (multi-process local, puis cross-vendor/cross-noeud)")
+    p_clu.add_argument("action", choices=["serve"], help="serve = lancer le routeur data-parallel + API")
+    p_clu.add_argument("model", help="Modele HF (ex: Qwen/Qwen2.5-0.5B-Instruct)")
+    p_clu.add_argument("--gpus", type=str, default=None, help="GPU ids (ex: 0,1) - defaut: tous")
+    p_clu.add_argument("--port", type=int, default=5040)
+    p_clu.add_argument("--host", type=str, default="0.0.0.0")
+
     # ---- auth ----
     p_auth = sub.add_parser("auth", help="Générer une identité Swarm Ledger (sk-VRAM-...)")
 
@@ -167,6 +175,8 @@ def main(argv=None):
         sys.exit(run_doctor())
     elif args.command == "history":
         _cmd_history(args)
+    elif args.command == "cluster":
+        _cmd_cluster(args)
     else:
         parser.print_help()
 
@@ -227,6 +237,19 @@ def _cmd_dashboard(args):
         print("Installe les deps GUI: pip install flask flask-socketio", file=sys.stderr)
         sys.exit(1)
     launch_web(port=args.port, host=args.host)
+
+
+def _cmd_cluster(args):
+    """Lance le routeur cluster data-parallel (serve)."""
+    if args.action != "serve":
+        print(f"Action inconnue: {args.action}"); return
+    gpu_ids = [int(x) for x in args.gpus.split(",")] if args.gpus else None
+    try:
+        from core.cluster_router import serve_cluster
+    except Exception as e:
+        print(f"ERROR: cluster indisponible ({e})", file=sys.stderr)
+        sys.exit(1)
+    serve_cluster(args.model, gpu_ids=gpu_ids, host=args.host, port=args.port)
 
 
 def _cmd_history(args):
@@ -453,10 +476,10 @@ def _cmd_serve(args):
             print("           'vramancer discover' depuis une autre machine pour le voir.")
             # Dashboard multi-noeuds en arriere-plan (partage la meme discovery)
             try:
-                from dashboard import dashboard_web
-                dashboard_web.set_cluster_discovery(_disco)
+                from dashboard.dashboard_web import set_cluster_discovery, launch_in_thread
+                set_cluster_discovery(_disco)
                 _dash_port = args.port + 1
-                dashboard_web.launch_in_thread(port=_dash_port)
+                launch_in_thread(port=_dash_port)
                 print(f"           Dashboard cluster: http://localhost:{_dash_port}/dash\n")
             except Exception as e:
                 print(f"           (dashboard cluster indisponible: {e})\n")
