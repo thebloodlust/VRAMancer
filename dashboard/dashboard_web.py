@@ -396,11 +396,14 @@ def api_mobile_node():
     with open(path, "r") as f:
         return f.read()
 
-def launch():
+def launch(port=None, host="0.0.0.0"):
     import threading
+    port = int(port or os.environ.get("VRM_DASHBOARD_PORT", "8500"))
+    _debug = (os.environ.get("VRM_DEBUG", "0") == "1" and os.environ.get("VRM_PRODUCTION", "0") != "1")
+    print(f"  VRAMancer dashboard → http://localhost:{port}  (Ctrl-C pour arrêter)", flush=True)
     if socketio:
         threading.Thread(target=push_memory_periodic, daemon=True).start()
-        socketio.run(app, debug=(os.environ.get("VRM_DEBUG", "0") == "1" and os.environ.get("VRM_PRODUCTION", "0") != "1"), use_reloader=False, host="0.0.0.0", port=8500)
+        socketio.run(app, debug=_debug, use_reloader=False, host=host, port=port)
     else:
-        # Fallback Flask pur
-        app.run(debug=(os.environ.get("VRM_DEBUG", "0") == "1" and os.environ.get("VRM_PRODUCTION", "0") != "1"), host="0.0.0.0", port=8500)
+        # Fallback Flask pur (sans temps réel SocketIO)
+        app.run(debug=_debug, host=host, port=port)

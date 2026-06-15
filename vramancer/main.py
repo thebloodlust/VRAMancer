@@ -88,6 +88,13 @@ def main(argv=None):
     p_split.add_argument("--no-profile", dest="profile", action="store_false",
                          help="Split VRAM-proportionnel simple")
 
+    # ---- dashboard ----
+    p_dash = sub.add_parser("dashboard",
+                            help="Lancer le dashboard web temps reel (VRAM, tok/s, memoire, GPU)")
+    p_dash.add_argument("--port", type=int, default=8500, help="Port HTTP (defaut: 8500)")
+    p_dash.add_argument("--host", type=str, default="0.0.0.0")
+    p_dash.add_argument("--cli", action="store_true", help="Dashboard terminal (au lieu du web)")
+
     # ---- quickstart ----
     p_qs = sub.add_parser("quickstart",
                           help="Choisir un USAGE (code-assistant, chat…) — VRAMancer recommande le modele")
@@ -136,6 +143,8 @@ def main(argv=None):
         _cmd_benchmark(args)
     elif args.command == "discover":
         _cmd_discover(args)
+    elif args.command == "dashboard":
+        _cmd_dashboard(args)
     elif args.command == "quickstart":
         _cmd_quickstart(args)
     elif args.command == "hub":
@@ -185,6 +194,25 @@ def _cmd_status():
     except ImportError:
         pass
     print("=" * 50)
+
+
+def _cmd_dashboard(args):
+    """Lance le dashboard (web temps reel par defaut, ou terminal avec --cli)."""
+    if args.cli:
+        try:
+            from dashboard.cli_dashboard import launch as launch_cli
+            launch_cli()
+        except Exception as e:
+            print(f"Dashboard CLI indisponible: {e}", file=sys.stderr)
+            sys.exit(1)
+        return
+    try:
+        from dashboard.dashboard_web import launch as launch_web
+    except Exception as e:
+        print(f"ERROR: dashboard web indisponible ({e})", file=sys.stderr)
+        print("Installe les deps GUI: pip install flask flask-socketio", file=sys.stderr)
+        sys.exit(1)
+    launch_web(port=args.port, host=args.host)
 
 
 def _cmd_quickstart(args):
