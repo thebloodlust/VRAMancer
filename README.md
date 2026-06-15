@@ -73,10 +73,20 @@ Full benchmark scripts: [benchmarks/](benchmarks/)
 One-liner (detects your GPU/CUDA, sets up an isolated venv, installs the matching
 PyTorch wheel, builds the Rust core, and adds the `vramancer` command):
 
+**Linux / macOS**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/thebloodlust/VRAMancer/main/install.sh | bash
 vramancer quickstart code-assistant      # picks a model that fits your hardware
 ```
+
+**Windows (PowerShell)**
+```powershell
+irm https://raw.githubusercontent.com/thebloodlust/VRAMancer/main/install.ps1 | iex
+vramancer quickstart code-assistant
+```
+
+Both wrap the same cross-platform `install.py` auto-detector (Linux → CUDA/ROCm/CPU,
+macOS → MPS, Windows → CUDA/CPU).
 
 Or manually:
 
