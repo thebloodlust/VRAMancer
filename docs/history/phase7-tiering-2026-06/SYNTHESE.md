@@ -72,17 +72,26 @@ Filtrées avec la même discipline. **3 caveats matériels** identifiés :
 3. **Spec decode ×2 GPU** : le gain 2-3× vient du spec decode lui-même, pas du split
    (le split *permet* juste de loger draft+target).
 
-## 5. Plan validé (priorité)
+## 5. Plan validé → état au 15 juin 2026
 
 | # | Chantier | Statut |
 |---|---|---|
-| 1 | **S1 — `vramancer.patch()` drop-in** (packaging des optims prouvées + max_memory anti-OOM) | à faire — **sûr, zéro recherche GPU** |
-| 2 | **S2 — `vramancer quickstart <use-case>`** (UX sur l'existant) | à faire après S1 |
-| 3 | **UNE mesure disagg** prefill/décode (7-12B, multi-user) | à mesurer avant de creuser |
-| 4 | Tout le reste (KV inter-session, spec decode, FP4 asym…) | backlog, mesuré au cas par cas |
+| 1 | **S1 — `vramancer.patch()` drop-in** | ✅ **livré** — variante LÉGÈRE retenue (testée vs lourde) |
+| 2 | **S2 — `vramancer quickstart <use-case>`** | ✅ **livré** — reco use-case, 7/7 tests |
+| 3 | **S4 — `install.sh` une-ligne** (`curl \| bash` → `install.py`) | ✅ **livré** — testé end-to-end |
+| — | **Mesure disagg** prefill/décode | ✅ **mesuré → RÉFUTÉ** (décode-dominé 58:1) — voir `resultat_disagg.md` |
+| — | **Bypass P2P** (fake-ID, IPC Lazy…) | ✅ **fermé par la mesure** (`cuCtxEnablePeerAccess` → 217) — voir `reponse_opus_p2p_ferme.md` |
+| 4 | Reste packaging : S9 dashboard / S5 LoRA hot-swap | backlog (au choix) |
 
-**Décision design S1 (user)** : implémenter **les deux variantes** (légère = monkeypatch
-fin ; lourde = via `InferencePipeline`), **les tester**, garder celle qui a des résultats.
+**Décision design S1 (user)** : les deux variantes implémentées et **testées** ; LIGHT
+gagne (reste un modèle HF, robuste) — voir `resultat_S1_dropin.md`.
+
+### Bilan mesuré de l'arc
+**6 « non » mesurés** : A1 (cache_position) · GpuPipeline (×3, overhead) · MoE
+(load-balancing) · disagg (décode-dominé 58:1) · P2P (code 217). **3 features
+packaging livrées** : S1 `vramancer.patch()` · S2 `quickstart` · S4 `install.sh`.
+Tout différenciant « split GPU » réfuté ; la valeur = orchestration + optims prouvées +
+continuous batching, désormais **accessibles en 1 commande d'install → 1 commande d'usage**.
 
 ## 6. Artefacts (code, dans `benchmarks/`)
 
