@@ -420,7 +420,16 @@ def _cmd_serve(args):
             _disco.start()
             globals()["_SERVE_DISCOVERY"] = _disco  # garde une reference vivante
             print(f"  Cluster: ce noeud est annonce via mDNS (port {args.port}).")
-            print("           'vramancer discover' depuis une autre machine pour le voir.\n")
+            print("           'vramancer discover' depuis une autre machine pour le voir.")
+            # Dashboard multi-noeuds en arriere-plan (partage la meme discovery)
+            try:
+                from dashboard import dashboard_web
+                dashboard_web.set_cluster_discovery(_disco)
+                _dash_port = args.port + 1
+                dashboard_web.launch_in_thread(port=_dash_port)
+                print(f"           Dashboard cluster: http://localhost:{_dash_port}/dash\n")
+            except Exception as e:
+                print(f"           (dashboard cluster indisponible: {e})\n")
         except Exception as e:
             print(f"  Cluster: discovery indisponible ({e}) — pip install 'vramancer[cluster]'\n")
 

@@ -208,6 +208,75 @@ def api_pipeline_status():
         return jsonify({"loaded": False, "error": str(e)})
 
 
+CLUSTER_DISCOVERY = None  # injecté par vramancer serve (partage la même discovery)
+
+
+def set_cluster_discovery(disco):
+    """Partage l'instance ClusterDiscovery du serveur avec le dashboard (vue multi-noeuds)."""
+    global CLUSTER_DISCOVERY
+    CLUSTER_DISCOVERY = disco
+
+
+@app.route("/api/cluster/nodes")
+def api_cluster_nodes():
+    """Tous les noeuds du cluster + leurs GPU (vue multi-noeuds)."""
+    disco = CLUSTER_DISCOVERY
+    try:
+        if disco is None:
+            # snapshot court si aucune discovery partagée
+            import os as _os
+            _os.environ.setdefault("VRM_EXPERIMENTAL", "1")
+            from experimental.cluster_discovery import ClusterDiscovery
+            disco = ClusterDiscovery()
+            disco.start()
+            import time as _t; _t.sleep(2)
+            nodes = list(disco.get_nodes() or [])
+            disco.stop()
+        else:
+            nodes = list(disco.get_nodes() or [])
+    except Exception as e:
+        return jsonify({"ok": False, "msg": str(e), "nodes": []})
+    # Résumé compact par noeud
+    out = []
+    for n in nodes:
+        gpus = n.get("gpus", []) or []
+        out.append({
+            "hostname": n.get("hostname", "?"), "ip": n.get("ip", "?"),
+            "platform": n.get("platform_type", n.get("os", "?")),
+            "gpu_count": n.get("gpu_count", len(gpus)),
+            "gpus": [{"name": g.get("name", "?"),
+                      "vram_gb": round(g.get("total_memory", 0) / 1024**3, 1)} for g in gpus],
+            "state": n.get("_state", "?"),
+        })
+    total_gpus = sum(x["gpu_count"] for x in out)
+    return jsonify({"ok": True, "node_count": len(out), "total_gpus": total_gpus, "nodes": out})
+
+
+@app.route("/cluster")
+@app.route("/dash")
+def cluster_page():
+    """Vue multi-noeuds auto-rafraîchie (page autonome, zéro dépendance)."""
+    return """<!doctype html><html><head><meta charset=utf-8><title>VRAMancer Cluster</title>
+<style>body{font-family:system-ui,sans-serif;background:#0d1117;color:#c9d1d9;margin:0;padding:24px}
+h1{font-size:20px}.node{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:14px;margin:10px 0}
+.host{font-weight:600;color:#58a6ff}.gpu{display:inline-block;background:#21262d;border-radius:6px;padding:6px 10px;margin:4px 6px 0 0;font-size:13px}
+.muted{color:#8b949e;font-size:13px}.hdr{display:flex;justify-content:space-between;align-items:center}</style></head>
+<body><div class=hdr><h1>🖥️ VRAMancer — Cluster (multi-nœuds)</h1><span class=muted id=sum></span></div>
+<div id=nodes></div>
+<script>
+async function refresh(){
+ try{const r=await fetch('/api/cluster/nodes');const d=await r.json();
+ document.getElementById('sum').textContent=(d.node_count||0)+' nœud(s) · '+(d.total_gpus||0)+' GPU';
+ document.getElementById('nodes').innerHTML=(d.nodes||[]).map(n=>`<div class=node>
+   <div class=host>${n.hostname} <span class=muted>${n.ip} · ${n.platform} · ${n.state}</span></div>
+   ${(n.gpus||[]).map(g=>`<span class=gpu>${g.name} — ${g.vram_gb} GB</span>`).join('')||'<span class=muted>pas de GPU annoncé</span>'}
+ </div>`).join('')||'<p class=muted>Aucun nœud découvert. Lance `vramancer serve` sur d\\'autres machines du LAN.</p>';
+ }catch(e){document.getElementById('nodes').innerHTML='<p class=muted>erreur: '+e+'</p>';}
+}
+refresh();setInterval(refresh,3000);
+</script></body></html>"""
+
+
 def _active_pipeline():
     """Récupère la pipeline active (config dashboard ou globale)."""
     pipe = app.config.get("pipeline")
@@ -464,6 +533,18 @@ def api_mobile_node():
     path = os.path.join(os.path.dirname(__file__), "templates", "mobile_edge_node.html")
     with open(path, "r") as f:
         return f.read()
+
+def launch_in_thread(port=8500, host="0.0.0.0"):
+    """Lance le dashboard dans un thread (werkzeug make_server : thread-safe, sans signaux).
+
+    Utilisé par `vramancer serve` pour exposer le dashboard cluster en arrière-plan.
+    """
+    import threading
+    from werkzeug.serving import make_server
+    srv = make_server(host, port, app, threaded=True)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv
+
 
 def launch(port=None, host="0.0.0.0"):
     import threading
