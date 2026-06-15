@@ -55,6 +55,8 @@ def main(argv=None):
     p_serve.add_argument("--quantization", type=str, default=None,
                          choices=["int8", "int4", "nvfp4", "gptq", "awq"],
                          help="Quantization: nvfp4 (Blackwell), int8, int4, gptq, awq")
+    p_serve.add_argument("--no-cluster", dest="cluster", action="store_false", default=True,
+                         help="Ne pas annoncer ce noeud sur le reseau (mDNS auto-discovery par defaut)")
 
     # ---- generate ----
     p_gen = sub.add_parser("generate", help="Generer du texte (one-shot)")
@@ -403,6 +405,19 @@ def _cmd_serve(args):
             print(f"\n  WARNING: Model pre-load failed: {e}")
             print("  Send POST /api/models/load to load later.\n")
 
+    # Annonce ce noeud sur le reseau (mDNS auto-discovery) — sauf --no-cluster
+    if getattr(args, "cluster", True):
+        try:
+            os.environ.setdefault("VRM_EXPERIMENTAL", "1")  # invocation explicite = opt-in
+            from experimental.cluster_discovery import ClusterDiscovery
+            _disco = ClusterDiscovery(port=args.port)
+            _disco.start()
+            globals()["_SERVE_DISCOVERY"] = _disco  # garde une reference vivante
+            print(f"  Cluster: ce noeud est annonce via mDNS (port {args.port}).")
+            print("           'vramancer discover' depuis une autre machine pour le voir.\n")
+        except Exception as e:
+            print(f"  Cluster: discovery indisponible ({e}) — pip install 'vramancer[cluster]'\n")
+
     # Start server (gunicorn in production, Werkzeug fallback in dev)
     from core.production_api import run_server
     try:
@@ -490,6 +505,7 @@ def _cmd_discover(args):
     """Decouverte des noeuds reseau."""
     print("Network Node Discovery")
     print("-" * 40)
+    os.environ.setdefault("VRM_EXPERIMENTAL", "1")  # invocation explicite = opt-in
     try:
         from experimental.cluster_discovery import ClusterDiscovery
         import time

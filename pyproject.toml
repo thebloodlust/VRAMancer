@@ -68,6 +68,9 @@ quantization = [
 gguf = [
     "llama-cpp-python>=0.3.0"
 ]
+cluster = [
+    "zeroconf>=0.130"
+]
 automation = [
     "graphene>=3.3",
     "flask-cors>=4.0"
@@ -84,7 +87,7 @@ dev = [
     "isort"
 ]
 full = [
-    "vramancer[gpu,gui,vision,compression,tracing,quantization,gguf,automation]"
+    "vramancer[gpu,gui,vision,compression,tracing,quantization,gguf,automation,cluster]"
 ]
 windows = [
     "vramancer[gpu,gui,compression,quantization]"
