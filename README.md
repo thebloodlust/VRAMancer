@@ -275,9 +275,32 @@ vramancer split Qwen/Qwen2.5-14B-Instruct --gpus 2  # Preview model split
 vramancer cluster serve Qwen/Qwen2.5-14B-Instruct   # OpenAI API on :5040, dashboard on :5041/dash
 ```
 
-Auto-restarts dead workers, records history, alerts on failure (`VRM_ALERT_WEBHOOK`). The same
-brick is the foundation for cross-vendor (NVIDIA+AMD) and cross-node (Thunderbolt) — both pending
-hardware, not claimed yet. See [docs/CLUSTER.md](docs/CLUSTER.md).
+Auto-restarts dead workers, records history, alerts on failure (`VRM_ALERT_WEBHOOK`).
+
+#### Add another machine to the cluster (multi-node)
+
+Each machine joins with **one command** — the installer pulls inference + mDNS by default,
+so the node auto-announces on the LAN. Works across backends (a Mac MPS node + a CUDA node
+cooperate; the gateway only speaks HTTP).
+
+```bash
+# 1. On the new machine (laptop / Mac / desktop) — one command:
+curl -fsSL https://raw.githubusercontent.com/thebloodlust/VRAMancer/main/install.sh | bash
+#    (Windows: irm https://raw.githubusercontent.com/thebloodlust/VRAMancer/main/install.ps1 | iex)
+
+# 2. Run a node on that machine (it announces itself via mDNS):
+vramancer serve Qwen/Qwen2.5-7B-Instruct --port 5040
+
+# 3. On any machine, start the gateway — it discovers nodes and routes whole requests:
+vramancer cluster gateway --discover
+#    or explicitly: vramancer cluster gateway --nodes http://laptop.local:5040,http://mac.local:5040
+```
+
+> Not a GUI "1-click" (it's one terminal command): a true single binary can't bundle
+> PyTorch/CUDA + the kernel-level GPU driver. The installer is the honest equivalent.
+
+The same brick is also the foundation for cross-vendor (NVIDIA+AMD in one box) — pending an
+AMD GPU. See [docs/CLUSTER.md](docs/CLUSTER.md).
 
 ## How it works
 
