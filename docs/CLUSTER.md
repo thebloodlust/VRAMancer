@@ -69,6 +69,33 @@ cross-nœud. Un seul `ClusterRouter` :
 3. **Cross-nœud** (Thunderbolt/USB4) — ⬜ attend une 2e machine + le lien (~16–20 Gbps,
    le seul transport assez rapide ; cf. `docs/history/phase7-tiering-2026-06/resultat_cross_node.md`).
 
+## Runbook multi-nœud (première mesure cross-nœud)
+```bash
+# --- Sur chaque machine distante (laptop / Mac) ---
+curl -fsSL https://raw.githubusercontent.com/thebloodlust/VRAMancer/main/install.sh | bash
+vramancer quickstart chat            # (optionnel) voir quel modèle tient sur CETTE machine
+vramancer serve <modèle-qui-tient> --port 5040     # le nœud s'annonce en mDNS
+
+# --- Sur la machine principale ---
+vramancer cluster gateway --check --discover        # pré-vol : voit-on les nœuds ?
+vramancer cluster gateway --discover                # lance la passerelle (:5050)
+
+# --- Mesurer le scaling ---
+python benchmarks/bench_cross_node_live.py http://localhost:5050 16 64
+#   → débit agrégé + répartition par nœud. Compare 1 nœud vs 2 nœuds.
+```
+
+### Dépannage
+- **Nœud non découvert** : le mDNS peut être bloqué (VLAN, firewall). Contourne avec l'IP
+  explicite : `vramancer cluster gateway --nodes http://192.168.1.42:5040`.
+- **Firewall** : ouvre le **port 5040** (API du nœud) et l'**UDP 5353** (mDNS) sur le LAN.
+  macOS : Réglages → Réseau → Pare-feu. Linux : `sudo ufw allow 5040` + `allow 5353/udp`.
+- **`laptop.local` ne résout pas** : utilise l'IP à la place de `.local`.
+- **Taille du modèle** : chaque nœud charge SON modèle — prends-en un qui tient sur sa VRAM
+  (laptop 4060 8 Go → 7B GGUF Q4 ou 3B ; Mac → selon la RAM unifiée). `vramancer quickstart` aide.
+- **Le débit ne scale pas ~×N** : normal si les nœuds ont des vitesses très différentes (le
+  least-loaded équilibre par charge, pas par vitesse) ou si peu de requêtes concurrentes.
+
 ## Portée honnête
 Le data-parallel local (×2 sur 2 GPU) est **utile mais standard** — vLLM le fait aussi.
 La vraie nouveauté potentielle, c'est ce que cette brique **débloque** : faire coopérer des

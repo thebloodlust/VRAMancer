@@ -128,6 +128,7 @@ def main(argv=None):
     p_clu.add_argument("--gpus", type=str, default=None, help="serve: GPU ids (ex: 0,1) - defaut tous")
     p_clu.add_argument("--nodes", type=str, default=None, help="gateway: URLs noeuds (ex: http://laptop:5040,http://mac:5040)")
     p_clu.add_argument("--discover", action="store_true", help="gateway: auto-decouverte mDNS des noeuds")
+    p_clu.add_argument("--check", action="store_true", help="gateway: pre-vol - liste les noeuds + sante, puis quitte")
     p_clu.add_argument("--port", type=int, default=None, help="serve defaut 5040, gateway defaut 5050")
     p_clu.add_argument("--host", type=str, default="0.0.0.0")
 
@@ -249,9 +250,11 @@ def _cmd_cluster(args):
         if not nodes and not args.discover:
             print("gateway: fournis --nodes url1,url2  ou  --discover"); return
         try:
-            from core.cluster_gateway import cluster_gateway
+            from core.cluster_gateway import cluster_gateway, probe
         except Exception as e:
             print(f"ERROR: gateway indisponible ({e})", file=sys.stderr); sys.exit(1)
+        if args.check:
+            sys.exit(probe(nodes=nodes, discover=args.discover))
         cluster_gateway(nodes=nodes, discover=args.discover, host=args.host,
                         port=args.port or 5050)
         return

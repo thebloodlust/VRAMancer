@@ -92,16 +92,41 @@ def _discover_nodes(timeout: float = 5.0) -> List[str]:
     return urls
 
 
+def _resolve_urls(nodes: Optional[List[str]], discover: bool) -> List[str]:
+    urls = list(nodes or [])
+    if discover:
+        print("[gateway] découverte mDNS des nœuds…", flush=True)
+        urls += _discover_nodes()
+    return sorted(set(urls))
+
+
+def probe(nodes: Optional[List[str]] = None, discover: bool = False) -> int:
+    """Pré-vol : liste les nœuds trouvés + leur santé (et modèle chargé), puis quitte."""
+    urls = _resolve_urls(nodes, discover)
+    if not urls:
+        print("[check] aucun nœud (utilise --nodes url1,url2 ou --discover)."); return 1
+    print(f"[check] {len(urls)} nœud(s) :")
+    reachable = 0
+    for u in urls:
+        try:
+            h = _http_get(u + "/health", timeout=3.0)
+            model = h.get("model", "?")
+            wk = h.get("alive", h.get("workers", "?"))
+            print(f"  ✅ {u}  · modèle={model} · workers={wk}")
+            reachable += 1
+        except Exception as e:
+            print(f"  ❌ {u}  · injoignable ({type(e).__name__})")
+    print(f"[check] {reachable}/{len(urls)} joignable(s). "
+          f"{'Prêt pour la passerelle.' if reachable else 'Vérifie serve + firewall (port + mDNS UDP 5353).'}")
+    return 0 if reachable else 1
+
+
 def cluster_gateway(nodes: Optional[List[str]] = None, discover: bool = False,
                     host: str = "0.0.0.0", port: int = 5050, req_timeout: float = 300.0) -> None:
     from flask import Flask, request, jsonify
     from werkzeug.serving import make_server
 
-    urls = list(nodes or [])
-    if discover:
-        print("[gateway] découverte mDNS des nœuds…", flush=True)
-        urls += _discover_nodes()
-    urls = sorted(set(urls))
+    urls = _resolve_urls(nodes, discover)
     if not urls:
         print("[gateway] aucun nœud (utilise --nodes url1,url2 ou --discover).")
         return
