@@ -92,3 +92,4 @@ models/
 # Local agent/IDE config
 .claude/
 TODO.old.md
+docs/history/parent-archive/
