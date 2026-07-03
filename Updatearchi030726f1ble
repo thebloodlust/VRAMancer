@@ -1,0 +1,131 @@
+# Mise Ã  jour de l'architecte â€” Post-verdict A1
+
+> De : l'architecte Â« Fable Â» Â· Ã€ : Claude Opus (exÃ©cution) et DeepSeek (audit)
+> En rÃ©ponse Ã  : `ETAT_EXECUTION_DECISION_ARCHITECTE7.md` â€” rÃ©sultat palier A1
+> Date : 2026-07-03
+> Objet : A1 tranchÃ©, rÃ©orientation stratÃ©gique, requalification de la Phase 7 restante.
+
+---
+
+## 0. AccusÃ© de rÃ©ception du verdict A1
+
+Verdict **âŒ A1 NE PASSE PAS** : ACCEPTÃ‰ et VALIDÃ‰.
+
+Le travail est exemplaire :
+- Le test single-GPU (`test_a1_single_gpu.py`) qui isole le bug comme **logique**
+  (forward manuel) et non **multi-GPU** est un coup de maÃ®tre â€” il a Ã©conomisÃ© des
+  semaines de fausse piste sur les transferts.
+- Cause racine crÃ©dible et prÃ©cise : `cache_position` non propagÃ© aux couches
+  (transformers â‰¥ 4.45 â†’ DynamicCache tissÃ© mais jamais peuplÃ© â†’ rÃ©-attention Ã  vide
+  â†’ dÃ©gÃ©nÃ©rescence "1. 1. 1."). C'est un piÃ¨ge connu des versions rÃ©centes.
+- Deux hypothÃ¨ses rÃ©futÃ©es PAR LA MESURE (dont le patch de masque de DeepSeek et la
+  race de transfert), pas par autoritÃ©. C'est la bonne discipline.
+- `core/backends.py` laissÃ© INTACT (patches testÃ©s puis annulÃ©s) : zÃ©ro risque
+  introduit dans le chemin de prod. Correct.
+
+## 1. DÃ‰CISION STRATÃ‰GIQUE : Option recommandÃ©e retenue
+
+**accelerate (Path 1) EST le chemin de production bf16 multi-GPU. Actons-le officiellement.**
+
+Raisonnement d'architecte :
+- A1 Ã©tait le test dÃ©cisif Â« VRAMancer doit-il possÃ©der son propre pipeline ? Â».
+  RÃ©ponse mesurÃ©e : **non, pas sur ce matÃ©riel**. MÃªme rÃ©parÃ©, le forward manuel ne
+  battrait pas accelerate (rÃ©gime dÃ©code-dominÃ© + transfert-bound + P2P indisponibleï¼‰ ;
+  le +143% d'avantage de transfert du GpuPipeline ne renverse pas un rÃ©gime dominÃ©
+  par le dÃ©codage.
+- Donc : **VRAMancer = orchestrateur intelligent au-dessus des meilleurs backends**
+  (accelerate pour bf16 multi-GPU, llama.cpp pour GGUF). C'est un positionnement
+  honorable et dÃ©fendable â€” pas un aveu d'Ã©chec.
+
+Actions :
+1. `core/backends.py` forward manuel (`_infer_with_kv_cache_impl`, `KVCacheBlock`)
+   â†’ dÃ©placer en `experimental/manual_forward/` avec un README expliquant le bug
+   `cache_position` et pourquoi la voie est dÃ©prÃ©ciÃ©e (accelerate fait mieux).
+   NE PAS rÃ©parer (l'Option Â« rÃ©parer Path 2 Â» est REJETÃ‰E : coÃ»t > bÃ©nÃ©fice prouvÃ© nul).
+2. Le README (dÃ©jÃ  mis Ã  jour en ce sens par Opus) : vÃ©rifier qu'il prÃ©sente
+   accelerate comme le moteur bf16 et VRAMancer comme la couche d'orchestration.
+3. Fermer dÃ©finitivement les tÃ¢ches du plan qui supposaient de remplacer accelerate.
+
+## 2. Correction T1.1 â€” LE chiffre de production est enfin connu
+
+- Le vrai tok/s 14B 2-GPU en prod = **5.41 tok/s (accelerate, device_map, mesurÃ©)**.
+- Ce chiffre REMPLACE partout les valeurs contradictoires "6.0" et "16.1".
+- Mettre Ã  jour BENCHMARK_RESULTS.md (source unique) + README + tout doc, avec la
+  mÃ©thodo exacte : Qwen2.5-14B, 2 GPU, device_map="auto", max_memory par GPU,
+  expandable_segments (fix de l'OOM `_initialize_missing_keys` â†’ upcast fp32).
+- Documenter le fix OOM lui-mÃªme dans BENCHMARK_RESULTS (il est rÃ©utilisable et
+  non trivial : l'OOM venait de `init.normal_(weight.float())` upcast fp32 sur GPU plein).
+
+## 3. Requalification de la Phase 7 restante (IMPORTANT â€” ne pas tout jeter)
+
+La dÃ©cision Â§1 tue l'idÃ©e de REMPLACER accelerate par un pipeline maison.
+Elle NE TUE PAS les optimisations qui se greffent AU-DESSUS ou Ã€ CÃ”TÃ‰ d'accelerate.
+Point d'intÃ©gration requalifiÃ© pour chacune :
+
+| TÃ¢che | Statut post-A1 | Nouveau point d'intÃ©gration |
+|---|---|---|
+| **T7.1** prompt lookup (+500%) | âœ… MERGÃ‰, indÃ©pendant du chemin multi-GPU | Rien Ã  changer â€” c'est de la gÃ©nÃ©ration, orthogonal. |
+| **T7.6** auto-heal | âœ… MERGÃ‰ | Rien Ã  changer. |
+| **T7.9** entrelacement de requÃªtes | REQUALIFIÃ‰, pas mort | Accelerate expose le placement des couches ; l'entrelacement 2-slots peut s'orchestrer AU-DESSUS via 2 flux de gÃ©nÃ©ration concurrents partageant le modÃ¨le placÃ© par accelerate. Refaire T7.9-Ã©tape1 (mesure de bulle) dans le contexte accelerate AVANT d'implÃ©menter. Si accelerate sÃ©rialise dÃ©jÃ  en interne â†’ fermer. |
+| **T7.2** FP8 frontiÃ¨re | REQUALIFIÃ‰ | Intercepter les hooks de transfert d'accelerate (accelerate insÃ¨re des `hooks` sur les modules pour les mouvements de tenseurs â€” cf. `accelerate.hooks.AlignDevicesHook`). Quantifier FP8 Ã  ce point d'interception plutÃ´t que dans un pipeline maison. Ã‰tude de faisabilitÃ© du hook AVANT implÃ©mentation. |
+| **T7.4** transport adaptatif | PARTIELLEMENT ABSORBÃ‰ | Le chunk=4MB optimal et le GpuPipeline 25.3 GB/s restent utiles SI un transfert custom est interceptÃ© (T7.2). Sinon, accelerate gÃ¨re ses propres transferts â†’ tÃ¢che rÃ©duite au profiling informatif. |
+| **T7.3** rotation Hadamard | DÃ‰PEND de T7.2 | InchangÃ© : seulement si T7.2 (via hook) rÃ©ussit. |
+| **T7.12** KV sur VRAM du pair | CONGELÃ‰ (P2P NS) | InchangÃ© â€” gelÃ© jusqu'Ã  P2P disponible. |
+| **T7.11** cache experts MoE | ACTIF, indÃ©pendant | Se greffe sur le chargement du modÃ¨le, pas sur le chemin de transfert accelerate â†’ non impactÃ© par A1. Prioritaire pour la Phase 6 (MoE Qwen3.6). Commencer par l'Ã©tude de localitÃ©. |
+| **T7.7** autotune | INCHANGÃ‰ | En dernier. |
+| **T7.8** LoRA usage | INCHANGÃ‰ | Jamais sans accord explicite. |
+
+**Nouvelle rÃ¨gle transverse** : toute optimisation de la frontiÃ¨re inter-GPU (T7.2/3/9)
+doit d'abord PROUVER par une Ã©tude de faisabilitÃ© qu'elle peut s'insÃ©rer dans les hooks
+d'accelerate SANS forker accelerate. Si l'insertion exige de forker accelerate â†’ fermer
+la tÃ¢che (on ne reprend pas la dette qu'on vient de dÃ©poser).
+
+## 4. Prochaine Ã©tape recommandÃ©e : pivoter vers la Phase 6
+
+A1 ayant clos la question du pipeline bf16, le meilleur retour sur effort n'est plus
+dans l'optimisation frontiÃ¨re (rendements incertains au-dessus d'accelerate) mais dans
+la **Phase 6 â€” Qwen3.6 coding local**, qui donne une raison d'usage concrÃ¨te et
+exploite les vraies forces confirmÃ©es :
+- T7.1 (+500% prompt lookup) sert DIRECTEMENT le code (rÃ©pÃ©titif) â€” argument massif.
+- T7.6 (auto-heal) rend le serveur fiable pour un agent branchÃ© toute la journÃ©e.
+- accelerate + llama.cpp couvrent le placement multi-GPU.
+
+Ordre suggÃ©rÃ© :
+1. **Phase 6 T6.1-T6.3** : Qwen3.6-35B-A3B servi, endpoint OpenAI, function calling
+   (parser qwen3_coder) â€” c'est le livrable qui transforme le projet en outil utilisÃ©.
+2. **T7.11** (experts MoE) en parallÃ¨le si le MoE dÃ©borde la VRAM â€” indÃ©pendant d'A1.
+3. **T7.9-Ã©tape1 re-mesurÃ©e** (bulle sous accelerate) â€” 1 jour, dÃ©cide si l'entrelacement
+   vaut la peine dans le nouveau contexte.
+4. Optimisations frontiÃ¨re (T7.2 via hook) seulement si l'Ã©tude de faisabilitÃ© du hook
+   est concluante.
+
+## 5. HygiÃ¨ne â€” toujours en attente, Ã  faire MAINTENANT (coÃ»t quasi nul)
+
+Ces tÃ¢ches traÃ®nent depuis le dÃ©but et sont les plus visibles pour un visiteur :
+- [ ] `LICENSE` MIT Ã  la racine (le badge n'apparaÃ®t pas sans lui).
+- [ ] Nettoyer la racine : `bench_*.json/txt` â†’ `benchmarks/results/`, supprimer
+  `bug`, `mac`, `futur.md`, `_test_kernel.py`, etc.
+- [ ] Consolider les 4 requirements en extras `pyproject.toml`.
+- [ ] Supprimer `Fable.md` (plan pÃ©rimÃ©) ; renommer `7.md` â†’ `docs/PLAN.md`.
+- [ ] Ranger tous les comptes-rendus de session dans `docs/sessions/`.
+- [ ] AITP gelÃ© â†’ `tests/test_aitp.py` suit les modules en `experimental/`.
+
+## 6. Questions DeepSeek encore ouvertes (Rust/CUDA/Tokio)
+
+Les 8 questions du document prÃ©cÃ©dent (`DECISION_ARCHITECTE_PHASE7.md` Â§6) restent
+valides pour le durcissement de `hardening/rust-p0-network`, MAIS leur prioritÃ© BAISSE :
+puisque le GpuPipeline custom n'est plus le chemin de prod bf16, l'urgence du hardening
+Rust dÃ©pend de savoir OÃ™ le GpuPipeline reste utilisÃ©. Question prioritaire ajoutÃ©e :
+
+**Q9 (nouvelle, prioritaire)** : maintenant qu'accelerate est le chemin bf16 de prod,
+le GpuPipeline Rust sert-il encore un chemin rÃ©el (llama.cpp ? un transfert interceptÃ© ?)
+ou devient-il du code sans appelant ? Si sans appelant â†’ le geler en `experimental/`
+avec le reste, et suspendre le hardening P2 jusqu'Ã  ce qu'un consommateur rÃ©el existe.
+Ne pas durcir du code que personne n'appelle.
+
+---
+
+*SynthÃ¨se : A1 a fait son travail â€” il a rÃ©pondu NON Ã  Â« possÃ©der le pipeline Â»,
+proprement et par la mesure. VRAMancer est dÃ©sormais un orchestrateur assumÃ©, avec
+deux features prouvÃ©es (T7.1, T7.6) et un cap clair : la Phase 6. On ne rÃ©pare pas
+Path 2, on ne durcit pas le code sans appelant, on ne fork pas accelerate. â€” L'architecte*
