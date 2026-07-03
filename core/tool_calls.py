@@ -9,8 +9,9 @@ Qwen3-Coder / Qwen2.5 émettent les appels d'outils au format **Hermes** :
 On extrait ces blocs de la sortie du modèle et on les convertit au format OpenAI
 `tool_calls` (pour un client `openai` standard). Le texte hors blocs reste le `content`.
 
-NB : le format exact doit être confirmé sur la vraie sortie de Qwen3.6 (le parser est
-tolérant : JSON par bloc, plusieurs blocs, arguments objet ou déjà-stringifiés).
+VALIDÉ sur Qwen3.6-35B-A3B (GGUF, llama.cpp) le 2026-07-03 : requête `tools` -> le modèle
+émet un `<tool_call>` -> ce parser produit un `tool_calls` OpenAI correct (finish_reason
+`tool_calls`, arguments JSON-string). Le parser reste tolérant (multi-blocs, malformés ignorés).
 """
 from __future__ import annotations
 import json
