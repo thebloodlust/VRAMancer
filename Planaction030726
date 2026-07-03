@@ -1,0 +1,388 @@
+# VRAMancer â€” Plan d'action complet pour agent IA
+> Version 1.0 â€” 2026-07-03
+> DÃ©pÃ´t cible : https://github.com/thebloodlust/VRAMancer (branche `main`)
+> Ce document est conÃ§u pour Ãªtre suivi **Ã  la lettre**, tÃ¢che par tÃ¢che, par un agent IA.
+> Chaque tÃ¢che a un identifiant (T-xxx), des Ã©tapes prÃ©cises, et un **critÃ¨re de validation** obligatoire.
+
+---
+
+## 0. RÃˆGLES ABSOLUES POUR L'AGENT (Ã  lire avant toute action)
+
+- **R1 â€” Ne jamais supprimer de code.** Toute fonctionnalitÃ© "en trop", incomplÃ¨te ou orpheline est **dÃ©placÃ©e** vers `experimental/` ou `experimental/legacy/`, jamais effacÃ©e.
+- **R2 â€” Toujours utiliser `git mv`** pour dÃ©placer des fichiers (prÃ©serve l'historique). Jamais `mv` + `git add`.
+- **R3 â€” Une branche par phase.** Nommer : `refactor/phase-1-racine`, `fix/phase-3-bugs`, etc. Ouvrir une Pull Request par phase, ne jamais pousser directement sur `main`.
+- **R4 â€” AprÃ¨s CHAQUE tÃ¢che**, exÃ©cuter :
+  ```bash
+  python -m pytest tests/ -x -q -m "not gpu"
+  ```
+  Si des tests Ã©chouent alors qu'ils passaient avant la tÃ¢che â†’ annuler la tÃ¢che (`git checkout .`), noter le problÃ¨me dans `MIGRATION_NOTES.md`, passer Ã  la tÃ¢che suivante.
+- **R5 â€” Chaque dÃ©placement de module Python** doit Ãªtre suivi d'une recherche des imports cassÃ©s :
+  ```bash
+  grep -rn "from core.backends_webgpu" --include="*.py" .
+  ```
+  (adapter le nom du module). Corriger tous les imports trouvÃ©s dans le mÃªme commit.
+- **R6 â€” Un commit par tÃ¢che**, message au format : `[T-xxx] description courte`.
+- **R7 â€” Ne pas modifier le comportement fonctionnel** dans les phases 1, 2, 5 (dÃ©placements et docs uniquement). Les changements de comportement sont limitÃ©s aux phases 3, 4, 6, 7, 8.
+- **R8 â€” Tenir un journal.** CrÃ©er `MIGRATION_NOTES.md` Ã  la racine et y consigner : tÃ¢che, date, fichiers touchÃ©s, problÃ¨mes rencontrÃ©s, tests avant/aprÃ¨s.
+
+---
+
+## PHASE 1 â€” Nettoyage de la racine du dÃ©pÃ´t (aucun changement de code)
+
+### T-101 â€” CrÃ©er la structure d'accueil
+```bash
+mkdir -p benchmarks/results
+mkdir -p experimental/legacy
+mkdir -p docs/archive
+touch experimental/__init__.py
+```
+
+### T-102 â€” DÃ©placer les artefacts de benchmark hors de la racine
+DÃ©placer TOUS les fichiers racine correspondant Ã  ces motifs vers `benchmarks/results/` :
+```bash
+git mv bench_*.json benchmarks/results/ 2>/dev/null
+git mv bench_*_out.txt benchmarks/results/ 2>/dev/null
+git mv bench_*.txt benchmarks/results/ 2>/dev/null
+git mv test_results.txt benchmarks/results/ 2>/dev/null
+```
+**Validation :** `ls *.json *_out.txt 2>/dev/null` Ã  la racine ne retourne plus aucun fichier de benchmark.
+
+### T-103 â€” Traiter les fichiers au nom douteux
+Pour chacun des fichiers suivants s'ils existent : `bug`, `mac`, `mac_mlx`, `futur.md` :
+1. Lire le contenu.
+2. Si c'est une note/TODO â†’ fusionner le contenu dans `docs/ROADMAP.md` (section "IdÃ©es en vrac"), puis `git rm` le fichier.
+3. Si c'est un script â†’ le renommer avec une extension correcte et le dÃ©placer dans `scripts/` (ex. `git mv mac scripts/setup_mac.sh`).
+4. Si le contenu est vide ou illisible â†’ `git mv <fichier> docs/archive/`.
+**Validation :** plus aucun fichier sans extension Ã  la racine (hors `LICENSE`, `Makefile`, `Dockerfile`).
+
+### T-104 â€” Mettre Ã  jour `.gitignore`
+Ajouter Ã  `.gitignore` :
+```
+# Artefacts de benchmark et de test
+bench_*.json
+bench_*_out.txt
+test_results.txt
+*.prof
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+# Environnements
+.venv/
+venv/
+.env
+```
+**Validation :** `git status` ne montre aucun artefact non dÃ©sirÃ© aprÃ¨s un run de benchmark local.
+
+### T-105 â€” Consolider les scripts d'installation
+1. CrÃ©er `scripts/install/`.
+2. `git mv` tous les scripts d'installation racine (`install*.sh`, `install*.bat`, `setup_*.sh`, etc.) vers `scripts/install/`.
+3. Garder Ã  la racine UN SEUL point d'entrÃ©e `install.sh` qui dÃ©tecte l'OS et appelle le bon script :
+```bash
+#!/usr/bin/env bash
+set -e
+case "$(uname -s)" in
+  Linux*)  bash scripts/install/install_linux.sh "$@";;
+  Darwin*) bash scripts/install/install_macos.sh "$@";;
+  *)       echo "Windows: utilisez scripts/install/install_windows.bat"; exit 1;;
+esac
+```
+4. Mettre Ã  jour toutes les rÃ©fÃ©rences dans le README.
+**Validation :** la racine contient au plus 1 script d'installation ; `bash install.sh --help` ne crashe pas.
+
+---
+
+## PHASE 2 â€” Mise en quarantaine `experimental/` (NE RIEN PERDRE)
+
+> Principe : tout module identifiÃ© comme stub, orphelin, POC ou "marketing" est dÃ©placÃ© dans `experimental/`, avec un README qui explique son Ã©tat exact. Le code reste importable (`import experimental.webgpu`) mais n'est plus prÃ©sentÃ© comme une fonctionnalitÃ© de production.
+
+### T-201 â€” CrÃ©er le contrat du dossier experimental
+CrÃ©er `experimental/README.md` :
+```markdown
+# Experimental â€” code non supportÃ© en production
+Ce dossier contient des modules rÃ©els mais incomplets, des POC, ou du code
+orphelin conservÃ© pour rÃ©fÃ©rence. RÃ¨gles :
+- Aucun module ici n'est importÃ© par `core/` en production.
+- Chaque sous-dossier a un fichier STATUS.md : ce qui marche, ce qui manque,
+  ce qu'il faudrait pour le promouvoir dans core/.
+- Les tests associÃ©s sont marquÃ©s `@pytest.mark.experimental`.
+Pour promouvoir un module vers core/ : ouvrir une issue "promotion" avec
+les critÃ¨res de STATUS.md cochÃ©s.
+```
+
+### T-202 â€” DÃ©placer les modules identifiÃ©s comme stub/orphelins
+Pour chaque module ci-dessous : `git mv`, corriger les imports (rÃ¨gle R5), crÃ©er un `STATUS.md` d'une dizaine de lignes (Ã©tat, ce qui manque, critÃ¨res de promotion).
+
+| Module source | Destination | Raison (Ã©tat constatÃ©) |
+|---|---|---|
+| `core/backends_webgpu.py` | `experimental/webgpu/backend.py` | POC, nodes jamais peuplÃ©es |
+| `core/network/webgpu_node.py` | `experimental/webgpu/node.py` | mock task completion |
+| `core/telemetry.py` | `experimental/telemetry/telemetry.py` | format binaire sans consommateur |
+| `core/swarm_ledger.py` | `experimental/swarm/ledger.py` | fonctionnel mais ignorÃ© par l'orchestrateur |
+| `csrc/dmabuf_bridge.c` | `experimental/dmabuf/dmabuf_bridge.c` | squelette, transfert mmap non implÃ©mentÃ© |
+| Parties L3+ de `csrc/vtp_core.cpp` | laisser le fichier, extraire les stubs L3+ vers `experimental/vtp/` | niveaux L3+ non implÃ©mentÃ©s |
+| Hole punching + relay de `core/network/nat_traversal.py` | garder STUN dans core ; extraire les fonctions stub vers `experimental/nat/` | STUN rÃ©el, reste stub |
+
+Ã‰tapes dÃ©taillÃ©es pour un dÃ©placement type (exemple webgpu) :
+```bash
+mkdir -p experimental/webgpu && touch experimental/webgpu/__init__.py
+git mv core/backends_webgpu.py experimental/webgpu/backend.py
+grep -rn "backends_webgpu" --include="*.py" . 
+# Pour chaque import trouvÃ© dans core/ : le supprimer ou le rendre optionnel :
+#   try:
+#       from experimental.webgpu.backend import WebGPUBackend
+#   except ImportError:
+#       WebGPUBackend = None
+```
+**Validation par module :** `python -c "import core"` fonctionne ; pytest passe ; `grep -rn "backends_webgpu" core/` ne retourne plus rien.
+
+### T-203 â€” Archiver `_deprecated/`
+```bash
+git mv _deprecated experimental/legacy/deprecated_2026
+```
+CrÃ©er `experimental/legacy/deprecated_2026/STATUS.md` : "Backends abandonnÃ©s (deepspeed, tensorrt, archive rÃ©seau). ConservÃ©s pour rÃ©fÃ©rence. Ne pas importer."
+**Validation :** plus de dossier `_deprecated/` Ã  la racine ; aucun import de `_deprecated` dans `core/` (`grep -rn "_deprecated" core/`).
+
+### T-204 â€” Marquer les tests des modules dÃ©placÃ©s
+1. Ajouter dans `pytest.ini` / `pyproject.toml` :
+```ini
+markers =
+    experimental: tests de modules experimental/, non bloquants en CI
+    gpu: tests nÃ©cessitant un GPU
+```
+2. DÃ©placer les tests des modules concernÃ©s vers `tests/experimental/` et ajouter `pytestmark = pytest.mark.experimental` en tÃªte de chaque fichier.
+3. Dans la CI, exÃ©cuter `-m "not gpu and not experimental"` pour le job bloquant, et un job sÃ©parÃ© non bloquant (`continue-on-error: true`) pour `-m experimental`.
+**Validation :** le job CI principal reste vert ; les tests experimental tournent dans un job sÃ©parÃ©.
+
+---
+
+## PHASE 3 â€” Correction des bugs de production connus
+
+> Chaque fix DOIT Ãªtre accompagnÃ© d'un test de non-rÃ©gression Ã©crit AVANT le fix (le test doit Ã©chouer avant, passer aprÃ¨s).
+
+### T-301 â€” Race condition du continuous batcher
+Fichier : `core/` (module batcher/pipeline).
+ProblÃ¨me : `submit()` peut Ãªtre appelÃ© avant que `start()` ait fini d'initialiser la boucle.
+Fix attendu :
+1. Ajouter un `threading.Event` `self._ready` positionnÃ© Ã  la fin de `start()`.
+2. Dans `submit()` : `if not self._ready.wait(timeout=5): raise RuntimeError("Batcher not started")`.
+3. Rendre `start()` idempotent (double appel = no-op) avec un lock.
+Test : `tests/test_batcher_race.py` â€” lancer `start()` et 50 `submit()` concurrents dans des threads, vÃ©rifier zÃ©ro exception et 50 rÃ©sultats.
+**Validation :** le test passe 20 fois de suite : `pytest tests/test_batcher_race.py --count 20` (installer `pytest-repeat`).
+
+### T-302 â€” Queue depth par process (cassÃ© en multi-worker gunicorn)
+ProblÃ¨me : le compteur de profondeur de queue est en mÃ©moire process â†’ chaque worker gunicorn voit sa propre valeur, le backpressure ne fonctionne pas.
+Fix attendu (dans l'ordre de prÃ©fÃ©rence) :
+1. Si Redis est dÃ©jÃ  une dÃ©pendance optionnelle â†’ compteur `INCR/DECR` Redis avec TTL, activÃ© quand `VRM_REDIS_URL` est dÃ©fini.
+2. Sinon â†’ `multiprocessing.shared_memory` + `multiprocessing.Lock` via un fichier de lock partagÃ©.
+3. Dans tous les cas : documenter dans le README que sans Redis, le backpressure est approximatif en multi-worker.
+Test : simuler 2 process qui incrÃ©mentent, vÃ©rifier que la valeur lue est globale.
+**Validation :** test multi-process vert ; comportement mono-process inchangÃ© (tests existants verts).
+
+### T-303 â€” SSE qui contourne le circuit breaker
+ProblÃ¨me : les endpoints Server-Sent Events n'appliquent pas le circuit breaker appliquÃ© aux endpoints REST.
+Fix attendu :
+1. Identifier le dÃ©corateur/middleware circuit-breaker utilisÃ© par les routes REST dans `core/api/`.
+2. L'appliquer au handler SSE : vÃ©rifier l'Ã©tat du breaker AVANT d'ouvrir le stream, et Ã  chaque itÃ©ration de la boucle de gÃ©nÃ©ration d'Ã©vÃ©nements ; si le breaker s'ouvre en cours de stream â†’ envoyer un event `error` puis fermer proprement.
+Test : forcer l'ouverture du breaker, vÃ©rifier que la connexion SSE est refusÃ©e (HTTP 503) et qu'un stream en cours se ferme avec l'event `error`.
+**Validation :** test vert ; les streams SSE normaux fonctionnent toujours (test existant ou nouveau test happy-path).
+
+### T-304 â€” Crash Rust si libcuda absente
+Fichier : `rust_core/` (chargement FFI via libloading avec `.expect()`).
+Fix : remplacer `.expect()` par un `match` qui retourne un `Result`/`None` exposÃ© cÃ´tÃ© Python comme `cuda_available() -> bool` ; le code Python doit fallback CPU proprement.
+**Validation :** sur une machine sans CUDA (ou en renommant temporairement la lib dans un conteneur), `import` du module Rust ne crashe pas et `cuda_available()` retourne `False`.
+
+### T-305 â€” Dashboard : supprimer les donnÃ©es codÃ©es en dur
+Fichier : `dashboard/dashboard_web.py` + templates.
+1. Supprimer toutes les valeurs GPU hardcodÃ©es des templates.
+2. Le dashboard consomme UNIQUEMENT l'API core (`core/api/`). Si l'API est indisponible â†’ afficher un Ã©tat "dÃ©connectÃ©" explicite, jamais de fausses donnÃ©es.
+3. Corriger la logique de fallback de dÃ©pendances : si une dÃ©pendance optionnelle manque, afficher un message d'installation, ne pas rendre une page Ã  moitiÃ© cassÃ©e.
+**Validation :** lancer le dashboard sans backend â†’ page "dÃ©connectÃ©" ; avec backend â†’ valeurs rÃ©elles (comparer avec `nvidia-smi` ou l'Ã©quivalent mock en CI).
+
+### T-306 â€” RÃ©activer `test_chaos_concurrency.py`
+Ce test est dÃ©sÃ©lectionnÃ© en CI Ã  cause d'une race. Diagnostiquer (probablement liÃ© Ã  T-301), corriger, puis le rÃ©intÃ©grer au job CI principal.
+**Validation :** le test tourne en CI, vert 10 runs consÃ©cutifs.
+
+---
+
+## PHASE 4 â€” SÃ©curitÃ©
+
+### T-401 â€” Supprimer le compte admin/admin par dÃ©faut
+1. Au premier dÃ©marrage sans credentials configurÃ©s : gÃ©nÃ©rer un mot de passe alÃ©atoire (`secrets.token_urlsafe(16)`), l'afficher UNE FOIS dans la console avec un cadre bien visible, le hasher (bcrypt/argon2) et le stocker.
+2. Refuser explicitement `admin/admin` mÃªme si l'utilisateur le configure, avec un message d'erreur.
+3. Variable d'env `VRM_ADMIN_PASSWORD` pour les dÃ©ploiements automatisÃ©s (hashÃ©e au dÃ©marrage).
+**Validation :** test qui dÃ©marre l'app sans config et vÃ©rifie qu'admin/admin est refusÃ©.
+
+### T-402 â€” Ã‰liminer pickle des chemins rÃ©seau
+1. Inventorier : `grep -rn "pickle" core/ --include="*.py"`.
+2. Pour chaque usage sur des donnÃ©es reÃ§ues du rÃ©seau : remplacer par `safetensors` (tenseurs) ou `msgpack` (mÃ©tadonnÃ©es/structures).
+3. Si un chemin ne peut pas Ãªtre migrÃ© immÃ©diatement â†’ le dÃ©placer derriÃ¨re un flag `VRM_ALLOW_PICKLE=1` (dÃ©faut dÃ©sactivÃ©) et logger un warning ; noter dans `MIGRATION_NOTES.md`.
+4. Conserver la vÃ©rification HMAC existante en amont dans tous les cas.
+**Validation :** `grep -rn "pickle.loads" core/network/` ne retourne que des chemins derriÃ¨re le flag ; tests de sÃ©rialisation round-trip verts pour chaque format remplacÃ©.
+
+### T-403 â€” Audit rapide des secrets et du transport
+1. VÃ©rifier qu'aucun secret/token n'est commitÃ© : `grep -rn -iE "(api_key|secret|token) ?= ?['\"]" --include="*.py" .` â€” corriger toute occurrence en la remplaÃ§ant par une lecture d'env.
+2. VÃ©rifier que les clÃ©s HMAC AITP ne sont jamais loggÃ©es.
+3. Documenter dans `docs/SECURITY.md` : modÃ¨le de menace, ce qui est chiffrÃ©/authentifiÃ© (HMAC AITP), ce qui ne l'est pas, recommandations de dÃ©ploiement (reverse proxy TLS).
+**Validation :** `docs/SECURITY.md` existe ; grep secrets vide.
+
+---
+
+## PHASE 5 â€” Consolidation de la documentation
+
+### T-501 â€” Un seul README
+1. Le README racine garde UNIQUEMENT : pitch (3 phrases), le benchmark clÃ© (14B sur 3090 + 5070 Ti), installation (3 lignes), quickstart (1 commande), liens vers docs/. Cible : < 150 lignes.
+2. Fusionner et dÃ©placer : `README_FACILE.md` â†’ `docs/guide_debutant.md` ; `FEATURES.md` â†’ `docs/features.md` ; `EXAMPLES.md` â†’ `docs/examples.md` ; `TODO.md` + `ROADMAP.md` â†’ `docs/ROADMAP.md` (un seul fichier).
+3. `git rm` les originaux racine aprÃ¨s fusion (le contenu est conservÃ© dans docs/, rÃ¨gle R1 respectÃ©e).
+**Validation :** racine = 1 seul fichier Markdown principal (README.md) + CHANGELOG.md + LICENSE + MIGRATION_NOTES.md.
+
+### T-502 â€” Aligner architecture.md sur la rÃ©alitÃ©
+1. Relire `docs/architecture.md` et supprimer/reformuler toute affirmation non vÃ©rifiable ou marketing (ex. terminologie type "Holographic Parity") â€” remplacer par le nom technique rÃ©el (paritÃ© FEC Reed-Solomon, etc.).
+2. Pour chaque composant dÃ©crit : ajouter une Ã©tiquette `[production]`, `[partiel]` ou `[experimental]` cohÃ©rente avec la Phase 2.
+3. Ajouter un schÃ©ma texte (ASCII ou Mermaid) du flux rÃ©el : CLI â†’ scheduler â†’ backends â†’ network.
+**Validation :** chaque section d'architecture.md a une Ã©tiquette d'Ã©tat ; aucun composant marquÃ© `[production]` ne vit dans `experimental/`.
+
+### T-503 â€” Docstrings des modules core
+Pour chaque fichier de `core/` sans docstring de module : ajouter 3-5 lignes en tÃªte (rÃ´le, entrÃ©es/sorties principales, dÃ©pendances optionnelles).
+**Validation :** `python -c "import ast,glob,sys; missing=[f for f in glob.glob('core/**/*.py',recursive=True) if not ast.get_docstring(ast.parse(open(f).read()))]; print(missing); sys.exit(1 if missing else 0)"` retourne 0.
+
+---
+
+## PHASE 6 â€” Packaging : faire mieux qu'un wrapper
+
+> Objectif : `vramancer/` ne doit plus Ãªtre un simple wrapper CLI autour de `core/`. Il devient LE package public installable, avec une vraie API Python.
+
+### T-601 â€” Unifier le packaging dans pyproject.toml
+1. CrÃ©er/complÃ©ter `pyproject.toml` (build backend `setuptools` ou `hatchling`) avec :
+```toml
+[project]
+name = "vramancer"
+version = "1.6.0"
+requires-python = ">=3.10"
+dependencies = [ ...contenu de requirements.txt minimal... ]
+
+[project.optional-dependencies]
+full = [ ...requirements complet... ]
+windows = [ ... ]
+lite = [ ... ]
+dev = ["pytest", "pytest-repeat", "ruff", "mypy", "coverage"]
+
+[project.scripts]
+vramancer = "vramancer.cli:main"
+```
+2. Supprimer les 4 fichiers `requirements*.txt` de la racine APRÃˆS avoir vÃ©rifiÃ© que chaque dÃ©pendance est reprise dans un extra (garder une copie dans `docs/archive/` si doute â€” rÃ¨gle R1).
+**Validation :** `pip install -e ".[dev]"` fonctionne dans un venv propre ; `vramancer --help` fonctionne.
+
+### T-602 â€” API Python publique (le "mieux qu'un wrapper")
+CrÃ©er `vramancer/api.py` exposant une faÃ§ade stable, indÃ©pendante de la structure interne de `core/` :
+```python
+from vramancer import VRAMancer
+
+vm = VRAMancer(model="mistralai/Mistral-7B", backends="auto")
+vm.load()                          # split automatique multi-GPU
+out = vm.generate("Bonjour", max_tokens=128, stream=False)
+for tok in vm.generate("Bonjour", stream=True):
+    print(tok, end="")
+print(vm.placement())              # rapport: quelle couche sur quel GPU
+vm.unload()
+```
+RÃ¨gles d'implÃ©mentation :
+1. `vramancer/__init__.py` exporte : `VRAMancer`, `list_devices()`, `__version__`.
+2. Aucune fuite d'objets internes de `core/` dans les signatures publiques (retourner des dataclasses dÃ©finies dans `vramancer/types.py`).
+3. Toute fonction publique a docstring + type hints complets.
+4. Ã‰crire `tests/test_public_api.py` qui n'importe QUE `vramancer` (jamais `core`) â€” c'est le contrat.
+**Validation :** `tests/test_public_api.py` vert avec un backend mock/CPU ; `mypy vramancer/` sans erreur.
+
+### T-603 â€” Serveur compatible OpenAI comme produit de premiÃ¨re classe
+1. VÃ©rifier/complÃ©ter l'endpoint `/v1/chat/completions` (streaming inclus) dans `core/api/` pour compatibilitÃ© avec les clients OpenAI standards (`openai` python, curl).
+2. Ajouter `/v1/models` listant le modÃ¨le chargÃ©.
+3. Commande dÃ©diÃ©e : `vramancer serve --model X --port 8000`.
+4. Test d'intÃ©gration : client `openai` officiel pointÃ© sur `http://localhost:8000/v1` â†’ complÃ©tion OK, streaming OK.
+**Validation :** le test d'intÃ©gration passe en CI avec un modÃ¨le minuscule (ex. un tiny-random HF) sur CPU.
+
+### T-604 â€” Publication PyPI
+1. `python -m build` â†’ vÃ©rifier le wheel (`twine check dist/*`).
+2. Publier d'abord sur TestPyPI, installer depuis TestPyPI dans un venv propre, lancer le smoke test `vramancer --help` + `python -c "import vramancer"`.
+3. Publier sur PyPI. Taguer `v1.6.0` et crÃ©er une GitHub Release avec changelog.
+**Validation :** `pip install vramancer` fonctionne depuis PyPI.
+
+---
+
+## PHASE 7 â€” CI/CD et qualitÃ©
+
+### T-701 â€” Linters et typage
+1. Ajouter `ruff` (config dans pyproject : `line-length = 100`, rÃ¨gles `E,F,I,UP,B`). Corriger automatiquement : `ruff check --fix .` puis corriger le reste Ã  la main.
+2. Ajouter `mypy` en mode progressif : strict sur `vramancer/`, permissif sur `core/` (`ignore_errors = true` par module, Ã  retirer progressivement), exclu sur `experimental/`.
+**Validation :** `ruff check .` = 0 erreur ; `mypy vramancer/` = 0 erreur.
+
+### T-702 â€” Pipeline GitHub Actions
+CrÃ©er/complÃ©ter `.github/workflows/ci.yml` avec 4 jobs :
+1. `lint` : ruff + mypy.
+2. `test` (bloquant) : `pytest -m "not gpu and not experimental" --cov=core --cov=vramancer --cov-report=xml`, matrice Python 3.10/3.11/3.12, Ubuntu + macOS.
+3. `test-experimental` (non bloquant, `continue-on-error: true`) : `pytest -m experimental`.
+4. `build` : `python -m build` + `twine check`.
+Ajouter les badges CI + coverage (Codecov ou badge natif) en haut du README.
+**Validation :** pipeline vert sur la PR ; badges visibles.
+
+### T-703 â€” Releases propres
+1. Adopter un `CHANGELOG.md` au format Keep a Changelog.
+2. Pour chaque tag existant significatif, crÃ©er une GitHub Release rÃ©troactive avec 3-5 lignes de notes.
+3. Automatiser : workflow `release.yml` dÃ©clenchÃ© sur tag `v*` â†’ build â†’ publish PyPI â†’ crÃ©ation de la Release GitHub avec le changelog.
+**Validation :** la page Releases du dÃ©pÃ´t liste au moins la v1.6.0 avec notes et artefacts.
+
+---
+
+## PHASE 8 â€” AmÃ©liorations produit (au-delÃ  du refactor)
+
+> Ã€ faire APRÃˆS les phases 1-7. Chaque item = une issue GitHub distincte avec le label `enhancement`.
+
+### T-801 â€” Recentrer le pitch sur la killer feature
+La valeur dÃ©montrÃ©e est : **exÃ©cuter un modÃ¨le trop gros pour un seul GPU sur des GPUs hÃ©tÃ©rogÃ¨nes, en une commande**. RÃ©Ã©crire le pitch README autour de ce seul message. Tout le reste (cluster P2P, WebGPU, eBPF, CXL) est mentionnÃ© dans UNE section "Experimental" avec lien vers `experimental/README.md`.
+
+### T-802 â€” `vramancer doctor`
+Commande de diagnostic : dÃ©tecte GPUs, drivers, VRAM libre, versions CUDA/ROCm/MLX, teste l'import des backends, et affiche un rapport clair avec les actions correctives. C'est le meilleur rÃ©ducteur de tickets "Ã§a ne marche pas".
+
+### T-803 â€” Placement automatique avec explication
+AprÃ¨s `vm.load()`, afficher un tableau : couches â†’ device, VRAM utilisÃ©e/libre par device, dÃ©bit estimÃ© du lien inter-GPU utilisÃ©. La transparence du placement est un diffÃ©renciateur face Ã  `accelerate`/`device_map=auto`.
+
+### T-804 â€” Benchmarks reproductibles
+Script `benchmarks/run_all.py` qui produit un JSON versionnÃ© (matÃ©riel, drivers, modÃ¨le, tokens/s, VRAM) + un tableau Markdown gÃ©nÃ©rÃ© automatiquement insÃ©rÃ© dans `docs/benchmarks.md`. Ne plus jamais committer de sorties brutes Ã  la racine.
+
+### T-805 â€” Exemples exÃ©cutables testÃ©s
+3 exemples dans `examples/` : (1) split 2 GPUs, (2) serveur OpenAI + client, (3) offload CPU+GPU sur machine modeste. Chaque exemple a un test smoke en CI (backend mock/CPU) pour garantir qu'ils ne pourrissent pas.
+
+### T-806 â€” Guide de promotion experimental â†’ core
+Documenter dans `experimental/README.md` les critÃ¨res mesurables de promotion : tests dÃ©diÃ©s verts, zÃ©ro stub (`grep -n "TODO\|pass  # stub\|NotImplementedError"` vide), un consommateur rÃ©el dans core/, docstrings, entrÃ©e changelog. Appliquer d'abord Ã  `swarm_ledger` (le plus proche d'Ãªtre promu : il est fonctionnel, il manque juste son intÃ©gration Ã  l'orchestrateur).
+
+### T-807 â€” CompatibilitÃ© Ã©cosystÃ¨me
+- Support du format GGUF en entrÃ©e (interop llama.cpp) si absent.
+- Adapter/documenter l'usage comme backend derriÃ¨re LiteLLM et Open WebUI (grÃ¢ce Ã  l'API OpenAI de T-603).
+- Publier une image Docker `ghcr.io/thebloodlust/vramancer` (CUDA runtime) construite par la CI.
+
+---
+
+## ORDRE D'EXÃ‰CUTION ET CHECKLIST FINALE
+
+ExÃ©cuter strictement dans l'ordre : Phase 1 â†’ 2 â†’ 3 â†’ 4 â†’ 5 â†’ 6 â†’ 7 â†’ 8.
+
+- [ ] Phase 1 : racine propre (T-101 â†’ T-105)
+- [ ] Phase 2 : experimental/ peuplÃ©, zÃ©ro perte de code (T-201 â†’ T-204)
+- [ ] Phase 3 : 6 bugs corrigÃ©s avec tests de non-rÃ©gression (T-301 â†’ T-306)
+- [ ] Phase 4 : sÃ©curitÃ© (T-401 â†’ T-403)
+- [ ] Phase 5 : documentation consolidÃ©e (T-501 â†’ T-503)
+- [ ] Phase 6 : package public + API + PyPI (T-601 â†’ T-604)
+- [ ] Phase 7 : CI complÃ¨te + releases (T-701 â†’ T-703)
+- [ ] Phase 8 : amÃ©liorations produit (T-801 â†’ T-807)
+
+**Definition of Done globale :**
+1. `pip install vramancer` fonctionne depuis PyPI.
+2. `pytest -m "not gpu and not experimental"` vert en CI sur 3 versions de Python.
+3. Racine du dÃ©pÃ´t â‰¤ 15 fichiers.
+4. Aucun module stub dans `core/` ; tout est dans `experimental/` avec STATUS.md.
+5. README â‰¤ 150 lignes, centrÃ© sur le split multi-GPU hÃ©tÃ©rogÃ¨ne.
+6. `tests/test_public_api.py` passe sans importer `core`.
