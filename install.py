@@ -246,13 +246,15 @@ def install_pytorch(pip_cmd: str, gpu_info: dict):
 def install_vramancer(pip_cmd: str, mode: str, base_dir: Path):
     step("Installation de VRAMancer")
 
+    # NB: les noms doivent exister dans pyproject [project.optional-dependencies].
     extras = {
-        "full":  ".[all]",
-        "lite":  ".[lite]",
+        "full":  ".[full]",
+        "lite":  ".",                       # CLI minimal (deps de base)
         "dev":   ".[test,dev]",
-        "server": ".[server,security,compression]",
+        "server": ".[automation,compression]",
+        "node":  ".[gpu,cluster]",          # nœud cluster : inférence + mDNS (zeroconf)
     }
-    target = extras.get(mode, ".")
+    target = extras.get(mode, ".[gpu,cluster]")  # défaut = nœud prêt (inférence + mDNS)
 
     info(f"Mode: {bold(mode)} → pip install -e {target}")
     subprocess.check_call([pip_cmd, "install", "--upgrade", "pip", "setuptools", "wheel"])

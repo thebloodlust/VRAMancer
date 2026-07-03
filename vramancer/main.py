@@ -55,6 +55,8 @@ def main(argv=None):
     p_serve.add_argument("--quantization", type=str, default=None,
                          choices=["int8", "int4", "nvfp4", "gptq", "awq"],
                          help="Quantization: nvfp4 (Blackwell), int8, int4, gptq, awq")
+    p_serve.add_argument("--no-cluster", dest="cluster", action="store_false", default=True,
+                         help="Ne pas annoncer ce noeud sur le reseau (mDNS auto-discovery par defaut)")
 
     # ---- generate ----
     p_gen = sub.add_parser("generate", help="Generer du texte (one-shot)")
@@ -88,6 +90,21 @@ def main(argv=None):
     p_split.add_argument("--no-profile", dest="profile", action="store_false",
                          help="Split VRAM-proportionnel simple")
 
+    # ---- dashboard ----
+    p_dash = sub.add_parser("dashboard",
+                            help="Lancer le dashboard web temps reel (VRAM, tok/s, memoire, GPU)")
+    p_dash.add_argument("--port", type=int, default=8500, help="Port HTTP (defaut: 8500)")
+    p_dash.add_argument("--host", type=str, default="0.0.0.0")
+    p_dash.add_argument("--cli", action="store_true", help="Dashboard terminal (au lieu du web)")
+
+    # ---- quickstart ----
+    p_qs = sub.add_parser("quickstart",
+                          help="Choisir un USAGE (code-assistant, chat…) — VRAMancer recommande le modele")
+    p_qs.add_argument("use_case", nargs="?", default=None,
+                      help="Usage: code-assistant, chat, summarize")
+    p_qs.add_argument("--run", action="store_true", help="Charger et lancer directement le modele recommande")
+    p_qs.add_argument("--serve", action="store_true", help="Proposer la commande 'serve' (API REST)")
+
     # ---- hub ----
     p_hub = sub.add_parser("hub", help="Explorer le catalogue de modeles HuggingFace")
     p_hub.add_argument("model", help="Identifiant du modele sur HF (ex: HuggingFaceH4/zephyr-7b-beta)")
@@ -95,6 +112,25 @@ def main(argv=None):
 
     # ---- health ----
     sub.add_parser("health", help="Verifier la sante du systeme")
+
+    # ---- doctor ----
+    sub.add_parser("doctor", help="Diagnostic complet (GPU, P2P, versions, sante, reco) - chiffres mesures")
+
+    # ---- history ----
+    p_hist = sub.add_parser("history", help="Historique local des requetes (tok/s, OOM, tendances)")
+    p_hist.add_argument("--limit", type=int, default=20, help="Nombre de requetes a afficher")
+
+    # ---- cluster ----
+    p_clu = sub.add_parser("cluster", help="Cluster data-parallel (local multi-process, ou cross-noeud via gateway)")
+    p_clu.add_argument("action", choices=["serve", "gateway"],
+                       help="serve = workers locaux (1/GPU) ; gateway = route vers des noeuds distants")
+    p_clu.add_argument("model", nargs="?", default=None, help="Modele HF (serve) ; ignore pour gateway")
+    p_clu.add_argument("--gpus", type=str, default=None, help="serve: GPU ids (ex: 0,1) - defaut tous")
+    p_clu.add_argument("--nodes", type=str, default=None, help="gateway: URLs noeuds (ex: http://laptop:5040,http://mac:5040)")
+    p_clu.add_argument("--discover", action="store_true", help="gateway: auto-decouverte mDNS des noeuds")
+    p_clu.add_argument("--check", action="store_true", help="gateway: pre-vol - liste les noeuds + sante, puis quitte")
+    p_clu.add_argument("--port", type=int, default=None, help="serve defaut 5040, gateway defaut 5050")
+    p_clu.add_argument("--host", type=str, default="0.0.0.0")
 
     # ---- auth ----
     p_auth = sub.add_parser("auth", help="Générer une identité Swarm Ledger (sk-VRAM-...)")
@@ -128,12 +164,23 @@ def main(argv=None):
         _cmd_benchmark(args)
     elif args.command == "discover":
         _cmd_discover(args)
+    elif args.command == "dashboard":
+        _cmd_dashboard(args)
+    elif args.command == "quickstart":
+        _cmd_quickstart(args)
     elif args.command == "hub":
         _cmd_hub(args)
     elif args.command == "split":
         _cmd_split(args)
     elif args.command == "health":
         _cmd_health()
+    elif args.command == "doctor":
+        from core.doctor import run_doctor
+        sys.exit(run_doctor())
+    elif args.command == "history":
+        _cmd_history(args)
+    elif args.command == "cluster":
+        _cmd_cluster(args)
     else:
         parser.print_help()
 
@@ -175,6 +222,86 @@ def _cmd_status():
     except ImportError:
         pass
     print("=" * 50)
+
+
+def _cmd_dashboard(args):
+    """Lance le dashboard (web temps reel par defaut, ou terminal avec --cli)."""
+    if args.cli:
+        try:
+            from dashboard.cli_dashboard import launch as launch_cli
+            launch_cli()
+        except Exception as e:
+            print(f"Dashboard CLI indisponible: {e}", file=sys.stderr)
+            sys.exit(1)
+        return
+    try:
+        from dashboard.dashboard_web import launch as launch_web
+    except Exception as e:
+        print(f"ERROR: dashboard web indisponible ({e})", file=sys.stderr)
+        print("Installe les deps GUI: pip install flask flask-socketio", file=sys.stderr)
+        sys.exit(1)
+    launch_web(port=args.port, host=args.host)
+
+
+def _cmd_cluster(args):
+    """Cluster data-parallel : serve (workers locaux) ou gateway (noeuds distants)."""
+    if args.action == "gateway":
+        nodes = [u.strip() for u in args.nodes.split(",")] if args.nodes else None
+        if not nodes and not args.discover:
+            print("gateway: fournis --nodes url1,url2  ou  --discover"); return
+        try:
+            from core.cluster_gateway import cluster_gateway, probe
+        except Exception as e:
+            print(f"ERROR: gateway indisponible ({e})", file=sys.stderr); sys.exit(1)
+        if args.check:
+            sys.exit(probe(nodes=nodes, discover=args.discover))
+        cluster_gateway(nodes=nodes, discover=args.discover, host=args.host,
+                        port=args.port or 5050)
+        return
+    # serve
+    if not args.model:
+        print("serve: fournis un modele (ex: vramancer cluster serve Qwen/Qwen2.5-0.5B-Instruct)"); return
+    gpu_ids = [int(x) for x in args.gpus.split(",")] if args.gpus else None
+    try:
+        from core.cluster_router import serve_cluster
+    except Exception as e:
+        print(f"ERROR: cluster indisponible ({e})", file=sys.stderr)
+        sys.exit(1)
+    serve_cluster(args.model, gpu_ids=gpu_ids, host=args.host, port=args.port or 5040)
+
+
+def _cmd_history(args):
+    """Affiche l'historique local des requetes (tok/s, statut, tendances)."""
+    from core.request_history import recent, stats
+    st = stats()
+    print("=" * 60)
+    print("  VRAMancer — historique des requetes")
+    print("=" * 60)
+    if "error" in st:
+        print(f"  (indisponible: {st['error']})"); return
+    print(f"  Requetes OK: {st['count_ok']}  |  erreurs: {st['count_error']}  |  "
+          f"tok/s moyen: {st['avg_tok_s']}  |  duree moy: {st['avg_duration_ms']} ms")
+    print("-" * 60)
+    rows = recent(args.limit)
+    if not rows:
+        print("  (aucune requete enregistree — lance 'vramancer serve' et genere)")
+    import time as _t
+    for r in rows:
+        ts = _t.strftime("%m-%d %H:%M", _t.localtime(r["ts"]))
+        icon = "OK " if r["status"] == "ok" else r["status"][:3]
+        print(f"  {ts}  [{icon}] {r['model'][:28]:28s} {r['prompt_tokens']:>5}->{r['generated_tokens']:<4} tok  "
+              f"{r['tok_s']:>6} tok/s")
+    print("=" * 60)
+
+
+def _cmd_quickstart(args):
+    """Recommande (et lance avec --run) un modele adapte a un USAGE."""
+    from vramancer.quickstart import run_quickstart, USE_CASES
+    if not args.use_case:
+        print("Usage: vramancer quickstart <use-case>")
+        print("Usages disponibles : " + ", ".join(USE_CASES))
+        return
+    sys.exit(run_quickstart(args.use_case, launch=args.run, serve=args.serve))
 
 
 def _cmd_run(args):
@@ -355,6 +482,28 @@ def _cmd_serve(args):
             print(f"\n  WARNING: Model pre-load failed: {e}")
             print("  Send POST /api/models/load to load later.\n")
 
+    # Annonce ce noeud sur le reseau (mDNS auto-discovery) — sauf --no-cluster
+    if getattr(args, "cluster", True):
+        try:
+            os.environ.setdefault("VRM_EXPERIMENTAL", "1")  # invocation explicite = opt-in
+            from experimental.cluster_discovery import ClusterDiscovery
+            _disco = ClusterDiscovery(port=args.port)
+            _disco.start()
+            globals()["_SERVE_DISCOVERY"] = _disco  # garde une reference vivante
+            print(f"  Cluster: ce noeud est annonce via mDNS (port {args.port}).")
+            print("           'vramancer discover' depuis une autre machine pour le voir.")
+            # Dashboard multi-noeuds en arriere-plan (partage la meme discovery)
+            try:
+                from dashboard.dashboard_web import set_cluster_discovery, launch_in_thread
+                set_cluster_discovery(_disco)
+                _dash_port = args.port + 1
+                launch_in_thread(port=_dash_port)
+                print(f"           Dashboard cluster: http://localhost:{_dash_port}/dash\n")
+            except Exception as e:
+                print(f"           (dashboard cluster indisponible: {e})\n")
+        except Exception as e:
+            print(f"  Cluster: discovery indisponible ({e}) — pip install 'vramancer[cluster]'\n")
+
     # Start server (gunicorn in production, Werkzeug fallback in dev)
     from core.production_api import run_server
     try:
@@ -442,6 +591,7 @@ def _cmd_discover(args):
     """Decouverte des noeuds reseau."""
     print("Network Node Discovery")
     print("-" * 40)
+    os.environ.setdefault("VRM_EXPERIMENTAL", "1")  # invocation explicite = opt-in
     try:
         from experimental.cluster_discovery import ClusterDiscovery
         import time

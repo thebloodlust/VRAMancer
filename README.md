@@ -13,9 +13,7 @@ vramancer run Qwen/Qwen2.5-14B-Instruct -q nf4
 vramancer run Qwen/Qwen2.5-7B-Instruct -p "Explain gradient descent in 3 sentences"
 ```
 
-VRAMancer auto-detects all GPUs and configures the multi-GPU split for you — via Hugging Face **accelerate** (`device_map="auto"`) for Transformers models, or tensor-split for GGUF/llama.cpp — then picks the backend automatically. One command, no YAML, no manual device maps.
-
-VRAMancer is an **orchestrator** on top of proven engines (accelerate, llama.cpp, vLLM), not a from-scratch inference engine. Its value is the one-command UX, automatic GPU/backend selection, and its own measured optimizations (prompt-lookup decoding, TurboQuant KV compression, VRAM lending, auto-heal). The heterogeneous split itself is done by accelerate.
+VRAMancer auto-detects all GPUs and runs the model across them using the standard engines — HuggingFace `accelerate` (`device_map="auto"`), llama.cpp, or vLLM — with a compute-aware `max_memory` map that avoids the load-time OOM tight-fit models hit. It is an **orchestration + UX layer** on top of those engines (it does not reimplement the inference engine), plus measured optimisations (prompt-lookup decoding, KV compression, a VRAM lending pool). No config files, no YAML, no manual device maps.
 
 ## Benchmarks
 
@@ -28,17 +26,24 @@ VRAMancer is an **orchestrator** on top of proven engines (accelerate, llama.cpp
 | **Qwen3-Coder-Next Q3** | **80B (3B active)** | **38 GB** | **~60** | GGUF Q3_K_XL, 2-GPU tensor split, MoE |
 | Qwen2.5-7B GGUF Q4_K_M | 7B | 4.5 GB | **106.8** | llama.cpp, 1 GPU |
 
-> Qwen3-Coder-Next: 80B MoE model (3B active params per token), GGUF Q3_K_XL split across RTX 3090 (23.4 GB) + RTX 5070 Ti (15 GB). First token: 66–92 ms. Faster than a 14B dense model despite 6× more total parameters — MoE sparsity wins.
+> Qwen3-Coder-Next: 80B MoE model (3B active params per token), GGUF Q3_K_XL split across RTX 3090 (23.4 GB) + RTX 5070 Ti (15 GB). First token: 66–92 ms. It runs faster than the 14B dense row above because only ~3B params are computed per token (MoE sparsity), not because of any VRAMancer-specific trick — llama.cpp does the work.
 
-### GPU-to-GPU transfer bandwidth (Proxmox PCIe P2P)
+### GPU-to-GPU transfer bandwidth
 
-`nvidia-smi topo -p2p r` shows P2P OK between GPUs. `torch.cuda.can_device_access_peer()` returns False (CUDA API lies in VM) — VRAMancer probes nvidia-smi as ground truth.
+On these consumer GPUs (RTX 3090 Ampere + RTX 5070 Ti Blackwell, no NVLink, VFIO
+passthrough), **direct GPU↔GPU P2P is not available** — measured: `can_device_access_peer()`
+returns False, and the driver call `cuCtxEnablePeerAccess` returns
+`CUDA_ERROR_PEER_ACCESS_UNSUPPORTED` (217). So **all transfers are CPU-staged** (through
+pinned host RAM over PCIe). The Rust pipeline just does it faster via double-buffered
+pinned memory:
 
 | Method | Bandwidth | Notes |
 |--------|-----------|-------|
-| Rust `cuMemcpyPeerAsync` | **~25 GB/s** | True PCIe P2P DMA |
-| PyTorch `.to()` | ~12 GB/s | CPU-staged fallback |
-| Python pinned CPU | ~10 GB/s | 2-hop: GPU→CPU→GPU |
+| Rust pinned double-buffer (`GpuPipeline`) | ~25 GB/s | CPU-staged, overlapped (large contiguous transfers) |
+| PyTorch `.to()` | ~11.6 GB/s | CPU-staged, naive (measured, 256 MB) |
+
+There is no P2P DMA path here; a faster transport would need NVLink or, for cross-node,
+Thunderbolt/USB4 (~16–20 Gbps).
 
 ### KV cache migration (VRAM Lending Pool preemption)
 
@@ -72,13 +77,35 @@ Full benchmark scripts: [benchmarks/](benchmarks/)
 
 ## Install
 
+One-liner (detects your GPU/CUDA, sets up an isolated venv, installs the matching
+PyTorch wheel, builds the Rust core, and adds the `vramancer` command):
+
+**Linux / macOS**
+```bash
+curl -fsSL https://raw.githubusercontent.com/thebloodlust/VRAMancer/main/install.sh | bash
+vramancer quickstart code-assistant      # picks a model that fits your hardware
+```
+
+**Windows (PowerShell)**
+```powershell
+irm https://raw.githubusercontent.com/thebloodlust/VRAMancer/main/install.ps1 | iex
+vramancer quickstart code-assistant
+```
+
+Both wrap the same cross-platform `install.py` auto-detector (Linux → CUDA/ROCm/CPU,
+macOS → MPS, Windows → CUDA/CPU).
+
+Or manually:
+
 ```bash
 git clone https://github.com/thebloodlust/VRAMancer.git
 cd VRAMancer
 pip install -e .
 ```
 
-Requires Python 3.10+, PyTorch 2.1+.
+Requires Python 3.10+, an NVIDIA driver (for CUDA), PyTorch 2.1+. The installer wraps
+the existing `install.py` auto-detector; it does not bundle PyTorch/CUDA into a binary
+(the host NVIDIA driver is kernel-level and cannot be bundled).
 
 ### Platform-specific setup
 
@@ -103,7 +130,7 @@ vramancer status
 
 **Optional backends:**
 ```bash
-pip install llama-cpp-python    # GGUF models (fastest, 106 tok/s)
+pip install llama-cpp-python    # GGUF models (fast — 106 tok/s on a 7B here)
 pip install bitsandbytes        # NF4/INT8 quantization
 pip install vllm                # Batched serving
 ```
@@ -211,7 +238,7 @@ vramancer run Qwen/Qwen2.5-14B-Instruct -q nf4
 # Force specific GPU count
 vramancer run meta-llama/Llama-3-8B --gpus 2
 
-# GGUF models auto-select llama.cpp (17x faster than HuggingFace)
+# GGUF models auto-select llama.cpp (faster than HF for GGUF: ~106 vs ~35 tok/s on a 7B here)
 vramancer run bartowski/Qwen2.5-7B-Instruct-GGUF
 ```
 
@@ -231,26 +258,69 @@ curl http://localhost:5030/v1/completions \
 ### Other commands
 
 ```bash
+vramancer doctor      # Full diagnostic (GPU, P2P, versions, health) — measured numbers only
 vramancer status      # Show GPUs, memory, backend
 vramancer health      # System health check
+vramancer dashboard   # Real-time web dashboard (GPU/VRAM/tok-s)
+vramancer history     # Recent requests (tok/s, OOM, trends)
 vramancer hub Qwen/Qwen2.5-14B-Instruct  # Browse model formats on HF
 vramancer benchmark   # GPU matmul benchmark
 vramancer split Qwen/Qwen2.5-14B-Instruct --gpus 2  # Preview model split
 ```
 
+### Cluster (data-parallel across GPUs)
+
+```bash
+# Data-parallel: one worker process per GPU, requests routed by work-stealing (~2× on 2 GPUs).
+vramancer cluster serve Qwen/Qwen2.5-14B-Instruct   # OpenAI API on :5040, dashboard on :5041/dash
+```
+
+Auto-restarts dead workers, records history, alerts on failure (`VRM_ALERT_WEBHOOK`).
+
+#### Add another machine to the cluster (multi-node)
+
+Each machine joins with **one command** — the installer pulls inference + mDNS by default,
+so the node auto-announces on the LAN. Works across backends (a Mac MPS node + a CUDA node
+cooperate; the gateway only speaks HTTP).
+
+```bash
+# 1. On the new machine (laptop / Mac / desktop) — one command:
+curl -fsSL https://raw.githubusercontent.com/thebloodlust/VRAMancer/main/install.sh | bash
+#    (Windows: irm https://raw.githubusercontent.com/thebloodlust/VRAMancer/main/install.ps1 | iex)
+
+# 2. Run a node on that machine (it announces itself via mDNS):
+vramancer serve Qwen/Qwen2.5-7B-Instruct --port 5040
+
+# 3. On any machine, start the gateway — it discovers nodes and routes whole requests:
+vramancer cluster gateway --discover
+#    or explicitly: vramancer cluster gateway --nodes http://laptop.local:5040,http://mac.local:5040
+```
+
+> Not a GUI "1-click" (it's one terminal command): a true single binary can't bundle
+> PyTorch/CUDA + the kernel-level GPU driver. The installer is the honest equivalent.
+
+The same brick is also the foundation for cross-vendor (NVIDIA+AMD in one box) — pending an
+AMD GPU. See [docs/CLUSTER.md](docs/CLUSTER.md).
+
 ## How it works
 
 1. **Auto-detect GPUs** — enumerates all CUDA/ROCm/MPS devices with free VRAM
-2. **Configure the split** — wires up accelerate `device_map="auto"` (Transformers) or tensor-split (GGUF/llama.cpp), which assigns layers across GPUs by available memory (e.g., 23 layers to the 24 GB GPU, 28 to the 16 GB GPU). The split and the multi-GPU forward are handled by the underlying engine, not by VRAMancer.
-3. **Run inference on the chosen engine** — accelerate/llama.cpp/vLLM execute the forward (activations are CPU-staged between GPUs when consumer P2P is unavailable). VRAMancer layers its own measured optimizations on top (prompt-lookup, TurboQuant KV, lending, auto-heal).
+2. **Compute-aware memory map** — computes a `max_memory` budget per GPU (favouring the faster GPU) and hands it to `accelerate` / llama.cpp / vLLM, which do the actual layer placement and dispatch. This avoids the fp32-upcast OOM that the naive 97% formula triggers on tight-fit models.
+3. **Inference via the chosen engine** — accelerate runs the forward pass (pipeline-parallel across GPUs); VRAMancer does not reimplement it.
 4. **Quantization** — optional NF4/INT8/NVFP4 to reduce VRAM footprint
 5. **KV cache management** — paged attention with optional PolarQuant+QJL compression (~3.5 bits/dim, ~4.6x reduction)
+
+> Honest scope: VRAMancer's value is the orchestration, the OOM-avoiding placement, the
+> measured optimisations and the UX (one-command install, `quickstart`, `doctor`, dashboard,
+> mDNS cluster) — **not** a from-scratch inference engine. Weight-tiering, MoE expert
+> streaming and prefill/decode disaggregation were prototyped and **measured to not beat
+> the standard engines** on this hardware; they are not claimed as features.
 
 ## Backends
 
 | Backend | Install | Best for |
 |---------|---------|----------|
-| **llamacpp** (recommended) | `pip install llama-cpp-python` | GGUF models, fastest inference (106 tok/s) |
+| **llamacpp** (recommended) | `pip install llama-cpp-python` | GGUF models, fast inference (106 tok/s on a 7B here) |
 | **huggingface** | `pip install transformers accelerate` | General use, multi-GPU split |
 | **vllm** | `pip install vllm` | High-throughput batched serving |
 | **ollama** | Install [Ollama](https://ollama.ai) | Easy local models |
@@ -271,7 +341,7 @@ vramancer split Qwen/Qwen2.5-14B-Instruct --gpus 2  # Preview model split
 | Multi-GPU pipeline parallel | ✅ | N/A | ✅ | ✅ | ✅ | N/A | N/A |
 | Multi-GPU tensor parallel (NCCL) | ✅ | ❌ | ⚠️ | ✅ | ⚠️ | ❌ | ❌ |
 | VRAM Lending Pool | ✅ | N/A | ✅ | ✅ (P2P or ReBAR) | ⚠️ | N/A | N/A |
-| Rust P2P bypass (CUDA FFI) | ✅ | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ |
+| Rust pinned GPU transfer (CUDA FFI) | ✅ | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ |
 | Continuous batcher | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 Legend: ✅ supported & tested · ⚠️ partial / experimental · ❌ not supported · N/A not applicable.

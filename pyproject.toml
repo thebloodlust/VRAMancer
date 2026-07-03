@@ -39,6 +39,7 @@ gpu = [
     "torch>=2.0",
     "transformers>=4.30",
     "accelerate>=0.25",
+    "peft>=0.18.2",
     "nvidia-ml-py>=11.0"
 ]
 gui = [
@@ -67,6 +68,10 @@ quantization = [
 gguf = [
     "llama-cpp-python>=0.3.0"
 ]
+cluster = [
+    "zeroconf>=0.130",
+    "pyudev>=0.24; sys_platform == 'linux'"
+]
 automation = [
     "graphene>=3.3",
     "flask-cors>=4.0"
@@ -83,7 +88,7 @@ dev = [
     "isort"
 ]
 full = [
-    "vramancer[gpu,gui,vision,compression,tracing,quantization,gguf,automation]"
+    "vramancer[gpu,gui,vision,compression,tracing,quantization,gguf,automation,cluster]"
 ]
 windows = [
     "vramancer[gpu,gui,compression,quantization]"

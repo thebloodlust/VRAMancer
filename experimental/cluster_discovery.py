@@ -336,11 +336,39 @@ class ClusterDiscovery:
         )
         self._cleanup_thread.start()
 
+        # USB4/Thunderbolt hot-plug: un lien rapide qui apparaît -> re-annonce/découverte
+        try:
+            self._usb4 = USB4HotPlug(
+                on_connect=lambda ev: self._on_fast_link(ev),
+                on_disconnect=lambda ev: _logger.info("Lien TB/USB4 retiré: %s", ev.get("device_path")),
+            )
+            self._usb4.start()
+        except Exception as exc:  # pragma: no cover
+            self._usb4 = None
+            _logger.debug("USB4 hot-plug indisponible: %s", exc)
+
+    def _on_fast_link(self, ev: Dict[str, Any]) -> None:
+        """Un lien Thunderbolt/USB4 est apparu : ré-annonce ce nœud (le pair sera
+        découvert via mDNS/IP-over-TB sur la nouvelle interface)."""
+        _logger.info("Lien rapide TB/USB4 détecté (%s) — ré-annonce du nœud",
+                     ev.get("device_path", "?"))
+        try:
+            self._register_node(self._local_info)
+            if getattr(self, "_zeroconf", None) is not None:
+                self._start_mdns()  # ré-enregistre le service sur la nouvelle interface
+        except Exception as exc:  # pragma: no cover
+            _logger.debug("Ré-annonce après lien rapide échouée: %s", exc)
+
     def stop(self) -> None:
         """Stop all discovery threads."""
         self._running = False
         self._shutdown.set()
         self._stop_mdns()
+        try:
+            if getattr(self, "_usb4", None) is not None:
+                self._usb4.stop()
+        except Exception:
+            pass
         _logger.info("Discovery stopped")
 
     @property
