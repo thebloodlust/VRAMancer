@@ -19,4 +19,13 @@ laissée à l'architecte pour éviter toute perte de contenu.)
 `README.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `BENCHMARK_RESULTS.md`, `RESULTAT_PALIER_A1.md`,
 `LICENSE`, `MIGRATION_NOTES.md`.
 
-Tests avant/après : voir commits.
+### T-hyg-3 — Requirements
+`requirements.txt` = déjà réduit à `.[gpu]` (pointeur vers l'extra pyproject) → consolidation
+**déjà faite**, rien à changer. Les extras vivent dans `pyproject.toml`
+(`gpu`, `gui`, `cluster`, `full`, …).
+
+### Tests (R4)
+Déplacements docs-only → aucun `.py` touché. Vérifié : `import vramancer/core` OK ;
+`pytest benchmarks/test_cluster_unit + test_s2_quickstart + test_history_alerts` = **11 passed**.
+
+Racine : 35 → 6 .md canoniques.
