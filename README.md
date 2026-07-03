@@ -21,8 +21,8 @@ VRAMancer auto-detects all GPUs and runs the model across them using the standar
 
 | Model | Params | VRAM | tok/s | Notes |
 |-------|--------|------|-------|-------|
-| Qwen2.5-14B BF16 | 14B | 35.9 GB | **16.1** | 2-GPU, OOMs on either GPU alone |
-| Qwen2.5-14B NF4 | 14B | 10.8 GB | **10.5** | 1 GPU, bitsandbytes, ~70% less VRAM but 35% slower than BF16 2-GPU |
+| Qwen2.5-14B BF16 | 14B | 35.9 GB | **5.41** | 2-GPU via accelerate `device_map`, OOMs on either GPU alone ([methodology](BENCHMARK_RESULTS.md)) |
+| Qwen2.5-14B NF4 | 14B | 10.8 GB | **10.5** | 1 GPU, bitsandbytes, ~70% less VRAM — and faster than BF16-2GPU (no cross-GPU transfer overhead) |
 | **Qwen3-Coder-Next Q3** | **80B (3B active)** | **38 GB** | **~60** | GGUF Q3_K_XL, 2-GPU tensor split, MoE |
 | Qwen2.5-7B GGUF Q4_K_M | 7B | 4.5 GB | **106.8** | llama.cpp, 1 GPU |
 
