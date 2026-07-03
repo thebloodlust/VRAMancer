@@ -631,8 +631,26 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
             except Exception:
                 logger.debug("Swarm ledger credit consumption failed", exc_info=True)
 
+        # T6.3 — function calling (requête) : si des outils sont fournis, informer le modèle
+        # du format d'appel (Hermes <tool_call>). Additif : sans effet si pas de `tools`.
+        tool_preamble = ""
+        _tools = data.get('tools') or []
+        if _tools:
+            try:
+                import json as _json
+                _specs = _json.dumps([t.get('function', t) for t in _tools], ensure_ascii=False)
+                tool_preamble = (
+                    "You can call tools. To call one, emit exactly:\n"
+                    '<tool_call>\n{"name": <tool_name>, "arguments": <args_object>}\n</tool_call>\n'
+                    f"Available tools (JSON schema): {_specs}"
+                )
+            except Exception:
+                tool_preamble = ""
+
         # Convert messages to prompt
         prompt_parts = []
+        if tool_preamble:
+            prompt_parts.append(f"System: {tool_preamble}")
         for msg in messages:
             role = msg.get('role', 'user')
             content = msg.get('content', '')
@@ -719,6 +737,13 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
             prompt_tokens = _count_tokens(prompt, tokenizer)
             completion_tokens = _count_tokens(text, tokenizer)
 
+            # T6.3 — function calling : extraire les tool-calls (format Hermes Qwen)
+            try:
+                from core.tool_calls import build_chat_message
+                _msg, _finish = build_chat_message(text)
+            except Exception:
+                _msg, _finish = {'role': 'assistant', 'content': text}, 'stop'
+
             try:
                 API_LATENCY.labels(path='/v1/chat/completions', method='POST', status='200').observe(elapsed)
             except Exception:
@@ -731,8 +756,8 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
                 'model': _registry.model_name or model_name,
                 'choices': [{
                     'index': 0,
-                    'message': {'role': 'assistant', 'content': text},
-                    'finish_reason': 'stop',
+                    'message': _msg,
+                    'finish_reason': _finish,
                 }],
                 'usage': {
                     'prompt_tokens': prompt_tokens,
