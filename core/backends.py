@@ -140,6 +140,10 @@ class KVCacheBlock(_nn.Module if _HAS_TORCH else object):
     Replaces nn.Sequential for multi-GPU pipeline-parallel inference.
     Each layer is called with (hidden_states, past_key_value, use_cache)
     and returns (hidden_states, present_key_value).
+
+    DÉPRÉCIÉ (palier A1, 2026-07-03) : brique du forward manuel « Path 2 », cassé
+    (cache_position non propagé, sortie dégénérée) et non réparé. Chemin de prod =
+    accelerate device_map. Voir experimental/manual_forward/README.md.
     """
 
     def __init__(self, layers: list):
@@ -1603,6 +1607,17 @@ class HuggingFaceBackend(BaseLLMBackend):
         return x
 
     def _infer_with_kv_cache(self, inputs: Any, past_key_values: Optional[List] = None, use_cache: bool = False) -> Any:
+        # DÉPRÉCIÉ (palier A1, décision architecte 2026-07-03) : le forward manuel « Path 2 »
+        # est cassé (cache_position non propagé -> DynamicCache jamais peuplé -> sortie
+        # dégénérée) et NE sera PAS réparé (accelerate fait mieux). Chemin de prod =
+        # accelerate device_map (self.blocks is None). Doc : experimental/manual_forward/.
+        import warnings
+        warnings.warn(
+            "VRAMancer manual forward (Path 2 / KVCacheBlock) is DEPRECATED and known-broken "
+            "(cache_position bug, palier A1). Production path is accelerate device_map. "
+            "See experimental/manual_forward/README.md.",
+            DeprecationWarning, stacklevel=2,
+        )
         import traceback
         try:
             return self.__infer_with_kv_cache_impl(inputs, past_key_values, use_cache)
