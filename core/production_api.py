@@ -623,7 +623,14 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
         full_len = sum(len(str(m.get('content', ''))) for m in messages)
         from core.api.validation import _MAX_PROMPT_LENGTH
         if full_len > _MAX_PROMPT_LENGTH:
-            return jsonify({"error": f"messages exceed {_MAX_PROMPT_LENGTH} char limit"}), 413
+            # C4.3 : message actionnable plutôt qu'un crash/erreur opaque.
+            approx_tok = full_len // 4
+            return jsonify({"error": {
+                "message": (f"Prompt too long: ~{approx_tok} tokens ({full_len} chars) exceeds the "
+                            f"server limit (~{_MAX_PROMPT_LENGTH // 4} tokens). Reduce the prompt "
+                            f"(fewer/smaller files) or restart the server with a larger context."),
+                "type": "context_length_exceeded", "code": "context_length_exceeded",
+            }}), 400
         data['max_tokens'] = min(data.get('max_tokens', _DEFAULT_MAX_TOKENS), _MAX_TOKENS_CAP)
 
         model_name = data.get('model')

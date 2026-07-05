@@ -42,6 +42,24 @@ Pas de chemin DMA P2P sur ce matériel. Un transport plus rapide exigerait NVLin
 | data-parallel local, threads | ×0.97 (artefact GIL) |
 | data-parallel local, **process** (ClusterRouter), 32 req | **×1.97** (work-stealing 16/16) |
 
+## Contexte / agent de code (C4) — Qwen3.6-35B-A3B GGUF Q4, llama.cpp, 2 GPU
+`benchmarks/bench_context_scaling.py`. TTFT (proxy 1 token) + débit décode (~63 tok).
+| Prompt (~tok) | TTFT | décode tok/s |
+|---|---|---|
+| 1 000 | 0.31 s | ~305 |
+| 2 000 | 0.41 s | ~235 |
+| 4 000 | 0.77 s | ~246 |
+| ≥ 6 000 | — | rejeté (contexte 4096) |
+
+**Constat C4** : le contexte effectif par requête est **4096 tokens** (continuous batching
+= 4 slots × 4096 sur n_ctx 16384) — **trop petit pour un agent de code** (fichiers entiers).
+Bon point : l'overflow renvoie une **erreur propre** (`exceed context window of 4096`),
+pas de crash (guardrail C4.3 actionnable côté API en amont).
+
+**Reco (à appliquer au prochain restart)** : pour l'usage coding (mono-utilisateur), donner
+tout le contexte à une requête — `VRM_CONTINUOUS_BATCHING=0` (1 slot → ~16K/req) et/ou
+augmenter `n_ctx` (32768/65536) si la VRAM le permet. Puis re-mesurer 8K/32K/64K.
+
 ## Palier A1 (rappel)
 ❌ Path 2 (forward manuel) NE PASSE PAS : sortie dégénérée, bug `cache_position` (prouvé
 single-GPU). accelerate (Path 1) = voie de prod. Détails : `RESULTAT_PALIER_A1.md`.
