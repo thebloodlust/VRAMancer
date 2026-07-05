@@ -36,6 +36,11 @@ API_PORT = int(os.environ.get('VRM_API_PORT', '5030'))
 API_DEBUG = os.environ.get('VRM_API_DEBUG', '0') in {'1', 'true', 'TRUE'}
 os.environ.setdefault('VRM_API_BASE', f'http://localhost:{API_PORT}')
 
+# Défaut max_tokens de sortie : 128 était trop petit pour un agent de code (édition
+# de fichier tronquée). 2048 par défaut (le modèle s'arrête à <|im_end|> de toute façon).
+_DEFAULT_MAX_TOKENS = int(os.environ.get('VRM_DEFAULT_MAX_TOKENS', '2048'))
+_MAX_TOKENS_CAP = int(os.environ.get('VRM_MAX_TOKENS_CAP', '16384'))
+
 # Inference queue settings
 _INFERENCE_TIMEOUT = int(os.environ.get('VRM_INFERENCE_TIMEOUT', '120'))
 _MAX_QUEUE_SIZE = int(os.environ.get('VRM_MAX_QUEUE_SIZE', '32'))
@@ -448,7 +453,7 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
         prompt_err = validate_prompt(prompt)
         if prompt_err:
             return jsonify({'error': prompt_err[0]}), prompt_err[1]
-        data['max_tokens'] = min(data.get('max_tokens', 128), 8192)
+        data['max_tokens'] = min(data.get('max_tokens', _DEFAULT_MAX_TOKENS), _MAX_TOKENS_CAP)
         model_name = data.get('model')
         stream = data.get('stream', False)
 
@@ -616,7 +621,7 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
         from core.api.validation import _MAX_PROMPT_LENGTH
         if full_len > _MAX_PROMPT_LENGTH:
             return jsonify({"error": f"messages exceed {_MAX_PROMPT_LENGTH} char limit"}), 413
-        data['max_tokens'] = min(data.get('max_tokens', 128), 8192)
+        data['max_tokens'] = min(data.get('max_tokens', _DEFAULT_MAX_TOKENS), _MAX_TOKENS_CAP)
 
         model_name = data.get('model')
         stream = data.get('stream', False)
