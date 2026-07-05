@@ -658,7 +658,7 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
                         max_new_tokens=params['max_tokens'],
                         temperature=params['temperature'],
                         top_p=params['top_p'],
-                        stop=["\nUser:", "\nSystem:"],
+                        stop=["<|im_end|>"],
                     ):
                         chunk = {
                             "id": req_id,
@@ -698,7 +698,7 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
                     max_new_tokens=params['max_tokens'],
                     temperature=params['temperature'],
                     top_p=params['top_p'],
-                    stop=["\nUser:", "\nSystem:"],
+                    stop=["<|im_end|>"],
                 )
 
             text, queue_err = _run_with_timeout(_do_chat)

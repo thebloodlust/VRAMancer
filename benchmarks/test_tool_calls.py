@@ -27,9 +27,10 @@ def test_prompt_tool_role_and_assistant_tool_calls():
         {"role": "tool", "tool_call_id": "c1", "content": '{"temp": "22C"}'},
     ]
     p = build_chat_prompt(messages, tools=[{"function": {"name": "get_weather"}}])
+    assert "<|im_start|>system" in p and "<tools>" in p       # ChatML + bloc outils Qwen
     assert "<tool_call>" in p and "get_weather" in p          # tool_call réinjecté
     assert "<tool_response>" in p and "22C" in p              # résultat d'outil injecté
-    assert p.rstrip().endswith("Assistant:")
+    assert p.rstrip().endswith("</think>")                    # think vide -> pas de raisonnement
 
 
 def test_prompt_loop_detection():

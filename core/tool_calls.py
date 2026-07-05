@@ -79,64 +79,88 @@ def parse_tool_calls(text: str) -> Tuple[str, List[Dict[str, Any]]]:
     return content, tool_calls
 
 
-_TOOL_PREAMBLE = (
-    "/no_think\n"
-    "You can call tools. When a tool is needed, respond with ONLY the tool call block "
-    "and nothing else — no explanation, no reasoning, no <think>. Emit exactly:\n"
-    '<tool_call>\n{"name": <tool_name>, "arguments": <args_object>}\n</tool_call>\n'
-    "When you have the tool result, answer the user in plain text.\n"
-    "Available tools (JSON schema): {specs}"
-)
+# Bloc outils officiel Qwen (ChatML), inséré dans le message system.
+_QWEN_TOOLS_BLOCK = """
+
+# Tools
+
+You may call one or more functions to assist with the user query.
+
+You are provided with function signatures within <tools></tools> XML tags:
+<tools>
+{tools}
+</tools>
+
+For each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:
+<tool_call>
+{{"name": <function-name>, "arguments": <args-json-object>}}
+</tool_call>"""
+
+# Assistant pré-rempli avec un bloc <think> VIDE : désactive le raisonnement Qwen3
+# (le modèle génère directement après </think>). Validé sur Qwen3.6 (tool_call en 20 tok).
+_ASSISTANT_NOTHINK = "<|im_start|>assistant\n<think>\n\n</think>\n\n"
+
+
+def _tc_block(msg: Dict[str, Any]) -> List[str]:
+    segs = []
+    for tc in (msg.get("tool_calls") or []):
+        fn = tc.get("function", {})
+        a = fn.get("arguments", "{}")
+        try:
+            a = json.loads(a) if isinstance(a, str) else a
+        except Exception:
+            a = {}
+        segs.append("<tool_call>\n" + json.dumps({"name": fn.get("name"), "arguments": a},
+                                                  ensure_ascii=False) + "\n</tool_call>")
+    return segs
 
 
 def build_chat_prompt(messages: List[Dict[str, Any]], tools: Any = None) -> str:
-    """Messages OpenAI -> prompt texte, pour la BOUCLE agent complète (C0).
+    """Messages OpenAI -> prompt **Qwen ChatML** pour la boucle agent complète (C0).
 
-    Gère : system, user, assistant (avec `tool_calls` réinjectés en <tool_call>),
-    `role:"tool"` (résultat d'outil en <tool_response>). Injecte les `tools` (préambule
-    Hermes) et détecte les boucles (3 tool_calls identiques -> instruction de répondre
-    en texte). Renvoie le prompt (se termine par 'Assistant:').
+    Format natif du modèle (`<|im_start|>role...<|im_end|>`) : c'est ce qui rend le
+    tool-calling fiable (un prompt générique déclenche le thinking et casse tout).
+    - `tools` -> bloc `<tools>` officiel dans le message system.
+    - assistant `tool_calls` -> `<tool_call>` ; `role:"tool"` -> `<tool_response>`.
+    - fin : assistant + `<think></think>` vide (désactive le raisonnement).
+    - détection de boucle (3 tool_calls identiques -> forcer une réponse texte).
     """
     tools = tools or []
-    parts: List[str] = []
+    system = "\n".join((m.get("content") or "") for m in messages if m.get("role") == "system").strip()
     if tools:
         try:
-            specs = json.dumps([t.get("function", t) for t in tools], ensure_ascii=False)
-            parts.append("System: " + _TOOL_PREAMBLE.format(specs=specs))
+            tools_lines = "\n".join(json.dumps(t, ensure_ascii=False) for t in tools)
+            system = (system + _QWEN_TOOLS_BLOCK.format(tools=tools_lines)).strip()
         except Exception:
             pass
-    # Détection de boucle
+
     recent = [(tc.get("function", {}).get("name"), tc.get("function", {}).get("arguments"))
               for m in messages if m.get("role") == "assistant"
               for tc in (m.get("tool_calls") or [])]
-    loop_break = ""
-    if len(recent) >= 3 and len(set(recent[-3:])) == 1:
-        loop_break = ("System: The same tool was called 3 times with no progress. "
-                      "Answer in plain text now; do NOT call the tool again.")
+    loop_break = ("The same tool was called 3 times with no progress. Answer in plain "
+                  "text now; do NOT call the tool again.") if (
+                      len(recent) >= 3 and len(set(recent[-3:])) == 1) else ""
+
+    parts: List[str] = []
+    if system:
+        parts.append(f"<|im_start|>system\n{system}<|im_end|>")
     for msg in messages:
         role = msg.get("role", "user")
         content = msg.get("content", "") or ""
         if role == "system":
-            parts.append(f"System: {content}")
+            continue
         elif role == "assistant":
-            for tc in (msg.get("tool_calls") or []):
-                fn = tc.get("function", {})
-                a = fn.get("arguments", "{}")
-                try:
-                    a = json.loads(a) if isinstance(a, str) else a
-                except Exception:
-                    a = {}
-                blk = json.dumps({"name": fn.get("name"), "arguments": a}, ensure_ascii=False)
-                parts.append(f"Assistant: <tool_call>\n{blk}\n</tool_call>")
+            segs = _tc_block(msg)
             if content:
-                parts.append(f"Assistant: {content}")
+                segs.append(content)
+            parts.append(f"<|im_start|>assistant\n{chr(10).join(segs)}<|im_end|>")
         elif role == "tool":
-            parts.append(f"User: <tool_response>\n{content}\n</tool_response>")
+            parts.append(f"<|im_start|>user\n<tool_response>\n{content}\n</tool_response><|im_end|>")
         else:
-            parts.append(f"User: {content}")
+            parts.append(f"<|im_start|>user\n{content}<|im_end|>")
     if loop_break:
-        parts.append(loop_break)
-    parts.append("Assistant:")
+        parts.append(f"<|im_start|>user\n{loop_break}<|im_end|>")
+    parts.append(_ASSISTANT_NOTHINK)
     return "\n".join(parts)
 
 
