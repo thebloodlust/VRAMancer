@@ -57,6 +57,8 @@ def main(argv=None):
                          help="Quantization: nvfp4 (Blackwell), int8, int4, gptq, awq")
     p_serve.add_argument("--no-cluster", dest="cluster", action="store_false", default=True,
                          help="Ne pas annoncer ce noeud sur le reseau (mDNS auto-discovery par defaut)")
+    p_serve.add_argument("--profile", type=str, default=None, choices=["coding", "multi-user"],
+                         help="coding = contexte plein/1 requete (agents); multi-user = batching 4 slots")
 
     # ---- generate ----
     p_gen = sub.add_parser("generate", help="Generer du texte (one-shot)")
@@ -397,6 +399,18 @@ def _cmd_serve(args):
         console = Console()
     except ImportError:
         console = None
+
+    # Profils de serve (arbitrage architecte C4) : assemble de la config existante.
+    profile = getattr(args, 'profile', None)
+    if profile == 'coding':
+        # Agents de code : tout le contexte à une requête (pas de découpe en slots),
+        # sorties longues (éditions de fichiers). Pas de nouvelle feature, juste des env.
+        os.environ.setdefault('VRM_CONTINUOUS_BATCHING', '0')
+        os.environ.setdefault('VRM_DEFAULT_MAX_TOKENS', '2048')
+        print("  Profil: coding (contexte plein/requête, batching off, max_tokens 2048)")
+    elif profile == 'multi-user':
+        os.environ.setdefault('VRM_CONTINUOUS_BATCHING', '1')
+        print("  Profil: multi-user (continuous batching, 4 slots)")
 
     from core.production_api import app
 

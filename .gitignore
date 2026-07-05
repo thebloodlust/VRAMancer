@@ -93,3 +93,6 @@ models/
 .claude/
 TODO.old.md
 docs/history/parent-archive/
+.aider*
+.aider.chat.history.md
+.aider.input.history

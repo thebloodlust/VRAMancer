@@ -3,6 +3,11 @@
 > Règle : pendant la consolidation C0-C7, AUCUNE feature hors liste. Toute idée
 > séduisante atterrit ici, pas dans le code. À reconsidérer APRÈS C7.
 
+## C2 — streaming SSE des tool-calls (parké avec condition de réveil)
+Différé (Aider marche en `--no-stream`). **Réveil** : le jour où un client cible (Cline ?
+Continue ?) EXIGE le streaming des tool-calls — vérifier d'abord (1 h de test) avant de coder.
+(Arbitrage architecte 2026-07-05.)
+
 ## Parkées explicitement par l'architecte (§3, ne PAS faire maintenant)
 - Multi-modèles simultanés.
 - Routage intelligent local/cloud.

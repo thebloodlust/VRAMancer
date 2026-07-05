@@ -50,7 +50,7 @@ done
 export VRM_API_PORT="$PORT"
 export VRM_DISABLE_RATE_LIMIT="${VRM_DISABLE_RATE_LIMIT:-1}"
 # Continuous batching = meilleur débit en usage interactif/concurrent
-export VRM_CONTINUOUS_BATCHING="${VRM_CONTINUOUS_BATCHING:-1}"
+export VRM_CONTINUOUS_BATCHING="${VRM_CONTINUOUS_BATCHING:-0}"  # profil coding: contexte plein/requête
 # Serveur mono-process : le modèle est pré-chargé en CUDA dans ce process,
 # et gunicorn forke des workers (CUDA ne survit pas au fork). Obligatoire ici.
 export VRM_NO_GUNICORN="${VRM_NO_GUNICORN:-1}"
