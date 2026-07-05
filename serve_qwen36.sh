@@ -54,6 +54,8 @@ export VRM_CONTINUOUS_BATCHING="${VRM_CONTINUOUS_BATCHING:-1}"
 # Serveur mono-process : le modèle est pré-chargé en CUDA dans ce process,
 # et gunicorn forke des workers (CUDA ne survit pas au fork). Obligatoire ici.
 export VRM_NO_GUNICORN="${VRM_NO_GUNICORN:-1}"
+# Nom de modèle propre exposé aux clients (Aider, Cline…) via /v1/models (C5)
+export VRM_MODEL_ALIAS="${VRM_MODEL_ALIAS:-qwen3.6-coder}"
 
 echo "════════════════════════════════════════════════════════════"
 echo "  VRAMancer · Qwen3.6-35B-A3B (GGUF Q4_K_M)"

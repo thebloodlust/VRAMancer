@@ -128,6 +128,13 @@ class _QueueCounter:
 _registry = PipelineRegistry()
 
 
+def _served_model_name() -> str:
+    """Nom de modèle exposé aux clients (C5) : alias VRM_MODEL_ALIAS si défini,
+    sinon le model_name réel (souvent un chemin GGUF moche). Les clients (Aider,
+    LiteLLM) ont besoin d'un nom propre et matchable avec /v1/models."""
+    return os.environ.get('VRM_MODEL_ALIAS') or (_registry.model_name or 'vramancer')
+
+
 # ---------------------------------------------------------------------------
 # Input validation (extracted to core.api.validation)
 # ---------------------------------------------------------------------------
@@ -542,7 +549,7 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
                 'id': req_id,
                 'object': 'text_completion',
                 'created': int(time.time()),
-                'model': _registry.model_name or model_name,
+                'model': _served_model_name(),
                 'choices': [{
                     'text': text,
                     'index': 0,
@@ -727,7 +734,7 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
                 'id': req_id,
                 'object': 'chat.completion',
                 'created': int(time.time()),
-                'model': _registry.model_name or model_name,
+                'model': _served_model_name(),
                 'choices': [{
                     'index': 0,
                     'message': _msg,
@@ -812,7 +819,7 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
         models_data = []
         if _registry.is_loaded():
             models_data.append({
-                "id": _registry.model_name,
+                "id": _served_model_name(),
                 "object": "model",
                 "created": 1686935002,
                 "owned_by": "vramancer"
@@ -976,7 +983,7 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
                 'id': req_id,
                 'object': 'text_completion_batch',
                 'created': int(time.time()),
-                'model': _registry.model_name or model_name,
+                'model': _served_model_name(),
                 'results': results,
                 'usage': {
                     'prompt_tokens': total_prompt_tokens,
