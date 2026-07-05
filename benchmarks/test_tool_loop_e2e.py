@@ -16,7 +16,7 @@ WEATHER_TOOL = [{"type": "function", "function": {
                    "required": ["city"]}}}]
 
 
-def chat(messages, tools=None, max_tokens=200):
+def chat(messages, tools=None, max_tokens=512):
     body = {"messages": messages, "max_tokens": max_tokens}
     if tools:
         body["tools"] = tools

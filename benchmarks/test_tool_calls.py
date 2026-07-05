@@ -2,7 +2,19 @@
 """T6.3 — tests du parser de tool-calls (function calling), sans modèle (pytest-safe)."""
 import os, sys, json
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core.tool_calls import parse_tool_calls, build_chat_message, build_chat_prompt
+from core.tool_calls import parse_tool_calls, build_chat_message, build_chat_prompt, strip_think
+
+
+def test_strip_think():
+    # bloc fermé
+    c, r = strip_think("<think>reasoning here</think>\nThe answer is 42.")
+    assert c == "The answer is 42." and "reasoning" in r
+    # bloc non fermé (tronqué par max_tokens) -> tout ce qui suit <think> est retiré
+    c2, _ = strip_think("Hi.\n<think>I am thinking and got cut off")
+    assert c2 == "Hi."
+    # think + tool_call : parse ne doit garder que le tool_call
+    _, calls = parse_tool_calls('<think>should I?</think><tool_call>{"name":"f","arguments":{}}</tool_call>')
+    assert len(calls) == 1 and calls[0]["function"]["name"] == "f"
 
 
 def test_prompt_tool_role_and_assistant_tool_calls():
@@ -71,7 +83,7 @@ def _run():
     fails = 0
     for fn in (test_no_tool_call, test_single_tool_call, test_multiple_tool_calls,
                test_malformed_ignored, test_build_chat_message_finish_reason,
-               test_prompt_tool_role_and_assistant_tool_calls, test_prompt_loop_detection):
+               test_prompt_tool_role_and_assistant_tool_calls, test_prompt_loop_detection, test_strip_think):
         try:
             fn(); print(f"[OK ] {fn.__name__}")
         except AssertionError as e:

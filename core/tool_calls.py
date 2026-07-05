@@ -21,6 +21,20 @@ from typing import Any, Dict, List, Tuple
 
 # Bloc Hermes <tool_call> ... </tool_call> (non-greedy, multi-ligne)
 _TOOL_CALL_RE = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL)
+# Bloc de raisonnement Qwen (<think>...</think>) — NE doit PAS fuir dans content.
+_THINK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
+# Bloc <think> non fermé (coupé par max_tokens) : on strippe jusqu'à la fin.
+_THINK_OPEN_RE = re.compile(r"<think>.*", re.DOTALL)
+
+
+def strip_think(text: str) -> Tuple[str, str]:
+    """Sépare le raisonnement <think> du reste. Renvoie (texte_sans_think, reasoning)."""
+    if not text or "<think>" not in text:
+        return text, ""
+    reasoning = "\n".join(m.strip() for m in _THINK_RE.findall(text))
+    cleaned = _THINK_RE.sub("", text)
+    cleaned = _THINK_OPEN_RE.sub("", cleaned)  # <think> non fermé (tronqué)
+    return cleaned.strip(), reasoning.strip()
 
 
 def _new_call_id() -> str:
@@ -33,6 +47,7 @@ def parse_tool_calls(text: str) -> Tuple[str, List[Dict[str, Any]]]:
     Renvoie (content_sans_blocs, tool_calls_openai). `tool_calls_openai` est vide s'il
     n'y a pas d'appel d'outil.
     """
+    text, _ = strip_think(text)  # le raisonnement ne doit pas polluer le parsing/content
     if not text or "<tool_call>" not in text:
         return text, []
     tool_calls: List[Dict[str, Any]] = []
@@ -65,8 +80,11 @@ def parse_tool_calls(text: str) -> Tuple[str, List[Dict[str, Any]]]:
 
 
 _TOOL_PREAMBLE = (
-    "You can call tools. To call one, emit exactly:\n"
+    "/no_think\n"
+    "You can call tools. When a tool is needed, respond with ONLY the tool call block "
+    "and nothing else — no explanation, no reasoning, no <think>. Emit exactly:\n"
     '<tool_call>\n{"name": <tool_name>, "arguments": <args_object>}\n</tool_call>\n'
+    "When you have the tool result, answer the user in plain text.\n"
     "Available tools (JSON schema): {specs}"
 )
 
@@ -128,8 +146,11 @@ def build_chat_message(text: str) -> Tuple[Dict[str, Any], str]:
     Renvoie (message, finish_reason). finish_reason = 'tool_calls' si des appels sont
     présents, sinon 'stop'.
     """
-    content, tool_calls = parse_tool_calls(text)
+    _clean, reasoning = strip_think(text)
+    content, tool_calls = parse_tool_calls(_clean)
     msg: Dict[str, Any] = {"role": "assistant", "content": content or None}
+    if reasoning:
+        msg["reasoning_content"] = reasoning  # transparence, sans polluer content
     if tool_calls:
         msg["tool_calls"] = tool_calls
         return msg, "tool_calls"
