@@ -231,6 +231,10 @@ Run a **coding agent** (Aider, Cline, Continue) on a local model, on mismatched 
 GPUs, with **OpenAI-compatible tool calling** — validated end-to-end (a real Aider session
 edits code and updates tests, unassisted):
 
+<p align="center">
+  <img src="vramancer_aider.gif" alt="Aider editing code through VRAMancer + Qwen3.6" width="680">
+</p>
+
 ```bash
 ./serve_qwen36.sh                              # Qwen3.6-35B-A3B on 2 GPUs, API on :5030
 
