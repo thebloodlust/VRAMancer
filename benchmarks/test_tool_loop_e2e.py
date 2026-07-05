@@ -64,6 +64,18 @@ def main():
     except Exception as e:
         fails += 1; print(f"[FAIL] erreur : {e}")
 
+    # C3 : plusieurs tool-calls dans UNE réponse (sur demande explicite)
+    try:
+        c = chat([{"role": "user", "content": "Call get_weather twice in ONE response: "
+                                              "once with city Paris and once with city Tokyo."}],
+                 WEATHER_TOOL, max_tokens=300)
+        tcs = c["message"].get("tool_calls") or []
+        cities = sorted(json.loads(t["function"]["arguments"]).get("city", "") for t in tcs)
+        assert len(tcs) == 2 and cities == ["Paris", "Tokyo"], f"attendu 2 calls Paris+Tokyo: {tcs}"
+        print(f"[OK ] multi   : 2 tool_calls {cities}")
+    except Exception as e:
+        fails += 1; print(f"[FAIL] multi : {e}")
+
     print("TOUS OK" if not fails else f"{fails} ÉCHECS")
     return 1 if fails else 0
 
