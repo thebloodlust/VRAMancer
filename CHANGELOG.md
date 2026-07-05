@@ -4,6 +4,31 @@
 
 (à remplir au fur et à mesure)
 
+## [2.0.0] — 2026-07 — Orchestrateur + agent de code local
+
+Bascule d'identité assumée : VRAMancer est un **orchestrateur** au-dessus des moteurs
+prouvés (accelerate, llama.cpp), pas un moteur maison. Palier A1 tranché par la mesure.
+
+### Added
+- **Function calling OpenAI-compatible** (Phase 6) : parser des `<tool_call>` Qwen (Hermes)
+  → format OpenAI, boucle agent complète (tool_call → tool_result → réponse), multi-calls,
+  `tool_choice` (auto/none/required), réparation JSON, gestion des blocs `<think>`.
+  **Validé end-to-end** sur Qwen3.6-35B-A3B (session Aider réelle qui édite du code).
+- `vramancer doctor` (diagnostic mesuré), `dashboard`, `history`, `cluster serve/gateway`
+  (data-parallel ×1.97, cross-nœud), `quickstart`, `vramancer.patch()` drop-in.
+- Installeurs 3-OS (`install.sh` Linux/mac, `install.ps1` Windows), alias de modèle
+  (`VRM_MODEL_ALIAS`), guide `docs/coding_agents.md`, `BENCHMARK_RESULTS.md` (source unique).
+
+### Fixed / Changed
+- **A1** : forward manuel « Path 2 » cassé (`cache_position`) → **déprécié** vers
+  `experimental/manual_forward/` ; accelerate = voie de prod bf16 (**5.41 tok/s** mesuré).
+- `max_tokens` défaut 128 → 2048 (éditions d'agent tronquées) ; overflow contexte → 400 clair.
+- README dé-hypé : P2P **indisponible** (mesuré, code 217), chiffres attribués au bon chemin.
+
+### Honnêteté (mesuré, documenté)
+- Tiering de poids, MoE-tiering, disagg, P2P bypass : **réfutés par la mesure** (6 négatifs).
+  La valeur = orchestration + optims prouvées + UX, pas un moteur nouveau.
+
 ## [1.6.0] — 2026-05-06 — V4 + V5 release
 
 ### Added (V5)
