@@ -43,22 +43,22 @@ Pas de chemin DMA P2P sur ce matériel. Un transport plus rapide exigerait NVLin
 | data-parallel local, **process** (ClusterRouter), 32 req | **×1.97** (work-stealing 16/16) |
 
 ## Contexte / agent de code (C4) — Qwen3.6-35B-A3B GGUF Q4, llama.cpp, 2 GPU
-`benchmarks/bench_context_scaling.py`. TTFT (proxy 1 token) + débit décode (~63 tok).
+`benchmarks/bench_context_scaling.py`, **profil coding** (`VRM_N_CTX=16384`). TTFT (proxy
+1 token) + débit décode (~63 tok).
 | Prompt (~tok) | TTFT | décode tok/s |
 |---|---|---|
-| 1 000 | 0.31 s | ~305 |
-| 2 000 | 0.41 s | ~235 |
-| 4 000 | 0.77 s | ~246 |
-| ≥ 6 000 | — | rejeté (contexte 4096) |
+| 4 000 | 0.77 s | ~230 |
+| 8 000 | 1.50 s | ~234 |
+| 12 000 | 2.27 s | ~226 |
+| 16 000 | 3.05 s | ~254 |
+| 32 000 | — | **rejeté proprement** (400 `context_length_exceeded`, message actionnable) |
 
-**Constat C4** : le contexte effectif par requête est **4096 tokens** (continuous batching
-= 4 slots × 4096 sur n_ctx 16384) — **trop petit pour un agent de code** (fichiers entiers).
-Bon point : l'overflow renvoie une **erreur propre** (`exceed context window of 4096`),
-pas de crash (guardrail C4.3 actionnable côté API en amont).
-
-**Reco (à appliquer au prochain restart)** : pour l'usage coding (mono-utilisateur), donner
-tout le contexte à une requête — `VRM_CONTINUOUS_BATCHING=0` (1 slot → ~16K/req) et/ou
-augmenter `n_ctx` (32768/65536) si la VRAM le permet. Puis re-mesurer 8K/32K/64K.
+**Constat C4** : la cause du plafond 4096 était un **`n_ctx=4096` hardcodé** dans
+`backends_llamacpp.py` (pas la découpe en slots — hypothèse réfutée par la mesure « 8K skip »).
+Corrigé : **`VRM_N_CTX`** (profil coding = 16384). TTFT ~linéaire (0.77→3.05 s de 4K→16K),
+décode stable ~230-254 tok/s (MoE A3B). L'overflow (>16384) renvoie une **erreur 400 claire**,
+pas de crash (guardrail C4.3 validé en direct). Pour plus de contexte : `VRM_N_CTX=32768`
+si la VRAM le permet.
 
 ## Palier A1 (rappel)
 ❌ Path 2 (forward manuel) NE PASSE PAS : sortie dégénérée, bug `cache_position` (prouvé
