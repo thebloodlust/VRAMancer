@@ -80,7 +80,10 @@ class LlamaCppBackend(BaseLLMBackend):
         """
         self.model_name = model_name
         self._n_gpu_layers = int(kwargs.get("n_gpu_layers", -1))
-        self._n_ctx = int(kwargs.get("n_ctx", 4096))
+        # Contexte : VRM_N_CTX (env) > kwarg > 8192. 4096 était trop petit pour un agent
+        # de code (fichiers entiers). Plus grand = plus de VRAM KV (ajuster si OOM).
+        import os as _os
+        self._n_ctx = int(_os.environ.get("VRM_N_CTX", kwargs.get("n_ctx", 8192)))
         self._flash_attn = bool(kwargs.get("flash_attn", True))
         num_gpus = int(kwargs.get("num_gpus", 1))
 

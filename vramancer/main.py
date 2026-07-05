@@ -407,7 +407,8 @@ def _cmd_serve(args):
         # sorties longues (éditions de fichiers). Pas de nouvelle feature, juste des env.
         os.environ.setdefault('VRM_CONTINUOUS_BATCHING', '0')
         os.environ.setdefault('VRM_DEFAULT_MAX_TOKENS', '2048')
-        print("  Profil: coding (contexte plein/requête, batching off, max_tokens 2048)")
+        os.environ.setdefault('VRM_N_CTX', '16384')  # contexte agent (vs 4096 famélique)
+        print("  Profil: coding (n_ctx 16384, batching off, max_tokens 2048)")
     elif profile == 'multi-user':
         os.environ.setdefault('VRM_CONTINUOUS_BATCHING', '1')
         print("  Profil: multi-user (continuous batching, 4 slots)")
