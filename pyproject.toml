@@ -68,6 +68,10 @@ quantization = [
 gguf = [
     "llama-cpp-python>=0.3.0"
 ]
+coding = [
+    # Agent de code local : CLI + serveur GGUF (llama.cpp). `pip install vramancer[coding]`.
+    "llama-cpp-python>=0.3.0"
+]
 cluster = [
     "zeroconf>=0.130",
     "pyudev>=0.24; sys_platform == 'linux'"

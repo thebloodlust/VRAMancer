@@ -408,7 +408,8 @@ def _cmd_serve(args):
         os.environ.setdefault('VRM_CONTINUOUS_BATCHING', '0')
         os.environ.setdefault('VRM_DEFAULT_MAX_TOKENS', '2048')
         os.environ.setdefault('VRM_N_CTX', '16384')  # contexte agent (vs 4096 famélique)
-        print("  Profil: coding (n_ctx 16384, batching off, max_tokens 2048)")
+        os.environ.setdefault('VRM_MODEL_ALIAS', 'coder')  # nom propre pour les agents
+        print("  Profil: coding (alias 'coder', n_ctx 16384, batching off, max_tokens 2048)")
     elif profile == 'multi-user':
         os.environ.setdefault('VRM_CONTINUOUS_BATCHING', '1')
         print("  Profil: multi-user (continuous batching, 4 slots)")

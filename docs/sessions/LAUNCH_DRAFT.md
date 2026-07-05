@@ -50,6 +50,23 @@ Qwen3.6-35B-A3B with OpenAI-compatible tool calling, one command
 > la couche au-dessus (orchestration, anti-OOM, tool-calling agent, packaging) + les optims
 > mesurées. Cf. Ollama = llama.cpp + UX, et ça marche.
 
+## Setup CORRIGÉ (packaging validé 2026-07-06)
+
+Le `pip install vramancer` seul = CLI uniquement (torch/llama.cpp en extras). Bloc Setup
+qui marche **littéralement** (à mettre dans le post à la place de l'ancien) :
+```bash
+pip install "vramancer[coding]"          # CLI + llama.cpp (serveur GGUF)
+# télécharger un modèle GGUF de code (~20 GB), ex :
+huggingface-cli download unsloth/Qwen3.6-35B-A3B-GGUF Qwen3.6-35B-A3B-UD-Q4_K_M.gguf --local-dir ~/models
+# servir (2 GPU auto-détectés, alias 'coder', contexte plein) :
+vramancer serve ~/models/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf --profile coding --backend llamacpp
+# pointer l'agent :
+aider --openai-api-base http://localhost:5030/v1 --openai-api-key dummy --model openai/coder
+```
+**Validé** : version 2.0.0, wheel s'installe en venv vierge, `vramancer --help`/`import` OK,
+extra `coding` déclaré, profil coding pose l'alias `coder`. **Reste à tester end-to-end**
+par Jérémie depuis un venv vierge avec le vrai modèle (téléchargement + serve + aider).
+
 ## Checklist C7 (avant lancement)
 - [ ] `VRM_CONTINUOUS_BATCHING=0` testé pour le coding (contexte plein) + re-mesure 8K/32K/64K.
 - [ ] Repro session Aider **3×** de suite + capture asciinema.
