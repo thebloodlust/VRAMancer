@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="vramancer.png" alt="VRAMancer" width="160">
+</p>
+
 # VRAMancer
 
 Run LLM models that don't fit on a single GPU, across heterogeneous GPUs, in one command.
