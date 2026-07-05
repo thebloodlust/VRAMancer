@@ -21,6 +21,20 @@ from typing import Any, Dict, List, Tuple
 
 # Bloc Hermes <tool_call> ... </tool_call> (non-greedy, multi-ligne)
 _TOOL_CALL_RE = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL)
+# Bloc de raisonnement Qwen (<think>...</think>) — NE doit PAS fuir dans content.
+_THINK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
+# Bloc <think> non fermé (coupé par max_tokens) : on strippe jusqu'à la fin.
+_THINK_OPEN_RE = re.compile(r"<think>.*", re.DOTALL)
+
+
+def strip_think(text: str) -> Tuple[str, str]:
+    """Sépare le raisonnement <think> du reste. Renvoie (texte_sans_think, reasoning)."""
+    if not text or "<think>" not in text:
+        return text, ""
+    reasoning = "\n".join(m.strip() for m in _THINK_RE.findall(text))
+    cleaned = _THINK_RE.sub("", text)
+    cleaned = _THINK_OPEN_RE.sub("", cleaned)  # <think> non fermé (tronqué)
+    return cleaned.strip(), reasoning.strip()
 
 
 def _new_call_id() -> str:
@@ -33,6 +47,7 @@ def parse_tool_calls(text: str) -> Tuple[str, List[Dict[str, Any]]]:
     Renvoie (content_sans_blocs, tool_calls_openai). `tool_calls_openai` est vide s'il
     n'y a pas d'appel d'outil.
     """
+    text, _ = strip_think(text)  # le raisonnement ne doit pas polluer le parsing/content
     if not text or "<tool_call>" not in text:
         return text, []
     tool_calls: List[Dict[str, Any]] = []
@@ -64,14 +79,102 @@ def parse_tool_calls(text: str) -> Tuple[str, List[Dict[str, Any]]]:
     return content, tool_calls
 
 
+# Bloc outils officiel Qwen (ChatML), inséré dans le message system.
+_QWEN_TOOLS_BLOCK = """
+
+# Tools
+
+You may call one or more functions to assist with the user query.
+
+You are provided with function signatures within <tools></tools> XML tags:
+<tools>
+{tools}
+</tools>
+
+For each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:
+<tool_call>
+{{"name": <function-name>, "arguments": <args-json-object>}}
+</tool_call>"""
+
+# Assistant pré-rempli avec un bloc <think> VIDE : désactive le raisonnement Qwen3
+# (le modèle génère directement après </think>). Validé sur Qwen3.6 (tool_call en 20 tok).
+_ASSISTANT_NOTHINK = "<|im_start|>assistant\n<think>\n\n</think>\n\n"
+
+
+def _tc_block(msg: Dict[str, Any]) -> List[str]:
+    segs = []
+    for tc in (msg.get("tool_calls") or []):
+        fn = tc.get("function", {})
+        a = fn.get("arguments", "{}")
+        try:
+            a = json.loads(a) if isinstance(a, str) else a
+        except Exception:
+            a = {}
+        segs.append("<tool_call>\n" + json.dumps({"name": fn.get("name"), "arguments": a},
+                                                  ensure_ascii=False) + "\n</tool_call>")
+    return segs
+
+
+def build_chat_prompt(messages: List[Dict[str, Any]], tools: Any = None) -> str:
+    """Messages OpenAI -> prompt **Qwen ChatML** pour la boucle agent complète (C0).
+
+    Format natif du modèle (`<|im_start|>role...<|im_end|>`) : c'est ce qui rend le
+    tool-calling fiable (un prompt générique déclenche le thinking et casse tout).
+    - `tools` -> bloc `<tools>` officiel dans le message system.
+    - assistant `tool_calls` -> `<tool_call>` ; `role:"tool"` -> `<tool_response>`.
+    - fin : assistant + `<think></think>` vide (désactive le raisonnement).
+    - détection de boucle (3 tool_calls identiques -> forcer une réponse texte).
+    """
+    tools = tools or []
+    system = "\n".join((m.get("content") or "") for m in messages if m.get("role") == "system").strip()
+    if tools:
+        try:
+            tools_lines = "\n".join(json.dumps(t, ensure_ascii=False) for t in tools)
+            system = (system + _QWEN_TOOLS_BLOCK.format(tools=tools_lines)).strip()
+        except Exception:
+            pass
+
+    recent = [(tc.get("function", {}).get("name"), tc.get("function", {}).get("arguments"))
+              for m in messages if m.get("role") == "assistant"
+              for tc in (m.get("tool_calls") or [])]
+    loop_break = ("The same tool was called 3 times with no progress. Answer in plain "
+                  "text now; do NOT call the tool again.") if (
+                      len(recent) >= 3 and len(set(recent[-3:])) == 1) else ""
+
+    parts: List[str] = []
+    if system:
+        parts.append(f"<|im_start|>system\n{system}<|im_end|>")
+    for msg in messages:
+        role = msg.get("role", "user")
+        content = msg.get("content", "") or ""
+        if role == "system":
+            continue
+        elif role == "assistant":
+            segs = _tc_block(msg)
+            if content:
+                segs.append(content)
+            parts.append(f"<|im_start|>assistant\n{chr(10).join(segs)}<|im_end|>")
+        elif role == "tool":
+            parts.append(f"<|im_start|>user\n<tool_response>\n{content}\n</tool_response><|im_end|>")
+        else:
+            parts.append(f"<|im_start|>user\n{content}<|im_end|>")
+    if loop_break:
+        parts.append(f"<|im_start|>user\n{loop_break}<|im_end|>")
+    parts.append(_ASSISTANT_NOTHINK)
+    return "\n".join(parts)
+
+
 def build_chat_message(text: str) -> Tuple[Dict[str, Any], str]:
     """Construit le message `assistant` OpenAI + le finish_reason à partir d'une sortie.
 
     Renvoie (message, finish_reason). finish_reason = 'tool_calls' si des appels sont
     présents, sinon 'stop'.
     """
-    content, tool_calls = parse_tool_calls(text)
+    _clean, reasoning = strip_think(text)
+    content, tool_calls = parse_tool_calls(_clean)
     msg: Dict[str, Any] = {"role": "assistant", "content": content or None}
+    if reasoning:
+        msg["reasoning_content"] = reasoning  # transparence, sans polluer content
     if tool_calls:
         msg["tool_calls"] = tool_calls
         return msg, "tool_calls"
