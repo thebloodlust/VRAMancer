@@ -631,37 +631,11 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
             except Exception:
                 logger.debug("Swarm ledger credit consumption failed", exc_info=True)
 
-        # T6.3 — function calling (requête) : si des outils sont fournis, informer le modèle
-        # du format d'appel (Hermes <tool_call>). Additif : sans effet si pas de `tools`.
-        tool_preamble = ""
+        # C0/T6.3 — construction du prompt (boucle agent complète : system/user/
+        # assistant.tool_calls/role:tool + injection tools + détection de boucle).
         _tools = data.get('tools') or []
-        if _tools:
-            try:
-                import json as _json
-                _specs = _json.dumps([t.get('function', t) for t in _tools], ensure_ascii=False)
-                tool_preamble = (
-                    "You can call tools. To call one, emit exactly:\n"
-                    '<tool_call>\n{"name": <tool_name>, "arguments": <args_object>}\n</tool_call>\n'
-                    f"Available tools (JSON schema): {_specs}"
-                )
-            except Exception:
-                tool_preamble = ""
-
-        # Convert messages to prompt
-        prompt_parts = []
-        if tool_preamble:
-            prompt_parts.append(f"System: {tool_preamble}")
-        for msg in messages:
-            role = msg.get('role', 'user')
-            content = msg.get('content', '')
-            if role == 'system':
-                prompt_parts.append(f"System: {content}")
-            elif role == 'assistant':
-                prompt_parts.append(f"Assistant: {content}")
-            else:
-                prompt_parts.append(f"User: {content}")
-        prompt_parts.append("Assistant:")
-        prompt = "\n".join(prompt_parts)
+        from core.tool_calls import build_chat_prompt
+        prompt = build_chat_prompt(messages, _tools)
 
         try:
             err_resp = _ensure_model(model_name)

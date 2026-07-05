@@ -64,6 +64,64 @@ def parse_tool_calls(text: str) -> Tuple[str, List[Dict[str, Any]]]:
     return content, tool_calls
 
 
+_TOOL_PREAMBLE = (
+    "You can call tools. To call one, emit exactly:\n"
+    '<tool_call>\n{"name": <tool_name>, "arguments": <args_object>}\n</tool_call>\n'
+    "Available tools (JSON schema): {specs}"
+)
+
+
+def build_chat_prompt(messages: List[Dict[str, Any]], tools: Any = None) -> str:
+    """Messages OpenAI -> prompt texte, pour la BOUCLE agent complète (C0).
+
+    Gère : system, user, assistant (avec `tool_calls` réinjectés en <tool_call>),
+    `role:"tool"` (résultat d'outil en <tool_response>). Injecte les `tools` (préambule
+    Hermes) et détecte les boucles (3 tool_calls identiques -> instruction de répondre
+    en texte). Renvoie le prompt (se termine par 'Assistant:').
+    """
+    tools = tools or []
+    parts: List[str] = []
+    if tools:
+        try:
+            specs = json.dumps([t.get("function", t) for t in tools], ensure_ascii=False)
+            parts.append("System: " + _TOOL_PREAMBLE.format(specs=specs))
+        except Exception:
+            pass
+    # Détection de boucle
+    recent = [(tc.get("function", {}).get("name"), tc.get("function", {}).get("arguments"))
+              for m in messages if m.get("role") == "assistant"
+              for tc in (m.get("tool_calls") or [])]
+    loop_break = ""
+    if len(recent) >= 3 and len(set(recent[-3:])) == 1:
+        loop_break = ("System: The same tool was called 3 times with no progress. "
+                      "Answer in plain text now; do NOT call the tool again.")
+    for msg in messages:
+        role = msg.get("role", "user")
+        content = msg.get("content", "") or ""
+        if role == "system":
+            parts.append(f"System: {content}")
+        elif role == "assistant":
+            for tc in (msg.get("tool_calls") or []):
+                fn = tc.get("function", {})
+                a = fn.get("arguments", "{}")
+                try:
+                    a = json.loads(a) if isinstance(a, str) else a
+                except Exception:
+                    a = {}
+                blk = json.dumps({"name": fn.get("name"), "arguments": a}, ensure_ascii=False)
+                parts.append(f"Assistant: <tool_call>\n{blk}\n</tool_call>")
+            if content:
+                parts.append(f"Assistant: {content}")
+        elif role == "tool":
+            parts.append(f"User: <tool_response>\n{content}\n</tool_response>")
+        else:
+            parts.append(f"User: {content}")
+    if loop_break:
+        parts.append(loop_break)
+    parts.append("Assistant:")
+    return "\n".join(parts)
+
+
 def build_chat_message(text: str) -> Tuple[Dict[str, Any], str]:
     """Construit le message `assistant` OpenAI + le finish_reason à partir d'une sortie.
 

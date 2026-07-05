@@ -2,7 +2,32 @@
 """T6.3 — tests du parser de tool-calls (function calling), sans modèle (pytest-safe)."""
 import os, sys, json
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core.tool_calls import parse_tool_calls, build_chat_message
+from core.tool_calls import parse_tool_calls, build_chat_message, build_chat_prompt
+
+
+def test_prompt_tool_role_and_assistant_tool_calls():
+    # C0 : boucle agent — assistant tool_call réinjecté + role:tool en <tool_response>
+    messages = [
+        {"role": "user", "content": "weather in Paris?"},
+        {"role": "assistant", "tool_calls": [
+            {"id": "c1", "type": "function",
+             "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'}}]},
+        {"role": "tool", "tool_call_id": "c1", "content": '{"temp": "22C"}'},
+    ]
+    p = build_chat_prompt(messages, tools=[{"function": {"name": "get_weather"}}])
+    assert "<tool_call>" in p and "get_weather" in p          # tool_call réinjecté
+    assert "<tool_response>" in p and "22C" in p              # résultat d'outil injecté
+    assert p.rstrip().endswith("Assistant:")
+
+
+def test_prompt_loop_detection():
+    tc = {"function": {"name": "f", "arguments": "{}"}}
+    messages = [{"role": "assistant", "tool_calls": [tc]} for _ in range(3)]
+    p = build_chat_prompt(messages)
+    assert "3 times" in p and "plain text" in p               # instruction anti-boucle
+    # < 3 identiques -> pas d'instruction
+    p2 = build_chat_prompt(messages[:2])
+    assert "3 times" not in p2
 
 
 def test_no_tool_call():
@@ -45,7 +70,8 @@ def test_build_chat_message_finish_reason():
 def _run():
     fails = 0
     for fn in (test_no_tool_call, test_single_tool_call, test_multiple_tool_calls,
-               test_malformed_ignored, test_build_chat_message_finish_reason):
+               test_malformed_ignored, test_build_chat_message_finish_reason,
+               test_prompt_tool_role_and_assistant_tool_calls, test_prompt_loop_detection):
         try:
             fn(); print(f"[OK ] {fn.__name__}")
         except AssertionError as e:
