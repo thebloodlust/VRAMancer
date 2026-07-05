@@ -221,6 +221,27 @@ python scripts/bench_rtx4060.py
 
 Tests GPT-2 FP16, TinyLlama 1.1B FP16, Qwen2.5-7B NF4 (~5 GB), and GGUF via llama.cpp.
 
+## Local coding assistant
+
+Run a **coding agent** (Aider, Cline, Continue) on a local model, on mismatched consumer
+GPUs, with **OpenAI-compatible tool calling** — validated end-to-end (a real Aider session
+edits code and updates tests, unassisted):
+
+```bash
+./serve_qwen36.sh                              # Qwen3.6-35B-A3B on 2 GPUs, API on :5030
+
+pip install aider-chat
+OPENAI_API_BASE=http://localhost:5030/v1 OPENAI_API_KEY=dummy \
+  aider --model openai/qwen3.6-coder --no-stream
+```
+
+Function calling works (parses Qwen's `<tool_call>` format → OpenAI `tool_calls`), the full
+tool round-trip is handled, and malformed calls never escape. Full guide, other agents
+(Cline/Continue), pitfalls and measured perf: **[docs/coding_agents.md](docs/coding_agents.md)**.
+
+> Perf note: the coding path runs through **llama.cpp/GGUF**. The prompt-lookup +500% number
+> was measured on the HuggingFace backend, not this path — see [BENCHMARK_RESULTS.md](BENCHMARK_RESULTS.md).
+
 ## Usage
 
 ### One-command inference (recommended)
