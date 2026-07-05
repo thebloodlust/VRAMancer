@@ -656,8 +656,9 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
         # C0/T6.3 — construction du prompt (boucle agent complète : system/user/
         # assistant.tool_calls/role:tool + injection tools + détection de boucle).
         _tools = data.get('tools') or []
+        _tool_choice = data.get('tool_choice', 'auto')
         from core.tool_calls import build_chat_prompt
-        prompt = build_chat_prompt(messages, _tools)
+        prompt = build_chat_prompt(messages, _tools, tool_choice=_tool_choice)
 
         try:
             err_resp = _ensure_model(model_name)

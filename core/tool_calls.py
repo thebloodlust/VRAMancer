@@ -41,6 +41,22 @@ def _new_call_id() -> str:
     return "call_" + secrets.token_hex(12)
 
 
+def _loads_repair(raw: str):
+    """Parse un JSON, avec réparation triviale (virgule finale, quotes simples). Renvoie
+    l'objet ou None si irréparable (C5 : on n'émet jamais un tool_call cassé)."""
+    try:
+        return json.loads(raw)
+    except Exception:
+        pass
+    repaired = re.sub(r",\s*([}\]])", r"\1", raw)          # virgule finale
+    repaired = re.sub(r"'([^']*)'\s*:", r'"\1":', repaired)  # 'clé': -> "clé":
+    repaired = re.sub(r":\s*'([^']*)'", r': "\1"', repaired)  # : 'val' -> : "val"
+    try:
+        return json.loads(repaired)
+    except Exception:
+        return None
+
+
 def parse_tool_calls(text: str) -> Tuple[str, List[Dict[str, Any]]]:
     """Extrait les tool-calls d'une sortie modèle.
 
@@ -55,10 +71,15 @@ def parse_tool_calls(text: str) -> Tuple[str, List[Dict[str, Any]]]:
         raw = raw.strip()
         if not raw:
             continue
-        try:
-            obj = json.loads(raw)
-        except Exception:
-            continue  # bloc malformé -> ignoré (tolérant)
+        obj = _loads_repair(raw)
+        if not isinstance(obj, dict):  # irréparable -> jamais de tool_call cassé (C5)
+            try:
+                import logging
+                logging.getLogger("vramancer").warning(
+                    "tool_call JSON irréparable, ignoré: %s", raw[:120])
+            except Exception:
+                pass
+            continue
         name = obj.get("name") or obj.get("function")
         if not name:
             continue
@@ -115,7 +136,8 @@ def _tc_block(msg: Dict[str, Any]) -> List[str]:
     return segs
 
 
-def build_chat_prompt(messages: List[Dict[str, Any]], tools: Any = None) -> str:
+def build_chat_prompt(messages: List[Dict[str, Any]], tools: Any = None,
+                      tool_choice: Any = "auto") -> str:
     """Messages OpenAI -> prompt **Qwen ChatML** pour la boucle agent complète (C0).
 
     Format natif du modèle (`<|im_start|>role...<|im_end|>`) : c'est ce qui rend le
@@ -126,11 +148,15 @@ def build_chat_prompt(messages: List[Dict[str, Any]], tools: Any = None) -> str:
     - détection de boucle (3 tool_calls identiques -> forcer une réponse texte).
     """
     tools = tools or []
+    if tool_choice == "none":  # C5 : le client demande d'ignorer les outils
+        tools = []
     system = "\n".join((m.get("content") or "") for m in messages if m.get("role") == "system").strip()
     if tools:
         try:
             tools_lines = "\n".join(json.dumps(t, ensure_ascii=False) for t in tools)
             system = (system + _QWEN_TOOLS_BLOCK.format(tools=tools_lines)).strip()
+            if tool_choice == "required" or (isinstance(tool_choice, dict)):
+                system += "\nYou MUST call a tool. Respond with a <tool_call> block."
         except Exception:
             pass
 
