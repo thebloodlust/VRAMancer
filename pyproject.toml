@@ -69,7 +69,12 @@ gguf = [
     "llama-cpp-python>=0.3.0"
 ]
 coding = [
-    # Agent de code local : CLI + serveur GGUF (llama.cpp). `pip install vramancer[coding]`.
+    # Agent de code local complet : torch (détection/offload GPU — SANS lui le modèle
+    # charge sur CPU), transformers (tokenizer), nvidia-ml-py, + llama.cpp (serveur GGUF).
+    # NB : pour le bon wheel torch CUDA, préférer install.sh (gère l'index PyTorch).
+    "torch>=2.0",
+    "transformers>=4.30",
+    "nvidia-ml-py>=11.0",
     "llama-cpp-python>=0.3.0"
 ]
 cluster = [

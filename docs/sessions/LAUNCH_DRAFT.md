@@ -63,9 +63,23 @@ vramancer serve ~/models/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf --profile coding --backe
 # pointer l'agent :
 aider --openai-api-base http://localhost:5030/v1 --openai-api-key dummy --model openai/coder
 ```
-**Validé** : version 2.0.0, wheel s'installe en venv vierge, `vramancer --help`/`import` OK,
-extra `coding` déclaré, profil coding pose l'alias `coder`. **Reste à tester end-to-end**
-par Jérémie depuis un venv vierge avec le vrai modèle (téléchargement + serve + aider).
+**Test e2e venv-vierge — finding (2026-07-06)** : `pip install vramancer[coding]` SANS torch
+→ le serveur démarre mais charge le modèle sur **CPU** (`devices=['cpu']`, 0 VRAM) : la
+détection/offload GPU passe par torch. **Corrigé** : l'extra `coding` inclut désormais torch
++ transformers + nvidia-ml-py + llama.cpp. MAIS pour le **bon wheel torch CUDA**, un simple
+`pip install` peut tomber sur la mauvaise variante.
+
+**Recommandation lancement (chemin fiable)** — utiliser `install.sh` (gère l'index PyTorch
+CUDA + le core Rust) plutôt qu'un pip nu :
+```bash
+curl -fsSL https://raw.githubusercontent.com/thebloodlust/VRAMancer/main/install.sh | bash
+# modèle GGUF déjà présent ou téléchargé, puis :
+vramancer serve /chemin/model.gguf --profile coding --backend llamacpp
+aider --openai-api-base http://localhost:5030/v1 --openai-api-key dummy --model openai/coder
+```
+Validé côté packaging : wheel 2.0.0 s'installe, CLI OK, alias `coder` OK, profil coding OK.
+Le 2-GPU nécessite torch (via install.sh ou `[coding]`). **Test final 2-GPU e2e = Jérémie**
+(le venv de test tournait sans torch → CPU ; avec torch/serve_qwen36.sh, le 2-GPU est prouvé).
 
 ## Checklist C7 (avant lancement)
 - [ ] `VRM_CONTINUOUS_BATCHING=0` testé pour le coding (contexte plein) + re-mesure 8K/32K/64K.
