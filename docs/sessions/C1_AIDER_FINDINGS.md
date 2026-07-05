@@ -27,8 +27,9 @@
 
 ## Acceptation Fable — état
 - ✅ Session Aider aboutit (fichiers modifiés, tests mis à jour) sans intervention.
-- ⏳ Reproductible 3×  — 1 run validé ; à répéter (le repo agent_proof est remis à zéro).
-- ⏳ Capture asciinema (GIF README) — pour C6.
+- ✅ **Reproductible 3×** (2026-07-05) : RUN 1/2/3 → 2 fichiers édités + tests passent (5/5)
+  à chaque fois. Reset agent_proof entre chaque. Déterministe et correct.
+- ⏳ Capture asciinema (GIF README) — action manuelle (Jérémie), pour le lancement.
 
 ## Observations pour la suite
 - Le modèle a tendance à répondre en **français** + préambule verbeux avant l'édit (le
