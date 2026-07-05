@@ -426,7 +426,10 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
     def _ensure_model(model_name: Optional[str]) -> Optional[Tuple[dict, int]]:
         """Ensure a model is loaded. Returns error response or None."""
         if _registry.is_loaded():
-            if model_name and model_name != _registry.model_name:
+            # Un modèle est chargé : ne recharger QUE si le client demande un modèle
+            # réellement différent (ni le nom réel ni l'alias servi). Sinon, le champ
+            # `model` (souvent l'alias envoyé par Aider/LiteLLM) désigne le modèle courant.
+            if model_name and model_name not in (_registry.model_name, _served_model_name()):
                 _registry.load(model_name)
             return None
         if not model_name:
