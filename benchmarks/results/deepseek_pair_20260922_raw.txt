@@ -1,0 +1,28 @@
+=== CPU seul (ngl 0) — référence ===
+| deepseek4 ?B IQ2_XS - 2.3125 bpw |  81.03 GiB |   284.33 B | Vulkan     |   0 |   1 |           pp128 |         24.26 ± 0.00 |
+| deepseek4 ?B IQ2_XS - 2.3125 bpw |  81.03 GiB |   284.33 B | Vulkan     |   0 |   1 |            tg32 |          0.97 ± 0.00 |
+=== 3090 seule (24 GB) — ngl 11 ===
+| deepseek4 ?B IQ2_XS - 2.3125 bpw |  81.03 GiB |   284.33 B | Vulkan     |  11 |   1 | Vulkan0      |           pp128 |         27.37 ± 0.00 |
+| deepseek4 ?B IQ2_XS - 2.3125 bpw |  81.03 GiB |   284.33 B | Vulkan     |  11 |   1 | Vulkan0      |            tg32 |          1.08 ± 0.00 |
+=== Paire 3090+7900XT (44 GB) — ngl 21 ===
+ggml_vulkan: Device memory allocation of size 33554432 failed.
+=== Paire 3090+7900XT (44 GB) — ngl 21, ts 24/20 ===
+ggml_vulkan: Device memory allocation of size 33554432 failed.
+=== paire ngl=18 ===
+| deepseek4 ?B IQ2_XS - 2.3125 bpw |  81.03 GiB |   284.33 B | Vulkan     |  18 |   1 |             tg8 |          1.40 ± 0.00 |
+=== paire ngl=16 ===
+| deepseek4 ?B IQ2_XS - 2.3125 bpw |  81.03 GiB |   284.33 B | Vulkan     |  16 |   1 |             tg8 |          1.45 ± 0.00 |
+=== paire ngl=14 ===
+| deepseek4 ?B IQ2_XS - 2.3125 bpw |  81.03 GiB |   284.33 B | Vulkan     |  14 |   1 |             tg8 |          1.39 ± 0.00 |
+load_backend: loaded RPC backend from /home/jeremie/.cache/vramancer/bin/b11112-linux-vulkan/llama-b11112/libggml-rpc.so
+ggml_vulkan: Found 2 Vulkan devices:
+ggml_vulkan: 0 = NVIDIA GeForce RTX 3090 (NVIDIA) | uma: 0 | fp16: 1 | bf16: 1 | fp4: 0 | warp size: 32 | shared memory: 49152 | int dot: 1 | matrix cores: NV_coopmat2
+ggml_vulkan: 1 = AMD Radeon RX 7900 XT (RADV NAVI31) (radv) | uma: 0 | fp16: 1 | bf16: 0 | fp4: 0 | warp size: 64 | shared memory: 65536 | int dot: 1 | matrix cores: KHR_coopmat
+load_backend: loaded Vulkan backend from /home/jeremie/.cache/vramancer/bin/b11112-linux-vulkan/llama-b11112/libggml-vulkan.so
+load_backend: loaded CPU backend from /home/jeremie/.cache/vramancer/bin/b11112-linux-vulkan/llama-b11112/libggml-cpu-sse42.so
+| model                          |       size |     params | backend    | ngl |  fa |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | --: | --: | --------------: | -------------------: |
+| deepseek4 ?B IQ2_XS - 2.3125 bpw |  81.03 GiB |   284.33 B | Vulkan     |  16 |   1 |           pp128 |         32.88 ± 0.00 |
+| deepseek4 ?B IQ2_XS - 2.3125 bpw |  81.03 GiB |   284.33 B | Vulkan     |  16 |   1 |            tg32 |          1.38 ± 0.00 |
+
+build: 4098fdc92 (11112)

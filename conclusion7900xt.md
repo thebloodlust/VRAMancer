@@ -7,11 +7,11 @@
 
 ## 1. Réponse courte
 
-> **Mise à jour de fin de session (22 h 45)** : une seconde passe a fait tourner
-> VRAMancer *lui-même* sur la carte (pas seulement llama.cpp), ce qui a livré
-> **trois bugs de service supplémentaires** et un gain de **2.0 → 31.8 tok/s**.
-> Voir §7. La paire mixte reste la seule chose non mesurée, et elle n'attend
-> qu'une commande sudo (§5).
+> **Mise à jour finale (23 h 50)** : la 3090 a été réparée et **la paire mixte est
+> MESURÉE** — c'était la dernière question ouverte. Verdict : le cross-vendor maison
+> est un non-sujet, la carte peut partir (§9). Une seconde passe a par ailleurs fait
+> tourner VRAMancer *lui-même* sur la 7900 XT, livrant quatre bugs de plus et un gain
+> de **2.0 → 31.8 tok/s** (§7).
 
 **La 7900 XT est stable et utilisable.** 12 générations longues d'affilée sans une
 seule erreur, 5 benchmarks identiques à ±1.3 % en prefill, aucune erreur amdgpu dans
@@ -102,7 +102,7 @@ Depuis le correctif, `vramancer doctor --share` affiche :
 
 ---
 
-## 5. Pour remettre la 3090 en route (1 commande, sans redémarrer)
+## 5. Remettre la 3090 en route — FAIT le 2026-09-22 à 23 h
 
 Le module nvidia 595-open n'existe que pour le kernel **6.8.0-134** ; tu tournes en
 **6.8.0-139**, et le métapaquet `linux-modules-nvidia-595-open-generic` est resté bloqué
@@ -119,12 +119,17 @@ La 3090 étant en passthrough et ne pilotant aucun écran, `modprobe` suffit —
 n'apporte rien**. Pour que ça ne casse plus à chaque mise à jour de kernel :
 `sudo apt install dkms nvidia-dkms-595-open`.
 
-Une fois `nvidia-smi` vivant, le bench de la paire mixte est prêt et attend :
-```bash
-./benchmarks/bench_vulkan_pair.sh
-```
-C'est lui qui répondra vraiment à D3.d — si llama.cpp Vulkan fait déjà bien tourner
-NVIDIA+AMD ensemble, le cross-vendor maison est un non-sujet (leçon A1).
+**Exécuté, ça a marché** : `nvidia-smi` répond, les deux cartes apparaissent ensemble
+dans llama.cpp (`Vulkan0: RTX 3090`, `Vulkan1: RX 7900 XT`), et le bench de la paire a
+pu tourner → voir §8 pour le verdict.
+
+À retenir pour la prochaine mise à jour de kernel : **le problème se reproduira**, parce
+qu'il n'y a toujours pas de DKMS. Pour l'éviter durablement :
+`sudo apt install dkms nvidia-dkms-595-open`.
+
+Note annexe : la session a aussi basculé de **Wayland à Xorg** à ce moment-là, et **c'est
+ça qui a fait disparaître le clignotement** — pas les GPU, pas le code. Si le scintillement
+revient un jour, vérifier d'abord `echo $XDG_SESSION_TYPE`.
 
 ---
 
@@ -243,11 +248,61 @@ mesuré, ces chiffres devront **disparaître**, pas rester en « théorique ».
 
 ---
 
-## 8. Ce qui reste ouvert
+## 8. D3.d — LA question, enfin tranchée
 
-- **D3.d, la vraie question** : paire 3090 + 7900 XT. Bloquée par le module nvidia —
-  **c'est la SEULE chose qui reste à mesurer avant de pouvoir vendre la carte sans
-  regret.** Une commande sudo (§5), puis `./benchmarks/bench_vulkan_pair.sh`.
+Rapport complet : `docs/reports/D3D_CROSS_VENDOR_VERDICT.md`.
+
+### 8.1 Modèle qui tient sur une seule carte (Qwen3.6-35B, 20.60 GiB)
+
+| Configuration | Prefill pp512 | Génération tg128 |
+|---|---:|---:|
+| 7900 XT seule (`-ngl 38`) | 805 | 29.5 |
+| **3090 seule** (`-ngl 99`) | **3 680** | **135.9** |
+| Paire mixte, split défaut | 2 796 | 92.0 |
+| Paire mixte, split 24:20 | 2 784 | 91.5 |
+| Paire mixte, split par lignes | ❌ le modèle ne charge pas | ❌ |
+
+La paire **marche** (llama.cpp Vulkan mélange NVIDIA et AMD d'office) mais coûte
+**−32 % en génération** face à la 3090 seule : le modèle tient déjà dans ses 24 GB, la
+carte AMD n'ajoute que des transferts PCIe.
+
+### 8.2 Modèle trop gros pour une carte (DeepSeek-V4-Flash, 81 GiB, 43 couches)
+
+| Configuration | Couches sur GPU | Prefill pp128 | Génération tg32 |
+|---|---:|---:|---:|
+| CPU seul | 0 / 43 | 24.26 | 0.97 |
+| 3090 seule (`-ngl 11`) | 11 / 43 | 27.37 | 1.08 |
+| **Paire** (`-ngl 16`) | **16 / 43** | **32.88** | **1.38** |
+| Paire (`-ngl 21`) | — | ❌ échec d'allocation | ❌ |
+
+La paire gagne pour de bon : **+28 %** contre la 3090 seule, +42 % contre le CPU. Et
+c'est **sans conséquence** : 1.38 tok/s reste inutilisable, exactement comme 1.08. On
+passe d'inutilisable à inutilisable.
+
+### 8.3 Verdict
+
+**Le cross-vendor maison est un non-sujet**, pour trois raisons mesurées :
+llama.cpp Vulkan le fait déjà sans notre code ; quand le modèle tient sur une carte,
+mélanger coûte 32 % ; quand il ne tient pas, le gain réel ne change aucun usage.
+C'est le scénario A1 — ne pas re-payer cette leçon.
+
+Conseil matériel honnête qui en découle : pour faire tourner plus gros, **une deuxième
+carte du même vendeur, ou une seule carte avec plus de VRAM**, bat une paire dépareillée.
+
+### 8.4 Donc : la 7900 XT peut partir
+
+La question qui justifiait de la garder a sa réponse, et elle est négative. Ce qu'il
+reste d'elle dans le projet est plus utile que la carte elle-même : les quatre bugs
+qu'elle a fait tomber, le support AMD qui marche vraiment, et un rapport négatif de plus
+à publier. Seule réserve, honnête : si tu veux un jour tester une paire cross-vendor où
+le modèle tient **entièrement** dans la VRAM cumulée (un 30-35 GB sur 24+20), ce cas-là
+n'a pas pu être produit ici — aucun modèle de cette taille sous la main.
+
+---
+
+## 9. Ce qui reste ouvert
+
+- ~~D3.d, paire 3090 + 7900 XT~~ → **MESURÉ et tranché** (§8). Plus rien à faire.
 - **D3.a** (bridge cross-vendor en Python) : nécessite ROCm/torch-hip, non installé.
   Rien de ce qui a été mesuré aujourd'hui ne passe par ROCm — Vulkan/RADV a suffi.
 - **D3.b** : 2e machine physique. La simulation Docker dégrossit, elle ne remplace pas.
