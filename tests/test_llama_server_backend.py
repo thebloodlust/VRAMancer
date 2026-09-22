@@ -109,15 +109,20 @@ def test_asset_names_use_current_upstream_format():
             assert asset.endswith(".zip"), f"{key}: {asset}"
 
 
-def test_amd_detection_reads_sysfs(tmp_path, monkeypatch):
-    """_has_amd_gpu lit le vendor PCI dans sysfs (0x1002 = AMD)."""
+def test_amd_detection_delegates_to_sysfs_module(tmp_path, monkeypatch):
+    """_has_amd_gpu s'appuie sur core.amd_sysfs (vendor PCI 0x1002 en sysfs)."""
+    import core.amd_sysfs as amd
     import core.llama_server_backend as mod
-    fake = tmp_path / "sys" / "class" / "drm" / "card0" / "device"
-    fake.mkdir(parents=True)
-    (fake / "vendor").write_text("0x1002\n")
-    monkeypatch.setattr(mod.glob if hasattr(mod, "glob") else __import__("glob"),
-                        "glob", lambda pat: [str(fake / "vendor")])
+
+    dev = tmp_path / "device"
+    dev.mkdir()
+    (dev / "vendor").write_text("0x1002\n")
+    (dev / "mem_info_vram_total").write_text("21458059264\n")
+    (dev / "mem_info_vram_used").write_text("0\n")
+    (dev / "uevent").write_text("DRIVER=amdgpu\nPCI_ID=1002:744C\n")
+    monkeypatch.setattr(amd.glob, "glob", lambda pat: [] if "hwmon" in pat else [str(dev)])
     assert mod._has_amd_gpu() is True
+    assert mod._platform_key() in ("linux-cuda", "linux-vulkan")  # cuda gagne si nvidia-smi répond
 
 
 def test_compat_flags_adapt_to_binary_help(monkeypatch):

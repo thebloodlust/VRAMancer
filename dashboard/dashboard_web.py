@@ -95,61 +95,18 @@ def set_memory_manager(hm):
 
 
 def _amd_sysfs_gpus():
-    """GPU AMD via sysfs amdgpu — pynvml et torch.cuda ne voient QUE les cartes NVIDIA.
+    """GPU AMD via sysfs (core.amd_sysfs) — pynvml/torch.cuda ne voient que NVIDIA.
 
     Sans ça, une RX 7900 XT parfaitement fonctionnelle s'affiche « No GPU detected »
-    dans le dashboard (constaté le 2026-09-22 sur la machine de dev). Lit les mêmes
-    compteurs que le noyau expose à radeontop : mem_info_vram_{total,used} et
-    gpu_busy_percent. Renvoie [] si aucune carte AMD.
+    dans le dashboard (constaté le 2026-09-22 sur la machine de dev).
     """
-    import glob
-    out = []
-    for dev in sorted(glob.glob("/sys/class/drm/card*/device")):
-        try:
-            if open(os.path.join(dev, "vendor")).read().strip().lower() != "0x1002":
-                continue
-            total = int(open(os.path.join(dev, "mem_info_vram_total")).read().strip())
-            used = int(open(os.path.join(dev, "mem_info_vram_used")).read().strip())
-        except Exception:
-            continue
-        try:
-            busy = int(open(os.path.join(dev, "gpu_busy_percent")).read().strip())
-        except Exception:
-            busy = 0
-        pci_id = ""
-        try:
-            for line in open(os.path.join(dev, "uevent")):
-                if line.startswith("PCI_ID="):
-                    pci_id = line.strip().split("=", 1)[1]
-        except Exception:
-            pass
-        out.append({
-            "name": _pci_name(pci_id) or f"AMD GPU ({pci_id or 'amdgpu'})",
-            "total_bytes": total, "used_bytes": used, "busy": busy,
-        })
-    return out
-
-
-def _pci_name(pci_id: str):
-    """Nom commercial depuis la base pci.ids système (hwdata), sinon None."""
-    if not pci_id or ":" not in pci_id:
-        return None
-    ven, dev = (x.lower() for x in pci_id.split(":", 1))
-    for db in ("/usr/share/misc/pci.ids", "/usr/share/hwdata/pci.ids"):
-        try:
-            in_vendor = False
-            for line in open(db, encoding="utf-8", errors="ignore"):
-                if line.startswith("#") or not line.strip():
-                    continue
-                if not line.startswith("\t"):
-                    in_vendor = line.split()[0].lower() == ven
-                elif in_vendor and not line.startswith("\t\t"):
-                    parts = line.strip().split(None, 1)
-                    if parts and parts[0].lower() == dev:
-                        return parts[1].strip() if len(parts) > 1 else None
-        except Exception:
-            continue
-    return None
+    try:
+        from core.amd_sysfs import amd_gpus
+    except Exception:
+        return []
+    return [{"name": g["name"], "total_bytes": g["total_bytes"],
+             "used_bytes": g["used_bytes"], "busy": g["busy_percent"] or 0}
+            for g in amd_gpus()]
 
 
 @app.route("/")

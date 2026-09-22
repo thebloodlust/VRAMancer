@@ -22,8 +22,30 @@ def _ver(pkg: str) -> Optional[str]:
         return None
 
 
+def _probe_amd() -> List[Dict[str, Any]]:
+    """Cartes AMD (sysfs) — invisibles pour torch.cuda/pynvml, donc ajoutées à part."""
+    try:
+        from core.amd_sysfs import amd_gpus
+    except Exception:
+        return []
+    out = []
+    for g in amd_gpus():
+        out.append({
+            "index": g["index"], "name": g["name"], "arch": "amdgpu",
+            "total_gb": round(g["total_bytes"] / 1024**3, 1),
+            "free_gb": round(g["free_bytes"] / 1024**3, 1),
+            "fp4": False, "source": "sysfs",
+        })
+    return out
+
+
 def probe_gpus() -> List[Dict[str, Any]]:
-    """GPU détectés via hetero_config (nom, arch, VRAM totale/libre, FP4 Blackwell)."""
+    """GPU détectés via hetero_config (nom, arch, VRAM totale/libre, FP4 Blackwell).
+
+    Complété par les cartes AMD lues en sysfs : `torch.cuda` ne les voit pas sans
+    build ROCm, et une 7900 XT parfaitement fonctionnelle sous Vulkan apparaissait
+    donc comme « aucun GPU » (constaté le 2026-09-22).
+    """
     try:
         from core.hetero_config import auto_configure
         cfg = auto_configure(strategy="balanced")
@@ -36,9 +58,11 @@ def probe_gpus() -> List[Dict[str, Any]]:
                 "free_gb": round(g.free_vram_gb, 1) if g.free_vram_gb > 0 else None,
                 "fp4": arch == "Blackwell",
             })
+        out += _probe_amd()
         return out
     except Exception as e:
-        return [{"error": str(e)}]
+        amd = _probe_amd()
+        return amd if amd else [{"error": str(e)}]
 
 
 def probe_p2p() -> Dict[str, Any]:
