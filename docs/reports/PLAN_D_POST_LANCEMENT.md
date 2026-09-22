@@ -34,6 +34,35 @@
 
 ---
 
+## État d'avancement au 2026-09-22 (session Opus 5)
+
+| Tâche | État | Où |
+|---|---|---|
+| D0.1 token dans le remote | ✅ côté agent (remote nettoyé) — **révocation GitHub à faire par Jérémie** | `.git/config` |
+| D0.2 mojibake du post | ✅ | `docs/sessions/POST_LANCEMENT_FINAL.md` |
+| D0.3 conflit venv Aider | ⏸ inchangé (à faire hors session de bench) | — |
+| D1 checklist lancement | ⏸ MANUEL (PyPI, tag, post) | — |
+| D2.1 quickstart tool calling | ✅ | `examples/tool_calling_quickstart.py` |
+| D2.2 métriques tool-calls | ✅ 3 compteurs + 5 tests | `core/metrics.py`, `core/tool_calls.py` |
+| D2.3 dashboard GPU réel | ✅ **le constat du plan était faux** : pas de GPU factice dans les templates ; le vrai défaut était que les cartes AMD étaient invisibles | `dashboard/dashboard_web.py` |
+| D2.4 POC WebGPU | ✅ **sans objet** : déjà dans `_deprecated/`, plus aucun import depuis `core/` | — |
+| D2.5 docstrings orchestrator | ✅ 3 modules, zéro ligne de code | `core/orchestrator/` |
+| D2.6 doctor --share | ✅ | `core/doctor.py` |
+| D2.7 README failure-reports + compat | ✅ + template d'issue | `README.md`, `.github/ISSUE_TEMPLATE/` |
+| D2.9 tests sécurité | ✅ 13 tests (verify_request avait déjà 10 tests ; c'est `enforce_startup_checks` qui n'en avait aucun) | `tests/test_security_startup_checks.py` |
+| D3.a ROCm / cross-vendor | ⏸ bloqué : pas de torch-hip installé |  — |
+| D3.b 2e machine | ⏸ pas de matériel | — |
+| D3.c simulation Docker | ✅ mesuré (UDP **et** mDNS traversent le bridge) | `tests/integration/docker_cluster_sim.sh` |
+| D3.d paire mixte | ⚠️ **moitié AMD seulement** — 3090 sans module noyau | `benchmarks/results/vulkan_7900xt_solo_20260922.md` |
+
+Hors plan, trouvé en faisant tourner le code sur la 7900 XT (3 pannes réelles) :
+téléchargement automatique de llama-server cassé pour tout le monde (404),
+extraction produisant un binaire qui ne démarre pas, options llama.cpp changées
+de forme — plus les GPU AMD invisibles de tout l'outillage. Voir `conclusion7900xt.md`
+à la racine et les commits `[AMD]`.
+
+---
+
 ## D0 — Hygiène & sécurité (À FAIRE EN PREMIER)
 
 ### D0.1 — Token GitHub en clair dans le remote *(S, MANUEL Jérémie + agent)*
@@ -182,6 +211,16 @@ join/leave en tuant un conteneur.
   résultat consigné dans un .md (ce qui marche / ce qui ne marche pas en bridge).
 - Ceci ne REMPLACE pas D3.b : le noter explicitement dans le .md.
 - Commit : `[D3.c] simulation cross-nœud 2 conteneurs Docker (dégrossissage avant 2e machine)`.
+
+> **État 2026-09-18 (7900 XT installée)** : les 2 cartes sont vues sur le bus PCI de la VM,
+> MAIS (1) le kernel est passé à 6.8.0-137 au reboot et le module nvidia (595-open) n'existe
+> que pour -134 → nvidia-smi mort ; (2) la 7900 XT s'est retrouvée `runtime_status=error`
+> après un échec de resume runtime-PM (`resume of IP block <smu> failed -62`, bug Navi 3x
+> en passthrough) → device inutilisable jusqu'au reboot ; fix durable : `amdgpu.runpm=0`
+> en cmdline kernel. Procédure de réparation donnée à Jérémie (1 session sudo + 1 reboot).
+> Le bench D3.d est PRÊT : `benchmarks/bench_vulkan_pair.sh` (build Vulkan précompilé
+> b11026 dans `~/tools/llama-vulkan-b11026`, RADV déjà installé — ROCm PAS nécessaire
+> pour D3.d). ROCm/torch-hip nécessaires seulement pour D3.a (tests bridge python).
 
 ### D3.d — AVANT tout investissement cross-vendor : mesurer llama.cpp Vulkan *(S, dès GPU AMD)*
 llama.cpp a un backend Vulkan capable de mélanger les vendors, et un mode RPC multi-machine.
