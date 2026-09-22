@@ -32,14 +32,23 @@ to ship:
 | MoE hot/cold expert tiering | "the differentiator" | expert use is **quasi-uniform** (top-8 coverage 15.3% vs 13.3% uniform) | ❌ refuted by design of MoE load-balancing |
 | Prefill/decode disaggregation | worth splitting | decode-dominated **58:1** | ❌ no room |
 | Direct GPU↔GPU P2P on consumer cards | DMA path | `CUDA_ERROR_PEER_ACCESS_UNSUPPORTED` (217) | ❌ not available without NVLink |
-| Cross-vendor pairing (RTX 3090 + RX 7900 XT, llama.cpp Vulkan) | more VRAM → bigger models | model that fits one card: **−32% tok/s** vs the 3090 alone (92.0 vs 135.9); model too big for one card: **+28%** but 1.08 → **1.38 tok/s**, unusable either way | ❌ a custom cross-vendor bridge buys nothing llama.cpp doesn't already do ([report](docs/reports/D3D_CROSS_VENDOR_VERDICT.md)) |
+| A *custom* cross-vendor transport (AMD↔NVIDIA) | our own bridge would beat the alternatives | llama.cpp Vulkan already pairs a RTX 3090 with a RX 7900 XT out of the box — and pairing is worth **4.4×** when the model only fits in combined VRAM (20.7 → 91.7 tok/s) | ❌ don't write the bridge — **do** use the pair ([report](docs/reports/D3D_CROSS_VENDOR_VERDICT.md)) |
 | Cross-node sharding before a real 2nd machine | — | never measured | ⏸ not claimed until it is |
 
 Full write-up, raw numbers and the reasoning: **[docs/history/phase7-tiering-2026-06/SYNTHESE.md](docs/history/phase7-tiering-2026-06/SYNTHESE.md)**.
 
-Hardware advice that falls out of the last row, since nobody else will tell you: to run
-a bigger model, **a second card from the same vendor — or one card with more VRAM —
-beats a mismatched pair.** Mixing vendors works, it just doesn't pay.
+Hardware advice that falls out of that row, measured rather than assumed: **a second GPU
+from a different vendor is a perfectly good buy** — but only when it moves your model
+under the *combined* VRAM ceiling. Measured on a 3090 + 7900 XT:
+
+| Your model… | Mixing vendors |
+|---|---|
+| fits on your fastest card | costs you 32% — use the one card |
+| **fits only in the two cards combined** | **4.4× (20.7 → 91.7 tok/s)** — the whole point |
+| exceeds both cards combined | +28%, still unusable (1.08 → 1.38 tok/s) |
+
+The middle row is where this project lives: it is what lets you run a 27 GB Q6_K instead
+of a 20 GB Q4_K_M, at 92 tok/s, on cards nobody would call a matched pair.
 
 What survived is what this project actually is: **orchestration across mismatched GPUs on
 top of accelerate/llama.cpp/vLLM**, plus the optimisations that *did* measure (prompt-lookup

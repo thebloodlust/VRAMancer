@@ -414,6 +414,15 @@ def _llamacpp_can_offload() -> bool:
         return False
 
 
+def _has_amd_gpu() -> bool:
+    """Carte AMD présente ? (sysfs, sans ROCm)."""
+    try:
+        from core.amd_sysfs import has_amd_gpu
+        return has_amd_gpu()
+    except Exception:
+        return False
+
+
 def _any_gpu_present() -> bool:
     """Un GPU exploitable existe-t-il (NVIDIA via torch, ou AMD via sysfs) ?"""
     try:
@@ -479,13 +488,23 @@ def select_backend(model_name: str, cache_dir: str = None, backend: str = "auto"
             # 2026-09-22 sur RX 7900 XT : 2.0 tok/s contre 37.8 via llama-server
             # Vulkan. On bascule alors sur le sous-processus llama-server, qui
             # télécharge le build correspondant au matériel.
-            if (not _llamacpp_can_offload() and _any_gpu_present()
-                    and os.environ.get("VRM_FORCE_LLAMACPP_INPROC") != "1"):
+            reason = None
+            if not _llamacpp_can_offload() and _any_gpu_present():
+                reason = ("la roue llama-cpp-python est compilée pour un autre "
+                          "accélérateur : elle chargerait tout en CPU")
+            elif _has_amd_gpu() and _llamacpp_can_offload():
+                # Machine mixte : le binding est une roue CUDA, il ne verra JAMAIS
+                # la carte AMD. Or c'est elle qui permet de tenir un modèle trop
+                # gros pour la seule carte NVIDIA — mesuré le 2026-09-22 sur un
+                # modèle de 27 GB : 20.7 tok/s (3090 seule, débordement CPU) contre
+                # 91.7 tok/s (paire 3090+7900 XT, modèle entier en VRAM), soit 4.4x.
+                reason = ("machine multi-vendeurs : le binding in-process ne voit "
+                          "que les cartes NVIDIA et laisserait la carte AMD inutilisée")
+            if reason and os.environ.get("VRM_FORCE_LLAMACPP_INPROC") != "1":
                 logger.warning(
-                    "llama-cpp-python ne peut pas offloader sur ce GPU "
-                    "(roue compilée pour un autre accélérateur) — bascule sur le "
-                    "sous-processus llama-server. VRM_FORCE_LLAMACPP_INPROC=1 pour "
-                    "garder le binding in-process (CPU)."
+                    "Bascule sur le sous-processus llama-server — %s. "
+                    "VRM_FORCE_LLAMACPP_INPROC=1 pour forcer le binding in-process.",
+                    reason,
                 )
                 try:
                     from core.backends_llama_server import LlamaServerAdapter

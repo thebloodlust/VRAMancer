@@ -7,17 +7,21 @@
 
 ## 1. Réponse courte
 
-> **Mise à jour finale (23 h 50)** : la 3090 a été réparée et **la paire mixte est
-> MESURÉE** — c'était la dernière question ouverte. Verdict : le cross-vendor maison
-> est un non-sujet, la carte peut partir (§9). Une seconde passe a par ailleurs fait
-> tourner VRAMancer *lui-même* sur la 7900 XT, livrant quatre bugs de plus et un gain
-> de **2.0 → 31.8 tok/s** (§7).
+> **Mise à jour finale (00 h 10) — LA CONCLUSION A CHANGÉ.** Un premier verdict disait
+> « le cross-vendor n'apporte rien, la carte peut partir ». **C'était faux par omission.**
+> Les deux modèles testés tombaient de part et d'autre du seul régime qui compte. Un
+> troisième test, sur un modèle qui ne tient QUE dans la VRAM cumulée, donne **4.4× en
+> faveur de la paire** (20.7 → 91.7 tok/s). Lire §8 avant toute décision de revente.
 
 **La 7900 XT est stable et utilisable.** 12 générations longues d'affilée sans une
 seule erreur, 5 benchmarks identiques à ±1.3 % en prefill, aucune erreur amdgpu dans
 le journal noyau, `runtime_status=active` sur les 78 relevés de capteurs. Le correctif
 `amdgpu.runpm=0` que tu avais appliqué tient : le bug de resume runtime-PM de septembre
 ne s'est pas reproduit une seule fois.
+
+**Et elle a une vraie raison d'être gardée** (§8) : sur un modèle de 27 GB — trop gros
+pour la 3090 seule, trop gros pour elle seule — la paire donne **91.7 tok/s contre 20.7
+pour la 3090 seule**. Elle ne rend pas le modèle « plus rapide », elle le rend utilisable.
 
 **Ce qui ne marche pas n'a rien à voir avec elle :**
 - la **RTX 3090** est inutilisable *côté logiciel* (aucun module noyau nvidia pour le
@@ -279,24 +283,51 @@ La paire gagne pour de bon : **+28 %** contre la 3090 seule, +42 % contre le CPU
 c'est **sans conséquence** : 1.38 tok/s reste inutilisable, exactement comme 1.08. On
 passe d'inutilisable à inutilisable.
 
-### 8.3 Verdict
+### 8.3 Le régime qui change tout (Qwen3.6-35B **Q6_K**, 27.29 GiB)
 
-**Le cross-vendor maison est un non-sujet**, pour trois raisons mesurées :
-llama.cpp Vulkan le fait déjà sans notre code ; quand le modèle tient sur une carte,
-mélanger coûte 32 % ; quand il ne tient pas, le gain réel ne change aucun usage.
-C'est le scénario A1 — ne pas re-payer cette leçon.
+Ni la 3090 (24 GB) ni la 7900 XT (20 GB) ne peuvent héberger ce modèle. Les deux
+ensemble, si.
 
-Conseil matériel honnête qui en découle : pour faire tourner plus gros, **une deuxième
-carte du même vendeur, ou une seule carte avec plus de VRAM**, bat une paire dépareillée.
+| Configuration | Couches sur GPU | Prefill | Génération |
+|---|---:|---:|---:|
+| CPU seul | 0 / 40 | 195 | 7,5 |
+| 3090 seule (le reste déborde) | 30 / 40 | 507 | 20,7 |
+| 7900 XT seule (le reste déborde) | 26 / 40 | 212 | 18,0 |
+| **PAIRE — modèle ENTIER en VRAM** | **40 / 40** | **2 141** | **91,7** |
+| PAIRE — split 24:20 | 40 / 40 | 2 139 | **92,7** |
 
-### 8.4 Donc : la 7900 XT peut partir
+**4,4× la meilleure carte seule. 12× le CPU.** Et le chiffre brut sous-estime l'effet :
+20,7 tok/s est trop lent pour un agent de code, 92 tok/s est confortable. La paire ne
+rend pas le modèle plus rapide, elle le rend **utilisable**.
 
-La question qui justifiait de la garder a sa réponse, et elle est négative. Ce qu'il
-reste d'elle dans le projet est plus utile que la carte elle-même : les quatre bugs
-qu'elle a fait tomber, le support AMD qui marche vraiment, et un rapport négatif de plus
-à publier. Seule réserve, honnête : si tu veux un jour tester une paire cross-vendor où
-le modèle tient **entièrement** dans la VRAM cumulée (un 30-35 GB sur 24+20), ce cas-là
-n'a pas pu être produit ici — aucun modèle de cette taille sous la main.
+### 8.4 Verdict révisé
+
+| Le modèle… | Verdict | Mesure |
+|---|---|---|
+| tient sur la carte la plus rapide | ❌ ne pas mélanger, −32 % | 136 → 92 tok/s |
+| **ne tient QUE dans la VRAM cumulée** | ✅ **mélanger, 4,4×** | 20,7 → 91,7 tok/s |
+| dépasse même la VRAM cumulée | ⚠️ +28 % sans usage | 1,08 → 1,38 tok/s |
+
+Le **pont cross-vendor maison** reste inutile — mais pour une autre raison qu'annoncé :
+llama.cpp Vulkan livre déjà ce 4,4× tout seul, sans ROCm ni configuration. Ce qui a de
+la valeur, c'est **l'orchestration** : encore faut-il savoir qu'il y a une deuxième carte.
+VRAMancer ne le savait pas — son calcul de répartition passait par `torch.cuda`, aveugle
+à l'AMD ; il aurait servi ce modèle sur la 3090 seule à 20,7 tok/s. Corrigé dans la
+foulée. C'est exactement le métier du projet : **ne pas laisser 4,4× sur la table.**
+
+### 8.5 Donc : garder ou vendre ?
+
+La réponse a changé avec la mesure. **La 7900 XT a une utilité démontrée et chiffrée** :
+elle fait passer ce nœud de « Q4_K_M à 136 tok/s » à « **Q6_K à 92 tok/s** » — un quant
+sensiblement meilleur, à une vitesse toujours confortable, impossible sans elle.
+
+- **La garder** si tu veux servir des modèles de 24-44 GB (quants Q6/Q8 de 30B, ou un
+  70B très quantifié) : c'est là qu'elle vaut son prix.
+- **La vendre** si ton usage tient dans 24 GB : sur ces modèles-là elle coûte 32 % de
+  débit et ne sert à rien.
+
+Ce qui ne dépend plus d'elle, en revanche : les huit bugs qu'elle a fait tomber et le
+support AMD sont acquis, dans le dépôt, définitivement.
 
 ---
 

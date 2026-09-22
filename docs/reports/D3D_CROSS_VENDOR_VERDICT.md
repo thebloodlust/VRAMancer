@@ -4,6 +4,12 @@
 > **b11112** Vulkan. Chiffres bruts : `benchmarks/results/vulkan_pair_20260922_2313.md`.
 > Le garde-fou du plan D disait : *« si llama.cpp Vulkan fait déjà bien le travail sur la
 > paire mixte, le cross-vendor maison est un non-sujet »*. Voici la réponse.
+>
+> **⚠️ Ce rapport a été RÉVISÉ le même soir.** Une première version concluait que la
+> paire mixte n'apportait rien. Cette conclusion était **fausse par omission** : les deux
+> premiers modèles testés tombaient de part et d'autre du seul régime qui compte. Un
+> troisième test (§ « Le régime qui change tout ») montre un facteur **4.4×** en faveur
+> de la paire. La conclusion finale est en bas de page et remplace la précédente.
 
 ## Ce qui a été mesuré
 
@@ -66,39 +72,88 @@ reproductible.
 couches sur 43 déportées, le CPU continue de dominer le temps de calcul, et la VRAM
 supplémentaire ne change pas ce rapport de force.
 
-## Verdict
+## Le régime qui change tout : le modèle ne tient QUE dans la VRAM cumulée
 
-**Le cross-vendor maison est un non-sujet.** Trois raisons, toutes mesurées :
+Les deux modèles précédents encadraient la vraie question sans la poser : l'un tenait
+déjà sur une carte (la paire ne pouvait qu'ajouter du transfert), l'autre ne tenait
+nulle part (la paire ne pouvait pas sauver un calcul dominé par le CPU). Entre les deux
+il y a la fenêtre qui compte : **27.29 GiB sur des cartes de 24 et 20 GB**. Trop gros
+pour chacune, confortable pour les deux ensemble.
 
-1. **llama.cpp Vulkan le fait déjà**, sans une ligne de code de notre part : les deux
-   cartes sont détectées et utilisées ensemble d'office.
-2. **Quand le modèle tient sur une carte, mélanger coûte 32 %** de débit. Le bon réflexe
-   est d'utiliser la carte la plus rapide seule, pas d'additionner du matériel.
-3. **Quand le modèle ne tient pas, le gain est réel (+28 %) mais sans conséquence** :
-   on passe de 1.08 à 1.38 tok/s, c'est-à-dire d'inutilisable à inutilisable.
+Qwen3.6-35B-A3B **Q6_K — 27.29 GiB, 40 couches** (même modèle que plus haut, quantifié
+moins agressivement) :
 
-Autrement dit, il n'existe pas, sur cette paire, de régime où un pont cross-vendor maison
-apporterait quoi que ce soit que llama.cpp ne fasse pas déjà — et le seul régime où la
-VRAM cumulée compte donne des débits qui ne servent à personne. C'est exactement le
-scénario A1 : **ne pas re-payer cette leçon.**
+| Configuration | Couches sur GPU | Prefill pp512 | Génération tg128 |
+|---|---:|---:|---:|
+| CPU seul | 0 / 40 | 195.37 ± 1.29 | 7.46 ± 0.04 |
+| 3090 seule (`-ngl 30`, le reste déborde) | 30 / 40 | 506.97 ± 0.93 | 20.74 ± 2.51 |
+| 7900 XT seule (`-ngl 26`, le reste déborde) | 26 / 40 | 211.56 ± 3.89 | 18.03 ± 0.10 |
+| **PAIRE, modèle ENTIER en VRAM** | **40 / 40** | **2141.22 ± 7.28** | **91.68 ± 3.64** |
+| PAIRE, split 24:20 | 40 / 40 | 2138.57 ± 4.41 | **92.74 ± 2.51** |
+
+**La paire va 4.4× plus vite que la meilleure carte seule** (91.7 contre 20.7 tok/s) et
+12× plus vite que le CPU. En prefill, 4.2× la 3090 seule.
+
+Et le chiffre brut sous-estime l'effet réel : 20.7 tok/s, c'est trop lent pour un agent
+de code ; 92 tok/s, c'est confortable. La paire ne rend pas le modèle « plus rapide »,
+elle le rend **utilisable**. C'est précisément la promesse de VRAMancer — faire tourner
+sur des GPU dépareillés un modèle qu'aucun d'eux ne peut héberger seul — et ça marche
+aussi quand les vendeurs diffèrent.
+
+## Verdict (révisé — remplace la conclusion initiale)
+
+**Mélanger NVIDIA et AMD vaut le coup, mais seulement dans une fenêtre précise**, et
+cette fenêtre est celle de tout le projet :
+
+| Le modèle… | Verdict | Mesure |
+|---|---|---|
+| tient sur la carte la plus rapide | ❌ **ne pas mélanger** — la paire coûte 32 % | 136 → 92 tok/s |
+| **ne tient QUE dans la VRAM cumulée** | ✅ **mélanger, largement** — 4.4× | 20.7 → 91.7 tok/s |
+| dépasse même la VRAM cumulée | ⚠️ gain réel (+28 %) mais sans usage | 1.08 → 1.38 tok/s |
+
+**Le pont cross-vendor MAISON reste un non-sujet** — mais pour une raison différente de
+celle annoncée d'abord :
+
+**llama.cpp Vulkan livre déjà le 4.4×**, sans une ligne de code de notre part, sans
+ROCm, sans configuration : les deux cartes sont détectées et remplies d'office. Écrire
+notre propre transport cross-vendor ne rattraperait rien — il faudrait battre ce que
+llama.cpp fait déjà très bien. C'est le scénario A1 : **ne pas re-payer cette leçon.**
+
+En revanche, **l'orchestration, elle, a un vrai travail à faire** : encore faut-il
+*savoir* qu'il existe une deuxième carte, et l'utiliser. VRAMancer ne le savait pas —
+son calcul de répartition passait par `torch.cuda`, aveugle aux cartes AMD, donc il
+aurait servi ce modèle sur la 3090 seule à 20.7 tok/s au lieu de 91.7. Corrigé dans la
+foulée (`backend_devices()` interroge le binaire, qui voit tout le monde). **C'est ça,
+la valeur du projet : pas réécrire le transport, mais ne pas laisser 4.4× sur la table.**
+
+### Vérifié aussi à travers VRAMancer lui-même
+
+Pas seulement `llama-bench` : `vramancer serve --model <Q6_K> --gpus 1` (on passe
+volontairement 1, puisque torch ne voit qu'une carte) charge désormais le modèle sur les
+deux GPU — **NVIDIA 15 990 MiB + AMD 12 360 MiB** — et répond entre **68.6 et 75.8 tok/s**
+en régime chaud (5 requêtes de 128 tokens ; la première, à froid, tombe à 21.9 le temps
+du préchauffage). L'écart avec les 91.7 de `llama-bench` est le coût HTTP + prompt sur
+des requêtes courtes, le même ratio que celui déjà observé en mono-carte.
+
+Sans le correctif, ce même serveur aurait tourné sur la 3090 seule — et aurait même
+échoué à charger, puisque 27 GB ne tiennent pas dans 24.
 
 ### Conséquences concrètes
 
 - `experimental/cross_vendor_bridge.py` : ne pas investir. Ses débits annoncés
   (25-50 GB/s, ~20 GB/s) restent **non mesurés** et le resteront ; ils sont marqués comme
   tels dans le fichier.
-- Conseil matériel honnête pour le README : pour faire tourner un modèle plus gros, une
-  **deuxième carte du même vendeur** (ou une carte unique avec plus de VRAM) bat une
-  paire dépareillée. Le cross-vendor ne devient intéressant que si un jour un modèle
-  tient *entièrement* dans la VRAM cumulée de deux cartes de marques différentes — cas
-  que cette session n'a pas pu produire.
+- Conseil matériel honnête pour le README : **une carte d'un autre vendeur est un ajout
+  parfaitement valable** si elle fait passer ton modèle sous la barre de la VRAM cumulée.
+  Choisis le quant en conséquence : ici, passer de Q4_K_M (20.6 GB, tient sur la 3090) à
+  Q6_K (27.3 GB, ne tient que sur la paire) échange un peu de vitesse brute contre
+  beaucoup de qualité, à 92 tok/s — un arbitrage qui n'existe pas sans la 2e carte.
 - Le split par lignes (`-sm row`) est inutilisable en cross-vendor : le modèle ne charge
   même pas.
 
 ### Ce que ce verdict ne couvre pas
 
-- Une paire cross-vendor où le modèle tient **entièrement** dans la VRAM cumulée
-  (ex. un 30-35 GB sur 24+20 GB). Non testé : le seul modèle de cette taille disponible
-  ici tient déjà sur la 3090 seule.
 - ROCm / torch-hip : jamais installé. Tout ce rapport passe par Vulkan.
+- Le chemin HuggingFace/accelerate en cross-vendor : non testé (il demanderait torch-hip).
+- La qualité des sorties Q4_K_M vs Q6_K : non évaluée ici, seulement les débits.
 - Une machine réelle (hors VM) : le passthrough VFIO ajoute un surcoût PCIe connu.

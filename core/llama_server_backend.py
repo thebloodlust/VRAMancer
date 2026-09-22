@@ -341,9 +341,19 @@ class LlamaServerBackend:
         ]
         cmd += _compat_flags(binary)
 
+        # Combien de GPU sont RÉELLEMENT disponibles ? torch.cuda ne compte que les
+        # cartes NVIDIA : sur une machine mixte, l'appelant passe num_local_gpus=1
+        # et on perdrait la carte AMD — donc le facteur 4.4x mesuré sur un modèle
+        # qui ne tient que dans la VRAM cumulée. Le binaire, lui, les voit toutes.
+        seen = backend_devices(binary)
+        if len(seen) > max(1, num_local_gpus):
+            log.info("%d devices vus par llama.cpp (%s) — on les utilise tous",
+                     len(seen), ", ".join(d["name"] for d in seen))
+            num_local_gpus = len(seen)
+
         # Tensor split across local GPUs proportional to VRAM
         if num_local_gpus > 1:
-            split = _local_tensor_split(num_local_gpus)
+            split = _local_tensor_split(num_local_gpus, binary=binary)
             if split:
                 cmd += ["--tensor-split", ",".join(str(s) for s in split)]
 
@@ -480,7 +490,41 @@ class LlamaServerBackend:
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _local_tensor_split(num_gpus: int) -> Optional[List[float]]:
+def backend_devices(binary) -> List[dict]:
+    """Devices tels que le BINAIRE les voit (`--list-devices`), dans SON ordre.
+
+    C'est la seule source qui fasse autorité : torch.cuda ne voit que les cartes
+    NVIDIA, donc sur une machine mixte il manquerait la carte AMD — et avec elle
+    tout l'intérêt de la paire (mesuré le 2026-09-22 : 20.7 tok/s sur la 3090
+    seule contre 91.7 tok/s sur la paire, pour un modèle de 27 GB qui ne tient
+    dans aucune des deux cartes prises isolément).
+    """
+    out: List[dict] = []
+    try:
+        r = subprocess.run([str(binary), "--list-devices"], capture_output=True,
+                           timeout=60, env=_runtime_env(binary))
+        text = (r.stdout + r.stderr).decode("utf-8", "ignore")
+    except Exception as e:
+        log.debug("--list-devices indisponible: %s", e)
+        return out
+    import re
+    for m in re.finditer(r"^\s*(\w+\d+):\s*(.+?)\s*\((\d+)\s*MiB(?:,\s*(\d+)\s*MiB free)?\)",
+                         text, re.MULTILINE):
+        out.append({"id": m.group(1), "name": m.group(2),
+                    "total_mib": int(m.group(3)),
+                    "free_mib": int(m.group(4)) if m.group(4) else None})
+    return out
+
+
+def _local_tensor_split(num_gpus: int, binary=None) -> Optional[List[float]]:
+    """Répartition proportionnelle à la VRAM, sur les devices RÉELLEMENT vus.
+
+    Priorité au binaire (il voit NVIDIA *et* AMD) ; repli sur torch.cuda.
+    """
+    if binary is not None:
+        devs = backend_devices(binary)
+        if len(devs) > 1:
+            return [round(d["total_mib"] / 1024, 1) for d in devs[:num_gpus or len(devs)]]
     try:
         import torch
         return [
