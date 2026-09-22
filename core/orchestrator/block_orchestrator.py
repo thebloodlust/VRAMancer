@@ -1,3 +1,27 @@
+"""BlockOrchestrator — placement/migration de blocs sur la hiérarchie mémoire.
+
+PÉRIMÈTRE HONNÊTE (relu ligne à ligne le 2026-09-22) : aucun consommateur dans le
+chemin de service, seuls des tests instancient cette classe. C'est une brique en
+attente de câblage, pas un composant éprouvé en production.
+
+Ce que le code fait réellement :
+  - `place_block` : choisit le GPU au plus faible % VRAM (parsé depuis
+    GPUMonitor.status(), une CHAÎNE type "42% VRAM") puis délègue à MemoryBalancer.
+    Pas de profilage, pas de coût de transfert.
+  - `rebalance` : au-delà d'un seuil d'occupation, trie les blocs par ancienneté
+    d'accès et, POUR CHAQUE bloc, mesure DRAM/NVMe/réseau via MemoryBenchmarker
+    avant de le déplacer vers le niveau le plus rapide. Ce benchmark par bloc est
+    coûteux et écrit réellement sur disque (bench NVMe) — à ne pas lancer dans une
+    boucle chaude.
+  - `fetch_block` : DRAM puis NVMe. La branche réseau (L6) ouvre une connexion et
+    journalise la demande mais NE RAPATRIE RIEN : elle renvoie None. Le transfert
+    distant descendant n'est pas implémenté.
+  - Le `swarm_ledger` (récompense des nœuds) n'est câblé que sur l'envoi réseau.
+
+Rappel des rapports négatifs du projet : le tiering mémoire n'a PAS démontré de
+gain mesuré (charge décode-dominée). Ne pas présenter ce module comme un gain de
+performance.
+"""
 from __future__ import annotations
 import os, time, logging
 

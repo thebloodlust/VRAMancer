@@ -1,6 +1,19 @@
-"""
-Gestionnaire de nœuds hétérogènes VRAMancer.
-Support CUDA, ROCm, Apple Silicon MPS, CPU, IoT/Edge.
+"""Inventaire de nœuds hétérogènes (CUDA, ROCm, MPS, CPU, edge/IoT).
+
+PÉRIMÈTRE HONNÊTE (relu ligne à ligne le 2026-09-22) : ce module DÉCRIT des
+nœuds, il n'exécute rien. Aucun consommateur hors tests. « Support » = savoir
+lire les capacités d'une machine et la classer, pas y faire tourner un modèle.
+
+Limites connues :
+  - Les propriétés GPU (SM, VRAM) passent par `torch.cuda.get_device_properties`,
+    qui ne renvoie rien d'utile sans build torch adapté : une carte AMD sans
+    torch-hip, ou une carte NVIDIA sans module noyau chargé, est invisible ici
+    (constaté le 2026-09-22 : RX 7900 XT fonctionnelle sous Vulkan, mais absente
+    de cet inventaire).
+  - La classification edge/IoT est une heuristique de noms (raspberry, jetson,
+    coral, atom) et de seuils de RAM — jamais validée sur ces machines.
+  - Les capacités des nœuds DISTANTS sont celles qu'ils déclarent ; rien n'est
+    vérifié côté réception.
 """
 from __future__ import annotations
 import platform

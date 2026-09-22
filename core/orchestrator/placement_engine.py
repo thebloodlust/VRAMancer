@@ -1,22 +1,36 @@
-"""Placement Engine — production-ready layer and block placement.
+"""Placement Engine — choix du GPU pour un bloc, et plan de placement d'un modèle.
 
-Decides where to place model layers and blocks across heterogeneous GPUs
-using real profiling data (latency, FLOPS, memory, bandwidth) instead
-of naive VRAM-proportional splitting.
+PÉRIMÈTRE HONNÊTE (relu ligne à ligne le 2026-09-22) : ce module n'a aujourd'hui
+AUCUN consommateur dans le chemin de service — seuls des tests l'appellent. Il ne
+décide donc encore rien en production ; le traiter comme une brique en attente de
+câblage, pas comme un composant éprouvé.
 
-Strategies:
-  - "profiled"  : DP-optimal placement using LayerProfiler measurements (default)
-  - "vram"      : VRAM-proportional fallback (fast, no profiling needed)
-  - "balanced"  : even split across GPUs (ignores heterogeneity)
-  - custom      : register_strategy(name, callable)
+Deux niveaux, à ne pas confondre :
+
+`place(block)` — placement d'UN bloc, par HEURISTIQUE (pas de DP, pas de mesure
+de latence) :
+  - "profiled" (défaut) : score = (VRAM libre / VRAM totale) × facteur de compute
+    × 1.5 si la couche est de l'attention. Le facteur de compute vaut 1.0 tant
+    qu'aucun profil GPU n'a été calculé — dans ce cas la stratégie se réduit au
+    ratio de VRAM libre. Le nom « profiled » est donc optimiste.
+  - "vram"     : VRAM libre pondérée par le score Connectome (santé du lien réseau).
+  - "balanced" : round-robin entre GPU (ignore l'hétérogénéité).
+  - custom     : register_strategy(name, callable).
+
+`place_model(model)` — plan couche→GPU pour un modèle complet. Celui-ci mesure
+réellement (LayerProfiler : latence, mémoire, FLOPS par couche + benchmark des
+GPU) puis résout par programmation dynamique (compute_optimal_placement). Si
+LayerProfiler est indisponible, renvoie un plan factice {"strategy":
+"vram_fallback"} qui ne contient AUCUNE affectation — vérifier le retour.
+
+Les latences renvoyées par le plan sont des ESTIMATIONS du modèle de coût, pas
+des mesures de bout en bout.
 
 API:
     engine = PlacementEngine(metrics_provider)
-    decision = engine.place(block_meta)            -> {level, gpu_id}
-    plan = engine.place_model(model, num_gpus)     -> PlacementPlan
+    decision = engine.place(block_meta)            -> {level, gpu_id, strategy}
+    plan = engine.place_model(model, num_gpus)     -> PlacementPlan | dict fallback
     engine.register_strategy(name, callable)
-
-Extensible: add strategies (cost-aware, energy, multi-cloud) via register_strategy.
 """
 from __future__ import annotations
 
@@ -148,10 +162,13 @@ class PlacementEngine:
         num_gpus: int = 0,
         transfer_bandwidth_gbps: float = 0.0,
     ) -> Any:
-        """Compute optimal layer-to-GPU placement for a full model.
+        """Compute a layer-to-GPU placement plan for a full model.
 
-        Uses real profiling: measures each layer's latency, memory, and FLOPS,
-        benchmarks each GPU's throughput, then solves via DP.
+        Measures each layer (latency, memory, FLOPS) and benchmarks each GPU,
+        then solves via DP. "Optimal" is optimal FOR THE COST MODEL — the
+        returned latency is an estimate, not an end-to-end measurement.
+        Without LayerProfiler, returns the {"strategy": "vram_fallback"} dict,
+        which carries NO layer assignment at all.
 
         Args:
             model: Loaded nn.Module (HuggingFace or custom).
@@ -200,7 +217,11 @@ class PlacementEngine:
         return plan
 
     def _vram_fallback_plan(self, model: Any, num_gpus: int) -> Dict[str, Any]:
-        """Fallback: simple VRAM-proportional plan."""
+        """Fallback sans LayerProfiler — NE CONTIENT AUCUNE affectation de couche.
+
+        Marqueur signalant que le placement n'a pas pu être calculé ; l'appelant
+        doit le détecter (clé "strategy" == "vram_fallback") et décider lui-même.
+        """
         return {"strategy": "vram_fallback", "num_gpus": num_gpus}
 
     # ------------------------------------------------------------------
@@ -208,7 +229,12 @@ class PlacementEngine:
     # ------------------------------------------------------------------
 
     def _strategy_profiled(self, block: Dict[str, Any]) -> Dict[str, Any]:
-        """Profiled strategy: use GPU benchmarks + block metadata."""
+        """Heuristique : VRAM libre × compute × poids de type de couche.
+
+        Utilise les benchmarks GPU s'ils ont déjà été calculés (get_gpu_profiles /
+        place_model) ; sinon le facteur de compute vaut 1.0 et il ne reste que le
+        ratio de VRAM libre. Aucun profilage n'est déclenché ici.
+        """
         size_mb = block.get("size_mb", 128)
         layer_type = block.get("layer_type", "unknown")
 
