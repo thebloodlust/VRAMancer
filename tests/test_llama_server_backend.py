@@ -10,7 +10,10 @@ def test_platform_key_returns_string():
     from core.llama_server_backend import _platform_key
     key = _platform_key()
     assert isinstance(key, str)
-    assert key in ("linux-cuda", "linux-cpu", "darwin-arm", "darwin-x86", "windows")
+    # linux-vulkan : machine avec GPU AMD et sans NVIDIA (ajouté le 2026-09-22 —
+    # ces machines recevaient le build CPU, soit 5.7x moins vite en mesure réelle)
+    assert key in ("linux-cuda", "linux-vulkan", "linux-cpu",
+                   "darwin-arm", "darwin-x86", "windows")
 
 
 def test_platform_key_darwin_arm(monkeypatch):
@@ -81,3 +84,49 @@ def test_init_raises_without_binary(tmp_path):
             model_path=fake_model,
             binary_path=str(tmp_path / "nonexistent_binary"),
         )
+
+
+def test_asset_map_covers_every_platform_key():
+    """Chaque clé de plateforme doit avoir un asset, sinon on retombe en CPU muet."""
+    from core.llama_server_backend import _ASSET_MAP
+    for key in ("linux-cuda", "linux-vulkan", "linux-cpu",
+                "darwin-arm", "darwin-x86", "windows"):
+        assert key in _ASSET_MAP, f"pas d'asset pour {key}"
+        assert "{tag}" in _ASSET_MAP[key]
+
+
+def test_asset_names_use_current_upstream_format():
+    """Les releases llama.cpp sont en .tar.gz (Linux/macOS) depuis 2026.
+
+    L'ancienne table demandait des .zip inexistants : l'URL construite renvoyait
+    404 et le téléchargement automatique était cassé pour tout le monde.
+    """
+    from core.llama_server_backend import _ASSET_MAP
+    for key, asset in _ASSET_MAP.items():
+        if key.startswith(("linux", "darwin")):
+            assert asset.endswith(".tar.gz"), f"{key}: {asset}"
+        else:
+            assert asset.endswith(".zip"), f"{key}: {asset}"
+
+
+def test_amd_detection_reads_sysfs(tmp_path, monkeypatch):
+    """_has_amd_gpu lit le vendor PCI dans sysfs (0x1002 = AMD)."""
+    import core.llama_server_backend as mod
+    fake = tmp_path / "sys" / "class" / "drm" / "card0" / "device"
+    fake.mkdir(parents=True)
+    (fake / "vendor").write_text("0x1002\n")
+    monkeypatch.setattr(mod.glob if hasattr(mod, "glob") else __import__("glob"),
+                        "glob", lambda pat: [str(fake / "vendor")])
+    assert mod._has_amd_gpu() is True
+
+
+def test_compat_flags_adapt_to_binary_help(monkeypatch):
+    """Les options changent de forme selon la version : on lit --help, on ne suppose pas."""
+    import core.llama_server_backend as mod
+
+    monkeypatch.setattr(mod, "_server_help",
+                        lambda b: "-fa, --flash-attn [on|off|auto]\n-lm, --load-mode MODE\n--log-disable")
+    assert mod._compat_flags("x") == ["--flash-attn", "on", "--load-mode", "none", "--log-disable"]
+
+    monkeypatch.setattr(mod, "_server_help", lambda b: "--flash-attn\n--no-mmap\n--log-disable")
+    assert mod._compat_flags("x") == ["--flash-attn", "--no-mmap", "--log-disable"]

@@ -33,52 +33,103 @@ log = logging.getLogger("vramancer.llama_server")
 BINARY_DIR  = Path.home() / ".cache" / "vramancer" / "bin"
 SERVER_PORT = int(os.environ.get("VRM_LLAMA_SERVER_PORT", "8081"))
 
-# GitHub release asset names per platform
-_RELEASE_BASE = "https://github.com/ggml-org/llama.cpp/releases/latest/download"
+# GitHub release assets. Vérifié le 2026-09-22 sur la release b11112 : upstream
+# publie des .tar.gz pour Linux/macOS (plus des .zip), le nom porte l'accélérateur
+# (cuda-12.8, vulkan, rocm…), et la release « latest » est un tag de version
+# (v0.4.1) qui ne contient QU'UN nightly-tag.txt — il faut donc résoudre le vrai
+# tag de build bNNNNN avant de construire une URL.
+_RELEASES_API = "https://api.github.com/repos/ggml-org/llama.cpp/releases"
+_RELEASE_DL = "https://github.com/ggml-org/llama.cpp/releases/download"
 _ASSET_MAP = {
-    "linux-cuda":  "llama-{tag}-bin-ubuntu-x64.zip",
-    "linux-cpu":   "llama-{tag}-bin-ubuntu-x64.zip",
-    "darwin-arm":  "llama-{tag}-bin-macos-arm64.zip",
-    "darwin-x86":  "llama-{tag}-bin-macos-x64.zip",
-    "windows":     "llama-{tag}-bin-win-cuda-cu12.2.0-x64.zip",
+    "linux-cuda":   "llama-{tag}-bin-ubuntu-cuda-12.8-x64.tar.gz",
+    "linux-vulkan": "llama-{tag}-bin-ubuntu-vulkan-x64.tar.gz",
+    "linux-cpu":    "llama-{tag}-bin-ubuntu-x64.tar.gz",
+    "darwin-arm":   "llama-{tag}-bin-macos-arm64.tar.gz",
+    "darwin-x86":   "llama-{tag}-bin-macos-x64.tar.gz",
+    "windows":      "llama-{tag}-bin-win-cuda-12.4-x64.zip",
 }
 
 
+def _has_amd_gpu() -> bool:
+    """Carte AMD présente ? (sysfs amdgpu, sans dépendre de ROCm)."""
+    try:
+        from core.amd_sysfs import has_amd_gpu
+        return has_amd_gpu()
+    except Exception:
+        return False
+
+
 def _platform_key() -> str:
-    sys = platform.system().lower()
-    if sys == "darwin":
+    """Quel binaire llama.cpp pour cette machine.
+
+    Sur Linux, une carte AMD sans NVIDIA prenait le build CPU : mesuré le
+    2026-09-22 sur RX 7900 XT + Qwen3.6-35B-A3B Q4_K_M, cela coûte 6.59 tok/s
+    (CPU) contre 37.78 tok/s (Vulkan), soit 5.7×. D'où la détection AMD → Vulkan.
+    """
+    sys_name = platform.system().lower()
+    if sys_name == "darwin":
         return "darwin-arm" if platform.machine() == "arm64" else "darwin-x86"
-    if sys == "windows":
+    if sys_name == "windows":
         return "windows"
-    # Linux: check CUDA
     try:
         subprocess.run(["nvidia-smi"], capture_output=True, check=True)
         return "linux-cuda"
     except Exception:
-        return "linux-cpu"
+        pass
+    if _has_amd_gpu():
+        return "linux-vulkan"
+    return "linux-cpu"
+
+
+def _latest_build_tag() -> str:
+    """Dernier tag de BUILD (bNNNNN), pas le tag de version."""
+    import re
+    try:
+        resp = _requests.get(f"{_RELEASES_API}?per_page=10", timeout=15)
+        for rel in resp.json():
+            tag = rel.get("tag_name", "")
+            if re.fullmatch(r"b\d+", tag):
+                return tag
+    except Exception as e:
+        log.warning("Impossible de résoudre le tag llama.cpp (%s)", e)
+    raise RuntimeError(
+        "Aucun tag de build llama.cpp trouvé. Télécharge un binaire manuellement "
+        "depuis https://github.com/ggml-org/llama.cpp/releases et pointe "
+        "VRM_LLAMA_SERVER_BIN dessus."
+    )
 
 
 def get_or_download_binary() -> Path:
-    """Return path to llama-server binary, downloading if needed."""
+    """Chemin du binaire llama-server (téléchargé si absent).
+
+    `VRM_LLAMA_SERVER_BIN` court-circuite tout : utile pour pointer un build
+    local (ex. un build Vulkan compilé soi-même) sans rien télécharger.
+    """
+    override = os.environ.get("VRM_LLAMA_SERVER_BIN")
+    if override:
+        p = Path(override).expanduser()
+        if p.is_dir():
+            p = p / "llama-server"
+        if not p.exists():
+            raise RuntimeError(f"VRM_LLAMA_SERVER_BIN pointe sur un binaire inexistant: {p}")
+        log.info("llama-server (VRM_LLAMA_SERVER_BIN): %s", p)
+        return p
+
     BINARY_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Check if already present
-    for name in ("llama-server", "llama-server.exe", "server", "server.exe"):
-        p = BINARY_DIR / name
-        if p.exists():
-            log.info("llama-server binary found: %s", p)
-            return p
+    existing = _find_server_binary()
+    if existing:
+        log.info("llama-server binary found: %s", existing)
+        return existing
 
     log.info("Downloading llama-server binary…")
     _download_release_binary()
 
-    # Re-check
-    for name in ("llama-server", "llama-server.exe", "server"):
-        p = BINARY_DIR / name
-        if p.exists():
-            p.chmod(0o755)
-            log.info("llama-server ready: %s", p)
-            return p
+    ready = _find_server_binary()
+    if ready:
+        ready.chmod(0o755)
+        log.info("llama-server ready: %s", ready)
+        return ready
 
     raise RuntimeError(
         f"llama-server binary not found after download in {BINARY_DIR}. "
@@ -88,41 +139,106 @@ def get_or_download_binary() -> Path:
 
 
 def _download_release_binary():
-    """Download latest llama.cpp release and extract llama-server."""
-    import urllib.request
-    import zipfile
+    """Télécharge la release llama.cpp et extrait l'archive TELLE QUELLE.
+
+    Deux pièges vérifiés le 2026-09-22 sur b11112 :
+      - les builds sont dynamiques (libggml-*.so, libllama-*.so à côté du binaire) :
+        extraire seulement `llama-server` donne un exécutable qui ne démarre pas ;
+      - les bibliothèques sont versionnées AVEC des liens symboliques
+        (libllama-common.so.0 -> .so.0.4.1) : les aplatir en fichiers casse
+        l'édition de liens. On préserve donc l'arborescence et les liens.
+    """
     import io
+    import tarfile
+    import zipfile
 
-    # Get latest tag
-    try:
-        resp = _requests.get(
-            "https://api.github.com/repos/ggml-org/llama.cpp/releases/latest",
-            timeout=10,
-        )
-        tag = resp.json()["tag_name"]
-    except Exception:
-        tag = "b5000"  # fallback
-
+    BINARY_DIR.mkdir(parents=True, exist_ok=True)
+    tag = _latest_build_tag()
     pk = _platform_key()
     asset = _ASSET_MAP.get(pk, _ASSET_MAP["linux-cpu"]).format(tag=tag)
-    url = f"{_RELEASE_BASE}/{asset}"
+    url = f"{_RELEASE_DL}/{tag}/{asset}"
 
-    log.info("Downloading %s …", url)
-    try:
-        resp = _requests.get(url, timeout=120, stream=True)
-        resp.raise_for_status()
-        data = resp.content
+    log.info("Downloading %s (%s) …", url, pk)
+    resp = _requests.get(url, timeout=300, stream=True)
+    resp.raise_for_status()
+    data = resp.content
+
+    dest_root = BINARY_DIR / f"{tag}-{pk}"
+    if dest_root.exists():
+        import shutil
+        shutil.rmtree(dest_root, ignore_errors=True)
+    dest_root.mkdir(parents=True, exist_ok=True)
+
+    if asset.endswith(".zip"):
         with zipfile.ZipFile(io.BytesIO(data)) as zf:
-            for member in zf.namelist():
-                if "llama-server" in member or member.endswith("/server"):
-                    fname = Path(member).name
-                    dest = BINARY_DIR / fname
-                    dest.write_bytes(zf.read(member))
-                    dest.chmod(0o755)
-                    log.info("Extracted: %s", dest)
+            zf.extractall(dest_root)
+    else:
+        with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tf:
+            tf.extractall(dest_root, filter="data")
+
+    found = _find_server_binary()
+    if found:
+        found.chmod(0o755)
+        for sibling in found.parent.glob("llama-*"):
+            try:
+                sibling.chmod(0o755)
+            except Exception:
+                pass
+    log.info("llama.cpp %s (%s) extrait dans %s", tag, pk, dest_root)
+
+
+def _find_server_binary():
+    """Cherche llama-server dans BINARY_DIR (récursif : les archives ont un bin/)."""
+    for name in ("llama-server", "llama-server.exe", "server", "server.exe"):
+        direct = BINARY_DIR / name
+        if direct.is_file():
+            return direct
+    for cand in sorted(BINARY_DIR.rglob("llama-server*")):
+        if cand.is_file():
+            return cand
+    return None
+
+
+def _runtime_env(binary) -> dict:
+    """Env d'exécution : les libggml-*.so vivent à côté du binaire, pas dans /usr/lib."""
+    env = dict(os.environ)
+    libdir = str(Path(binary).parent)
+    env["LD_LIBRARY_PATH"] = (libdir + os.pathsep + env["LD_LIBRARY_PATH"]
+                              if env.get("LD_LIBRARY_PATH") else libdir)
+    return env
+
+
+def _server_help(binary) -> str:
+    """`--help` du binaire, pour s'adapter aux options qui ont changé de forme."""
+    try:
+        r = subprocess.run([str(binary), "--help"], capture_output=True,
+                           timeout=30, env=_runtime_env(binary))
+        return (r.stdout + r.stderr).decode("utf-8", "ignore")
     except Exception as e:
-        log.error("Binary download failed: %s — install manually", e)
-        raise
+        log.debug("llama-server --help indisponible: %s", e)
+        return ""
+
+
+def _compat_flags(binary) -> List[str]:
+    """Options dont la FORME a changé selon la version de llama.cpp.
+
+    Vérifié le 2026-09-22 sur b11112 : `--flash-attn` exige désormais une valeur
+    (le passer nu avale l'argument suivant et le serveur refuse de démarrer), et
+    `--no-mmap` a été remplacé par `--load-mode none`. On lit `--help` plutôt que
+    de supposer, pour rester compatible avec un binaire local plus ancien
+    (VRM_LLAMA_SERVER_BIN).
+    """
+    h = _server_help(binary)
+    flags: List[str] = []
+    if "--flash-attn" in h:
+        flags += ["--flash-attn", "on"] if "[on|off|auto]" in h else ["--flash-attn"]
+    if "--load-mode" in h:
+        flags += ["--load-mode", "none"]
+    elif "--no-mmap" in h or not h:
+        flags += ["--no-mmap"]
+    if "--log-disable" in h:
+        flags += ["--log-disable"]
+    return flags
 
 
 # ── Backend class ─────────────────────────────────────────────────────────────
@@ -162,11 +278,12 @@ class LlamaServerBackend:
             "--host", "127.0.0.1",
             "--port", str(server_port),
             "--ctx-size", str(n_ctx),
-            "--n-gpu-layers", "-1",
-            "--flash-attn",
-            "--no-mmap",
-            "--log-disable",
+            # -1 = toutes les couches. Attention : si le modèle dépasse la VRAM,
+            # le pilote déborde en mémoire hôte et le débit s'effondre (mesuré sur
+            # RX 7900 XT : 37.78 -> 8.95 tok/s). VRM_LLAMA_NGL permet de plafonner.
+            "--n-gpu-layers", os.environ.get("VRM_LLAMA_NGL", "-1"),
         ]
+        cmd += _compat_flags(binary)
 
         # Tensor split across local GPUs proportional to VRAM
         if num_local_gpus > 1:
@@ -180,10 +297,12 @@ class LlamaServerBackend:
             log.info("RPC nodes: %s", self._rpc_hosts)
 
         log.info("Starting llama-server: %s", " ".join(cmd[:6]) + " …")
+        env = _runtime_env(binary)
         self._proc = subprocess.Popen(
             cmd,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
+            env=env,
         )
         self._wait_ready()
 
