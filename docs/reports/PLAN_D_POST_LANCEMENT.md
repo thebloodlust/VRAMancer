@@ -50,10 +50,10 @@
 | D2.6 doctor --share | ✅ | `core/doctor.py` |
 | D2.7 README failure-reports + compat | ✅ + template d'issue | `README.md`, `.github/ISSUE_TEMPLATE/` |
 | D2.9 tests sécurité | ✅ 13 tests (verify_request avait déjà 10 tests ; c'est `enforce_startup_checks` qui n'en avait aucun) | `tests/test_security_startup_checks.py` |
-| D3.a ROCm / cross-vendor | ⏸ bloqué : pas de torch-hip installé |  — |
 | D3.b 2e machine | ⏸ pas de matériel | — |
 | D3.c simulation Docker | ✅ mesuré (UDP **et** mDNS traversent le bridge) | `tests/integration/docker_cluster_sim.sh` |
-| D3.d paire mixte | ⚠️ **moitié AMD seulement** — 3090 sans module noyau | `benchmarks/results/vulkan_7900xt_solo_20260922.md` |
+| D3.d paire mixte | ✅ **MESURÉ et TRANCHÉ** : cross-vendor maison = non-sujet (paire 32% plus lente quand le modèle tient ; +28% mais inutilisable quand il ne tient pas) | `docs/reports/D3D_CROSS_VENDOR_VERDICT.md` |
+| D3.a ROCm / bridge python | ⛔ **à ne PAS entreprendre** — D3.d a répondu : rien à gagner | idem |
 
 Hors plan, trouvé en faisant tourner le code sur la 7900 XT (3 pannes réelles) :
 téléchargement automatique de llama-server cassé pour tout le monde (404),
@@ -247,8 +247,11 @@ la niche existe, documenter les chiffres et SEULEMENT ALORS investir.
    agrégation des soumissions communautaires (GPU dépareillés × modèle × quant → tok/s).
    Effet de réseau, peu de code, prolonge la marque « benchmarks honnêtes ».
    D2.6 (`doctor --share`) en est la brique de départ.
-3. **Cross-vendor maison** : seulement si D3.d prouve que llama.cpp Vulkan est
-   insuffisant sur la paire réelle.
+3. ~~**Cross-vendor maison**~~ : **FERMÉ le 2026-09-22.** D3.d a été mesuré sur la
+   vraie paire 3090 + 7900 XT : llama.cpp Vulkan mélange déjà les deux vendeurs, et il
+   n'existe aucun régime où un pont maison apporterait quelque chose (voir
+   `D3D_CROSS_VENDOR_VERDICT.md`). Ne pas rouvrir sans un cas nouveau : un modèle qui
+   tiendrait ENTIÈREMENT dans la VRAM cumulée de deux cartes de marques différentes.
 4. **NE PAS** : réécrire un moteur d'inférence (terrain le plus contesté, réfuté par A1) ;
    swarm/ledger (XL, marché encombré — gel jusqu'à demande d'early adopters).
 

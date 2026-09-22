@@ -21,7 +21,7 @@ VRAMancer auto-detects all GPUs and runs the model across them using the standar
 
 ## What we measured that *didn't* work
 
-Six investigations were run to the end, measured, and **refuted**. They are published
+Seven investigations were run to the end, measured, and **refuted**. They are published
 rather than buried — the numbers below are the same ones that killed features we wanted
 to ship:
 
@@ -32,9 +32,14 @@ to ship:
 | MoE hot/cold expert tiering | "the differentiator" | expert use is **quasi-uniform** (top-8 coverage 15.3% vs 13.3% uniform) | ❌ refuted by design of MoE load-balancing |
 | Prefill/decode disaggregation | worth splitting | decode-dominated **58:1** | ❌ no room |
 | Direct GPU↔GPU P2P on consumer cards | DMA path | `CUDA_ERROR_PEER_ACCESS_UNSUPPORTED` (217) | ❌ not available without NVLink |
+| Cross-vendor pairing (RTX 3090 + RX 7900 XT, llama.cpp Vulkan) | more VRAM → bigger models | model that fits one card: **−32% tok/s** vs the 3090 alone (92.0 vs 135.9); model too big for one card: **+28%** but 1.08 → **1.38 tok/s**, unusable either way | ❌ a custom cross-vendor bridge buys nothing llama.cpp doesn't already do ([report](docs/reports/D3D_CROSS_VENDOR_VERDICT.md)) |
 | Cross-node sharding before a real 2nd machine | — | never measured | ⏸ not claimed until it is |
 
 Full write-up, raw numbers and the reasoning: **[docs/history/phase7-tiering-2026-06/SYNTHESE.md](docs/history/phase7-tiering-2026-06/SYNTHESE.md)**.
+
+Hardware advice that falls out of the last row, since nobody else will tell you: to run
+a bigger model, **a second card from the same vendor — or one card with more VRAM —
+beats a mismatched pair.** Mixing vendors works, it just doesn't pay.
 
 What survived is what this project actually is: **orchestration across mismatched GPUs on
 top of accelerate/llama.cpp/vLLM**, plus the optimisations that *did* measure (prompt-lookup
