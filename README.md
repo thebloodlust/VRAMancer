@@ -19,6 +19,27 @@ vramancer run Qwen/Qwen2.5-7B-Instruct -p "Explain gradient descent in 3 sentenc
 
 VRAMancer auto-detects all GPUs and runs the model across them using the standard engines — HuggingFace `accelerate` (`device_map="auto"`), llama.cpp, or vLLM — with a compute-aware `max_memory` map that avoids the load-time OOM tight-fit models hit. It is an **orchestration + UX layer** on top of those engines (it does not reimplement the inference engine), plus measured optimisations (prompt-lookup decoding, KV compression, a VRAM lending pool). No config files, no YAML, no manual device maps.
 
+## What we measured that *didn't* work
+
+Six investigations were run to the end, measured, and **refuted**. They are published
+rather than buried — the numbers below are the same ones that killed features we wanted
+to ship:
+
+| Idea | Prediction | Measured | Verdict |
+|------|-----------|----------|---------|
+| Weight tiering, dense (Rust `GpuPipeline`) | > 90% of reference throughput | **61%** | ❌ per-call overhead dominates |
+| Weight tiering, dense (best variant, torch double-buffer) | — | **73.1%** | ❌ `accelerate` still does better |
+| MoE hot/cold expert tiering | "the differentiator" | expert use is **quasi-uniform** (top-8 coverage 15.3% vs 13.3% uniform) | ❌ refuted by design of MoE load-balancing |
+| Prefill/decode disaggregation | worth splitting | decode-dominated **58:1** | ❌ no room |
+| Direct GPU↔GPU P2P on consumer cards | DMA path | `CUDA_ERROR_PEER_ACCESS_UNSUPPORTED` (217) | ❌ not available without NVLink |
+| Cross-node sharding before a real 2nd machine | — | never measured | ⏸ not claimed until it is |
+
+Full write-up, raw numbers and the reasoning: **[docs/history/phase7-tiering-2026-06/SYNTHESE.md](docs/history/phase7-tiering-2026-06/SYNTHESE.md)**.
+
+What survived is what this project actually is: **orchestration across mismatched GPUs on
+top of accelerate/llama.cpp/vLLM**, plus the optimisations that *did* measure (prompt-lookup
+decoding, KV compression, VRAM lending pool, continuous batching).
+
 ## Benchmarks
 
 ### Multi-GPU inference — heterogeneous split (RTX 3090 + RTX 5070 Ti)
@@ -246,6 +267,18 @@ OPENAI_API_BASE=http://localhost:5030/v1 OPENAI_API_KEY=dummy \
 Function calling works (parses Qwen's `<tool_call>` format → OpenAI `tool_calls`), the full
 tool round-trip is handled, and malformed calls never escape. Full guide, other agents
 (Cline/Continue), pitfalls and measured perf: **[docs/coding_agents.md](docs/coding_agents.md)**.
+
+**Agent client compatibility** — only what was actually run is marked validated:
+
+| Client | Status | Notes |
+|--------|--------|-------|
+| **Aider** (`--no-stream`) | ✅ validated end-to-end | Real session edits code and updates tests, reproduced 3×; see [C1_AIDER_FINDINGS.md](docs/sessions/C1_AIDER_FINDINGS.md) |
+| Cline | ⬜ not tested — [report it](../../issues/new?template=agent_compat.md) | Should work via the OpenAI API; nobody has run it here |
+| Continue | ⬜ not tested — [report it](../../issues/new?template=agent_compat.md) | idem |
+| OpenWebUI | ⬜ not tested — [report it](../../issues/new?template=agent_compat.md) | idem |
+| Any client requiring **streamed tool-calls** | ❌ not implemented | Deliberately frozen until a real client needs it — [say so in an issue](../../issues/new?template=agent_compat.md) and it gets unfrozen |
+
+A "it's broken" report is as useful as a "it works": both move a row out of the ⬜ column.
 
 > Perf note: the coding path runs through **llama.cpp/GGUF**. The prompt-lookup +500% number
 > was measured on the HuggingFace backend, not this path — see [BENCHMARK_RESULTS.md](BENCHMARK_RESULTS.md).
