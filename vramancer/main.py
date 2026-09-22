@@ -116,7 +116,9 @@ def main(argv=None):
     sub.add_parser("health", help="Verifier la sante du systeme")
 
     # ---- doctor ----
-    sub.add_parser("doctor", help="Diagnostic complet (GPU, P2P, versions, sante, reco) - chiffres mesures")
+    p_doc = sub.add_parser("doctor", help="Diagnostic complet (GPU, P2P, versions, sante, reco) - chiffres mesures")
+    p_doc.add_argument("--share", action="store_true",
+                       help="Dump markdown ANONYMISE (materiel + versions) a coller dans une issue GitHub")
 
     # ---- history ----
     p_hist = sub.add_parser("history", help="Historique local des requetes (tok/s, OOM, tendances)")
@@ -178,7 +180,7 @@ def main(argv=None):
         _cmd_health()
     elif args.command == "doctor":
         from core.doctor import run_doctor
-        sys.exit(run_doctor())
+        sys.exit(run_doctor(share=getattr(args, "share", False)))
     elif args.command == "history":
         _cmd_history(args)
     elif args.command == "cluster":

@@ -97,7 +97,85 @@ def collect() -> Dict[str, Any]:
     return d
 
 
-def run_doctor() -> int:
+# ----------------------------------------------------------------------------
+# D2.6 — dump anonymisé, collable dans une issue GitHub
+# ----------------------------------------------------------------------------
+
+def _scrub(text: str) -> str:
+    """Retire tout ce qui pourrait identifier la machine ou son propriétaire.
+
+    Filet de sécurité : les champs sont déjà choisis un par un dans
+    `build_share_report`, ceci rattrape ce qui se serait glissé dans une
+    chaîne (chemin, nom d'utilisateur, nom d'hôte).
+    """
+    import getpass
+    import socket
+    repl = []
+    try:
+        repl.append((os.path.expanduser("~"), "~"))
+    except Exception:
+        pass
+    for fn in (getpass.getuser, socket.gethostname):
+        try:
+            v = fn()
+            if v and len(v) > 2:
+                repl.append((v, "<redacted>"))
+        except Exception:
+            pass
+    for a, b in repl:
+        text = text.replace(a, b)
+    return text
+
+
+def build_share_report(d: Optional[Dict[str, Any]] = None) -> str:
+    """Markdown anonymisé : matériel + versions UNIQUEMENT, aucune donnée perso.
+
+    Inclus : OS/arch, Python, RAM totale, GPU (nom, arch, VRAM), CUDA, versions
+    des paquets, backend détecté. Exclu volontairement : nom d'hôte, nom
+    d'utilisateur, chemins, IP, contenu de `health` (peut contenir des chemins).
+    """
+    d = d if d is not None else collect()
+    s = d.get("system", {})
+    lines = ["<!-- vramancer doctor --share : matériel et versions seulement -->",
+             "### Environnement VRAMancer", ""]
+    lines.append(f"- **OS** : {s.get('os','?')} {s.get('release','')} ({s.get('machine','?')})")
+    lines.append(f"- **Python** : {s.get('python','?')}")
+    if s.get("ram_total_gb"):
+        lines.append(f"- **RAM** : {s['ram_total_gb']} GB")
+    gpus = [g for g in d.get("gpus", []) if "error" not in g]
+    if gpus:
+        lines.append("- **GPU** :")
+        for g in gpus:
+            fp4 = ", NVFP4" if g.get("fp4") else ""
+            lines.append(f"  - GPU{g['index']} : {g['name']} ({g['arch']}, {g['total_gb']} GB{fp4})")
+    else:
+        err = next((g.get("error") for g in d.get("gpus", []) if "error" in g), None)
+        lines.append(f"- **GPU** : aucun détecté{f' ({_scrub(str(err))})' if err else ''}")
+    p2p = d.get("p2p", {})
+    if p2p.get("applicable"):
+        lines.append(f"- **P2P direct GPU↔GPU** : {'oui' if p2p.get('direct_p2p') else 'non'} (mesuré)")
+    v = d.get("versions", {})
+    lines.append(f"- **CUDA (torch)** : {v.get('cuda') or 'aucun'} · `torch.cuda.is_available()` = {d.get('cuda_available')}")
+    vers = " · ".join(f"{k} {v.get(k) or 'absent'}"
+                      for k in ("vramancer", "torch", "transformers", "accelerate", "peft", "zeroconf"))
+    lines.append(f"- **Versions** : {vers}")
+    backend = (d.get("health") or {}).get("backend") if isinstance(d.get("health"), dict) else None
+    if isinstance(backend, str):
+        lines.append(f"- **Backend détecté** : {backend}")
+    lines.append("")
+    return _scrub("\n".join(lines))
+
+
+def run_doctor(share: bool = False) -> int:
+    if share:
+        import logging
+        logging.disable(logging.WARNING)   # sortie collable : pas de bruit de log
+        try:
+            print(build_share_report())
+        finally:
+            logging.disable(logging.NOTSET)
+        return 0
+
     d = collect()
     print("=" * 64)
     print("  VRAMancer doctor — diagnostic (chiffres mesurés)")
