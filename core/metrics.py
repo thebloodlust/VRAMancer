@@ -78,6 +78,24 @@ CIRCUIT_BREAKER_TRIPS = Counter(
     ["name"],
 )
 
+# Tool-calls (function calling) metrics — agent reliability (D2.2)
+# EMITTED : tool_calls valides effectivement renvoyés au client.
+# MALFORMED : JSON du modèle invalide mais RÉPARÉ par le parser (virgule finale, quotes simples).
+# FAILED : JSON irréparable -> aucun tool_call émis (C5 : jamais de tool_call cassé).
+VRM_TOOL_CALLS_EMITTED = Counter(
+    "vramancer_tool_calls_emitted_total",
+    "Tool calls valides émis vers le client (format OpenAI)",
+)
+VRM_TOOL_CALLS_MALFORMED = Counter(
+    "vramancer_tool_calls_malformed_total",
+    "Tool calls dont le JSON était malformé et a été réparé par le parser",
+)
+VRM_TOOL_CALLS_FAILED = Counter(
+    "vramancer_tool_calls_failed_total",
+    "Blocs <tool_call> au JSON irréparable, ignorés (aucun tool_call émis)",
+)
+
+
 _started = False
 
 # All labeled Gauge metrics that accumulate stale label sets on pipeline reset
@@ -185,6 +203,9 @@ __all__ = [
     "PAGED_KV_BORROWED_PAGES",
     "CIRCUIT_BREAKER_STATE",
     "CIRCUIT_BREAKER_TRIPS",
+    "VRM_TOOL_CALLS_EMITTED",
+    "VRM_TOOL_CALLS_MALFORMED",
+    "VRM_TOOL_CALLS_FAILED",
     "WEBGPU_CONNECTED_CLIENTS",
     "WEBGPU_FLOPS_TOTAL",
 ]

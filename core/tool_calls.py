@@ -41,6 +41,15 @@ def _new_call_id() -> str:
     return "call_" + secrets.token_hex(12)
 
 
+def _metric(name: str, n: int = 1) -> None:
+    """Incrémente un compteur Prometheus (best-effort, ne lève JAMAIS)."""
+    try:
+        import core.metrics as _m
+        getattr(_m, name).inc(n)
+    except Exception:
+        pass
+
+
 def _loads_repair(raw: str):
     """Parse un JSON, avec réparation triviale (virgule finale, quotes simples). Renvoie
     l'objet ou None si irréparable (C5 : on n'émet jamais un tool_call cassé)."""
@@ -52,9 +61,11 @@ def _loads_repair(raw: str):
     repaired = re.sub(r"'([^']*)'\s*:", r'"\1":', repaired)  # 'clé': -> "clé":
     repaired = re.sub(r":\s*'([^']*)'", r': "\1"', repaired)  # : 'val' -> : "val"
     try:
-        return json.loads(repaired)
+        obj = json.loads(repaired)
     except Exception:
         return None
+    _metric("VRM_TOOL_CALLS_MALFORMED")   # JSON du modèle invalide mais réparé
+    return obj
 
 
 def parse_tool_calls(text: str) -> Tuple[str, List[Dict[str, Any]]]:
@@ -73,6 +84,7 @@ def parse_tool_calls(text: str) -> Tuple[str, List[Dict[str, Any]]]:
             continue
         obj = _loads_repair(raw)
         if not isinstance(obj, dict):  # irréparable -> jamais de tool_call cassé (C5)
+            _metric("VRM_TOOL_CALLS_FAILED")
             try:
                 import logging
                 logging.getLogger("vramancer").warning(
@@ -81,7 +93,8 @@ def parse_tool_calls(text: str) -> Tuple[str, List[Dict[str, Any]]]:
                 pass
             continue
         name = obj.get("name") or obj.get("function")
-        if not name:
+        if not name:            # JSON valide mais sans nom de fonction -> inutilisable
+            _metric("VRM_TOOL_CALLS_FAILED")
             continue
         args = obj.get("arguments", obj.get("parameters", {}))
         # OpenAI attend arguments = STRING JSON
@@ -97,6 +110,8 @@ def parse_tool_calls(text: str) -> Tuple[str, List[Dict[str, Any]]]:
         })
     # content = texte hors des blocs tool_call
     content = _TOOL_CALL_RE.sub("", text).strip()
+    if tool_calls:
+        _metric("VRM_TOOL_CALLS_EMITTED", len(tool_calls))
     return content, tool_calls
 
 
