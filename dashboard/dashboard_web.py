@@ -94,6 +94,64 @@ def set_memory_manager(hm):
 
 
 
+def _amd_sysfs_gpus():
+    """GPU AMD via sysfs amdgpu — pynvml et torch.cuda ne voient QUE les cartes NVIDIA.
+
+    Sans ça, une RX 7900 XT parfaitement fonctionnelle s'affiche « No GPU detected »
+    dans le dashboard (constaté le 2026-09-22 sur la machine de dev). Lit les mêmes
+    compteurs que le noyau expose à radeontop : mem_info_vram_{total,used} et
+    gpu_busy_percent. Renvoie [] si aucune carte AMD.
+    """
+    import glob
+    out = []
+    for dev in sorted(glob.glob("/sys/class/drm/card*/device")):
+        try:
+            if open(os.path.join(dev, "vendor")).read().strip().lower() != "0x1002":
+                continue
+            total = int(open(os.path.join(dev, "mem_info_vram_total")).read().strip())
+            used = int(open(os.path.join(dev, "mem_info_vram_used")).read().strip())
+        except Exception:
+            continue
+        try:
+            busy = int(open(os.path.join(dev, "gpu_busy_percent")).read().strip())
+        except Exception:
+            busy = 0
+        pci_id = ""
+        try:
+            for line in open(os.path.join(dev, "uevent")):
+                if line.startswith("PCI_ID="):
+                    pci_id = line.strip().split("=", 1)[1]
+        except Exception:
+            pass
+        out.append({
+            "name": _pci_name(pci_id) or f"AMD GPU ({pci_id or 'amdgpu'})",
+            "total_bytes": total, "used_bytes": used, "busy": busy,
+        })
+    return out
+
+
+def _pci_name(pci_id: str):
+    """Nom commercial depuis la base pci.ids système (hwdata), sinon None."""
+    if not pci_id or ":" not in pci_id:
+        return None
+    ven, dev = (x.lower() for x in pci_id.split(":", 1))
+    for db in ("/usr/share/misc/pci.ids", "/usr/share/hwdata/pci.ids"):
+        try:
+            in_vendor = False
+            for line in open(db, encoding="utf-8", errors="ignore"):
+                if line.startswith("#") or not line.strip():
+                    continue
+                if not line.startswith("\t"):
+                    in_vendor = line.split()[0].lower() == ven
+                elif in_vendor and not line.startswith("\t\t"):
+                    parts = line.strip().split(None, 1)
+                    if parts and parts[0].lower() == dev:
+                        return parts[1].strip() if len(parts) > 1 else None
+        except Exception:
+            continue
+    return None
+
+
 @app.route("/")
 def dashboard():
     gpus = []
@@ -137,6 +195,15 @@ def dashboard():
                         gpus.append({"name": f"GPU {i}", "total_vram_mb": 0, "used_vram_mb": 0, "is_available": False})
         except ImportError:
             pass
+    # Fallback AMD (sysfs amdgpu) — invisible pour pynvml/torch.cuda
+    if not gpus:
+        for g in _amd_sysfs_gpus():
+            gpus.append({
+                "name": g["name"],
+                "total_vram_mb": g["total_bytes"] // (1024 * 1024),
+                "used_vram_mb": g["used_bytes"] // (1024 * 1024),
+                "is_available": True,
+            })
     if not gpus:
         gpus = [{"name": "No GPU detected", "total_vram_mb": 0, "used_vram_mb": 0, "is_available": False}]
     memory = None
@@ -171,11 +238,25 @@ def api_gpu():
         return jsonify({"cuda_available": True, "device_count": len(devices), "devices": devices})
     except Exception:
         pass
-    # Fallback to torch
+    # Fallback AMD (sysfs amdgpu) puis torch
+    def _amd_payload():
+        devs = []
+        for i, g in enumerate(_amd_sysfs_gpus()):
+            total, used = g["total_bytes"], g["used_bytes"]
+            devs.append({
+                "id": i, "name": g["name"], "vendor": "amd",
+                "memory_used": used, "memory_total": total,
+                "memory_free": max(0, total - used),
+                "memory_usage_percent": round((used / total) * 100, 2) if total else 0,
+                "gpu_utilization": g["busy"],
+            })
+        return devs
+
     try:
         import torch
         if not torch.cuda.is_available():
-            return jsonify({"cuda_available": False, "devices": []})
+            amd = _amd_payload()
+            return jsonify({"cuda_available": False, "device_count": len(amd), "devices": amd})
         devices = []
         for i in range(torch.cuda.device_count()):
             try:
@@ -192,7 +273,9 @@ def api_gpu():
                 devices.append({"id": i, "error": str(e)})
         return jsonify({"cuda_available": True, "device_count": len(devices), "devices": devices})
     except ImportError:
-        return jsonify({"cuda_available": False, "devices": [], "message": "torch not available"})
+        amd = _amd_payload()
+        return jsonify({"cuda_available": False, "device_count": len(amd), "devices": amd,
+                        "message": "torch not available"})
 
 
 @app.route("/api/pipeline/status")
