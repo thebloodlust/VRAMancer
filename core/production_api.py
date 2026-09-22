@@ -423,6 +423,18 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
     # Inference endpoints
     # ====================================================================
 
+    def _looks_like_model_ref(name: str) -> bool:
+        """Le champ `model` désigne-t-il VRAIMENT un modèle à charger ?
+
+        Les clients OpenAI envoient souvent un nom arbitraire (« local », « gpt-4 »,
+        le nom d'un profil…). Le prendre pour une référence HuggingFace faisait
+        partir le serveur en téléchargement et répondre 500 avec une erreur Hub
+        incompréhensible (constaté le 2026-09-22 avec `model: "local"`).
+        On ne tente un chargement que si le nom ressemble à une référence réelle.
+        """
+        return bool(name) and ("/" in name or name.endswith(".gguf")
+                               or os.path.exists(name))
+
     def _ensure_model(model_name: Optional[str]) -> Optional[Tuple[dict, int]]:
         """Ensure a model is loaded. Returns error response or None."""
         if _registry.is_loaded():
@@ -430,7 +442,21 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
             # réellement différent (ni le nom réel ni l'alias servi). Sinon, le champ
             # `model` (souvent l'alias envoyé par Aider/LiteLLM) désigne le modèle courant.
             if model_name and model_name not in (_registry.model_name, _served_model_name()):
-                _registry.load(model_name)
+                if not _looks_like_model_ref(model_name):
+                    # Comme llama.cpp/LM Studio : on sert le modèle chargé.
+                    logger.info("Champ 'model'=%r ignoré — le serveur sert déjà %r",
+                                model_name, _served_model_name())
+                    return None
+                try:
+                    _registry.load(model_name)
+                except Exception as e:
+                    return jsonify({'error': {
+                        'message': (f"Impossible de charger le modèle demandé "
+                                    f"'{model_name}' : {e}. Le serveur sert "
+                                    f"'{_served_model_name()}' — utilise ce nom, ou "
+                                    f"relance avec --model."),
+                        'type': 'model_not_found', 'code': 'model_not_found',
+                    }}), 400
             return None
         if not model_name:
             return jsonify({
@@ -438,7 +464,13 @@ def _register_routes(application: Flask, _run_with_timeout, _queue,
                          'Send {"model": "gpt2", "prompt": "..."} '
                          'or pre-load via serve --model.',
             }), 400
-        _registry.load(model_name)
+        try:
+            _registry.load(model_name)
+        except Exception as e:
+            return jsonify({'error': {
+                'message': f"Impossible de charger '{model_name}' : {e}",
+                'type': 'model_not_found', 'code': 'model_not_found',
+            }}), 400
         return None
 
     @application.route('/chat', methods=['GET'])

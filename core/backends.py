@@ -400,6 +400,35 @@ def _llamacpp_available() -> bool:
         return False
 
 
+def _llamacpp_can_offload() -> bool:
+    """Le binding in-process peut-il réellement utiliser un GPU ?
+
+    `llama-cpp-python` est compilé pour UN accélérateur. Une roue CUDA s'importe
+    parfaitement sur une machine AMD, mais charge tout en CPU sans rien dire.
+    """
+    try:
+        from llama_cpp import llama_cpp as _c
+        return bool(_c.llama_supports_gpu_offload())
+    except Exception:
+        logger.debug("llama_supports_gpu_offload indisponible", exc_info=True)
+        return False
+
+
+def _any_gpu_present() -> bool:
+    """Un GPU exploitable existe-t-il (NVIDIA via torch, ou AMD via sysfs) ?"""
+    try:
+        import torch
+        if torch.cuda.is_available() and torch.cuda.device_count() > 0:
+            return True
+    except Exception:
+        pass
+    try:
+        from core.amd_sysfs import has_amd_gpu
+        return has_amd_gpu()
+    except Exception:
+        return False
+
+
 def select_backend(model_name: str, cache_dir: str = None, backend: str = "auto", num_gpus: int = 1):
     logger.info(f"Sélection du backend pour {model_name} (demandé: {backend}, gpus: {num_gpus})")
 
@@ -444,6 +473,27 @@ def select_backend(model_name: str, cache_dir: str = None, backend: str = "auto"
     if backend == "auto":
         # 1. GGUF models → llama.cpp (17x faster than HF BF16)
         if _is_gguf_model(model_name) and _llamacpp_available():
+            # Le binding in-process est compilé pour UN accélérateur. S'il ne sait
+            # pas offloader alors qu'un GPU est présent (cas typique : roue CUDA
+            # sur machine AMD), il chargerait tout en CPU en silence — mesuré le
+            # 2026-09-22 sur RX 7900 XT : 2.0 tok/s contre 37.8 via llama-server
+            # Vulkan. On bascule alors sur le sous-processus llama-server, qui
+            # télécharge le build correspondant au matériel.
+            if (not _llamacpp_can_offload() and _any_gpu_present()
+                    and os.environ.get("VRM_FORCE_LLAMACPP_INPROC") != "1"):
+                logger.warning(
+                    "llama-cpp-python ne peut pas offloader sur ce GPU "
+                    "(roue compilée pour un autre accélérateur) — bascule sur le "
+                    "sous-processus llama-server. VRM_FORCE_LLAMACPP_INPROC=1 pour "
+                    "garder le binding in-process (CPU)."
+                )
+                try:
+                    from core.backends_llama_server import LlamaServerAdapter
+                    return LlamaServerAdapter(model_name, cache_dir=cache_dir,
+                                              num_gpus=num_gpus)
+                except Exception as e:
+                    logger.error("Bascule llama-server impossible (%s) — "
+                                 "retour au binding in-process, en CPU.", e)
             logger.info(
                 f"GGUF détecté — utilisation du backend llama.cpp pour {model_name} "
                 f"(~5-17x plus rapide que HuggingFace)"

@@ -14,9 +14,12 @@ Remote node setup:
     Laptop (pip):    python -m llama_cpp.server.rpc --host 0.0.0.0 --port 50052
     Or binary:       llama-rpc-server --host 0.0.0.0 --port 50052
 """
+import atexit
 import gc
 import json
 import logging
+import socket
+import weakref
 import os
 import platform
 import subprocess
@@ -241,6 +244,51 @@ def _compat_flags(binary) -> List[str]:
     return flags
 
 
+def _free_port(preferred: int, tries: int = 20) -> int:
+    """Premier port libre à partir de `preferred` (un orphelin peut squatter)."""
+    for offset in range(tries):
+        port = preferred + offset
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            if sock.connect_ex(("127.0.0.1", port)) != 0:
+                if offset:
+                    log.warning("Port %d occupé (llama-server orphelin ?) — bascule sur %d",
+                                preferred, port)
+                return port
+    raise RuntimeError(
+        f"Aucun port libre entre {preferred} et {preferred + tries - 1}. "
+        "Un llama-server orphelin tourne peut-être encore : `pkill -f llama-server`."
+    )
+
+
+def _die_with_parent():
+    """Linux : demander au noyau de tuer ce processus si son parent meurt.
+
+    `atexit` ne s'exécute pas si le parent est tué par SIGKILL — or un
+    llama-server orphelin garde ~20 GB de VRAM. PR_SET_PDEATHSIG (1) couvre ce
+    cas au niveau du noyau. No-op ailleurs que sur Linux.
+    """
+    if platform.system().lower() != "linux":
+        return
+    try:
+        import ctypes
+        ctypes.CDLL("libc.so.6", use_errno=True).prctl(1, 15, 0, 0, 0)  # PR_SET_PDEATHSIG, SIGTERM
+    except Exception:
+        pass
+
+
+def _terminate_proc(proc) -> None:
+    """Tue le sous-processus (appelé par le finalizer, sans référence à self)."""
+    try:
+        if proc and proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+    except Exception:
+        pass
+
+
 # ── Backend class ─────────────────────────────────────────────────────────────
 
 class LlamaServerBackend:
@@ -271,6 +319,14 @@ class LlamaServerBackend:
         self._base_url    = f"http://127.0.0.1:{server_port}"
 
         binary = Path(binary_path) if binary_path else get_or_download_binary()
+
+        # Un llama-server orphelin (parent tué sans shutdown) garde le port ET la
+        # VRAM : le démarrage suivant échouait alors de façon incompréhensible
+        # (« Address already in use », puis modèle non chargé). Constaté le
+        # 2026-09-22. On cherche donc un port libre et on garantit le nettoyage.
+        server_port = _free_port(server_port)
+        self._port = server_port
+        self._base_url = f"http://127.0.0.1:{server_port}"
 
         cmd = [
             str(binary),
@@ -303,8 +359,13 @@ class LlamaServerBackend:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             env=env,
+            preexec_fn=_die_with_parent if os.name == "posix" else None,
         )
         self._wait_ready()
+        # Nettoyage même si l'appelant oublie shutdown() ou meurt : sans ça, le
+        # sous-processus survit et squatte ~20 GB de VRAM.
+        self._finalizer = weakref.finalize(self, _terminate_proc, self._proc)
+        atexit.register(self.shutdown)
 
     # ── Factory ──────────────────────────────────────────────────────────────
 
@@ -409,13 +470,11 @@ class LlamaServerBackend:
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
     def shutdown(self):
-        if self._proc and self._proc.poll() is None:
-            self._proc.terminate()
-            try:
-                self._proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                self._proc.kill()
+        _terminate_proc(self._proc)
         self._proc = None
+        fin = getattr(self, "_finalizer", None)
+        if fin is not None:
+            fin.detach()
         gc.collect()
 
 
