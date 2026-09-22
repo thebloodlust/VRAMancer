@@ -5,6 +5,19 @@ available transport. **Honest status (2026-05): only PipelinedTransport (Strateg
 is fully production-tested. Strategies 0 and 1 are partially implemented — see
 notes below.**
 
+**AUCUN chiffre de ce fichier n'a été mesuré sur une paire NVIDIA+AMD réelle
+(état 2026-09-22).** Les débits cités plus bas (25-50 GB/s, ~20 GB/s) sont des
+bornes théoriques PCIe, pas des mesures — ne pas les citer comme résultats.
+La machine de dev a bien eu les deux cartes en septembre 2026, mais la RTX 3090
+était sans module noyau pendant toute la fenêtre où la RX 7900 XT était montée :
+rien n'a pu être mesuré. Les seuls chiffres AMD mesurés le sont sous Vulkan,
+sans ROCm, et ne concernent pas ce module :
+`benchmarks/results/vulkan_7900xt_solo_20260922.md`.
+
+Avant d'investir ici : exécuter `benchmarks/bench_vulkan_pair.sh` (garde-fou D3.d).
+Si llama.cpp Vulkan gère déjà correctement la paire mixte, ce module n'a pas de
+raison d'exister.
+
 Transfer strategies (ordered by *theoretical* performance):
 
   Strategy 0: DMA-BUF (Linux ≥5.12) — **PARTIAL / EXPERIMENTAL**
@@ -29,14 +42,14 @@ Transfer strategies (ordered by *theoretical* performance):
     - While chunk N goes GPU_A → pinned_buf_A (DMA), chunk N-1 goes
       pinned_buf_B → GPU_B (DMA) — both transfers overlap on PCIe
     - Hides latency completely, CPU never touches data
-    - Throughput: min(PCIe_src, PCIe_dst) ≈ 25-50 GB/s sustained
+    - Throughput: borne THÉORIQUE min(PCIe_src, PCIe_dst) ≈ 25-50 GB/s — jamais mesuré
     - Always works, no special hardware requirements
 
   Strategy 3: Shared Memory Ring Buffer (multi-process mode)
     - For process-isolated CUDA/ROCm workers
     - Lock-free SPSC ring buffer on /dev/shm (tmpfs, no disk I/O)
     - Producer DMA-writes to ring, consumer DMA-reads from ring
-    - Throughput: ~20 GB/s (limited by ring synchronization)
+    - Throughput: ~20 GB/s ESTIMÉ (ring sync) — jamais mesuré
 
 Why not true GPU-to-GPU P2P?
   CUDA P2P (cudaMemcpyPeer) and NVLink are NVIDIA-only protocols.
