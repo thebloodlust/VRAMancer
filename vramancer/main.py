@@ -578,31 +578,43 @@ def _cmd_generate(args):
 
 
 def _cmd_benchmark(args):
-    """Benchmark GPU avec matmul."""
+    """Benchmark GPU : GFLOPS et bande passante MESURES par LayerProfiler.
+
+    Appelait `profiler.benchmark_gpu()`, methode qui n'existe pas : la commande
+    echouait sur AttributeError pour TOUT LE MONDE (constate le 2026-09-22).
+    L'API reelle est `profile_gpus()`.
+    """
     print("GPU Benchmark")
     print("-" * 40)
+    profiles = []
     try:
         from core.layer_profiler import LayerProfiler
-        profiler = LayerProfiler()
-        results = profiler.benchmark_gpu(matrix_size=args.size)
-        for key, val in results.items():
-            if isinstance(val, float):
-                print(f"  {key}: {val:.2f}")
-            else:
-                print(f"  {key}: {val}")
+        profiles = LayerProfiler().profile_gpus()
     except Exception as e:
         print(f"Benchmark failed: {e}")
-        try:
-            import torch
-            if torch.cuda.is_available():
-                for i in range(torch.cuda.device_count()):
-                    props = torch.cuda.get_device_properties(i)
-                    print(f"  GPU {i}: {props.name} "
-                          f"({props.total_memory / (1024**3):.1f} GB)")
-            else:
-                print("  No CUDA GPU available")
-        except ImportError:
-            print("  PyTorch not installed")
+
+    for gp in profiles:
+        vram = f"{gp.total_vram_mb / 1024:.1f} GB" if gp.total_vram_mb else "?"
+        print(f"  [{gp.backend}] GPU{gp.index} {gp.name} — {vram}")
+        print(f"      compute : {gp.compute_throughput_gflops:.1f} GFLOPS (mesure)")
+        print(f"      memoire : {gp.memory_bandwidth_gbps:.1f} GB/s (mesure)")
+
+    # Cartes AMD : invisibles de torch.cuda, on les liste au moins en inventaire.
+    try:
+        from core.amd_sysfs import amd_gpus
+        seen = {(p.name or "") for p in profiles}
+        for g in amd_gpus():
+            if g["name"] in seen:
+                continue
+            print(f"  [amdgpu] GPU{g['index']} {g['name']} — "
+                  f"{g['total_bytes'] / 1024**3:.1f} GB")
+            print("      compute/memoire : non mesures — torch ne pilote pas cette "
+                  "carte (pas de build ROCm). Debit reel : voir 'vramancer serve'.")
+    except Exception:
+        pass
+
+    if not profiles:
+        print("  Aucun GPU profile.")
 
 
 def _cmd_discover(args):

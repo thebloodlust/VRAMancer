@@ -74,3 +74,20 @@ def test_sensors_are_optional(tmp_path, monkeypatch):
 def test_pci_name_returns_none_for_garbage():
     assert mod.pci_device_name("") is None
     assert mod.pci_device_name("pas-un-id") is None
+
+
+def test_benchmark_cli_uses_existing_profiler_api():
+    """`vramancer benchmark` appelait profiler.benchmark_gpu(), qui n'existe pas.
+
+    La commande échouait sur AttributeError pour tout le monde (2026-09-22).
+    Ce test verrouille l'API réellement utilisée.
+    """
+    import inspect
+    from core.layer_profiler import LayerProfiler
+    import vramancer.main as main_mod
+
+    src = inspect.getsource(main_mod._cmd_benchmark)
+    body = src.replace(main_mod._cmd_benchmark.__doc__ or "", "")  # hors docstring
+    assert "benchmark_gpu(" not in body, "méthode inexistante réintroduite"
+    assert "profile_gpus()" in body
+    assert hasattr(LayerProfiler, "profile_gpus")

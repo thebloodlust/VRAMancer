@@ -218,7 +218,22 @@ sur AMD.**
 Le parallélisme double le débit agrégé à 4 requêtes puis plafonne. Sur cette carte et
 ce modèle, **4 simultanées est le bon point de fonctionnement**.
 
-### 7.6 Claims cross-vendor : marqués non mesurés
+### 7.6 `vramancer benchmark` était cassé pour tout le monde
+
+La commande appelait `profiler.benchmark_gpu()` — **méthode qui n'existe pas** dans
+`LayerProfiler`. Elle échouait donc sur `AttributeError` sur n'importe quelle machine,
+NVIDIA comprise, en affichant « Benchmark failed ». C'est pourtant la commande que
+`vramancer doctor` recommande pour obtenir des tok/s mesurés. Corrigée (API réelle :
+`profile_gpus()`), et elle liste maintenant aussi les cartes AMD en indiquant
+honnêtement que torch ne les pilote pas :
+
+```
+  [cpu] GPU0 CPU — compute 165.0 GFLOPS, mémoire 17.0 GB/s (mesuré)
+  [amdgpu] GPU0 Navi 31 [Radeon RX 7900 XT/7900 XTX/7900M] — 20.0 GB
+      compute/mémoire : non mesurés — torch ne pilote pas cette carte
+```
+
+### 7.7 Claims cross-vendor : marqués non mesurés
 
 `experimental/cross_vendor_bridge.py` annonçait « 25-50 GB/s sustained » et « ~20 GB/s ».
 Ce sont des bornes théoriques PCIe, **jamais mesurées** — et impossibles à mesurer tant
