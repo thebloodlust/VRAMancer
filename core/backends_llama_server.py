@@ -24,6 +24,28 @@ from core.backends import BaseLLMBackend
 logger = logging.getLogger("vramancer.backends.llama_server")
 
 
+class _ServerTokenizer:
+    """Tokenizer adossé à l'endpoint `/tokenize` de llama-server.
+
+    Sans lui, l'API retombe sur `len(text.split())` pour remplir `usage` : un
+    compte de MOTS, qui sous-estime le code d'un facteur ~3 (mesuré le
+    2026-09-23 : 2 851 annoncés pour 8 454 tokens réels). Un agent qui pilote son
+    budget de contexte avec `usage` croirait avoir de la marge qu'il n'a pas.
+    """
+
+    def __init__(self, base_url: str):
+        self._url = base_url.rstrip("/") + "/tokenize"
+
+    def encode(self, text: str, **_kw) -> List[int]:
+        import requests
+        r = requests.post(self._url, json={"content": text}, timeout=30)
+        r.raise_for_status()
+        return r.json()["tokens"]
+
+    def __call__(self, text: str, **kw):
+        return {"input_ids": self.encode(text, **kw)}
+
+
 class LlamaServerAdapter(BaseLLMBackend):
     """`LlamaServerBackend` exposé comme un backend VRAMancer standard.
 
@@ -36,6 +58,7 @@ class LlamaServerAdapter(BaseLLMBackend):
         self.model_name = model_name
         self.cache_dir = cache_dir
         self._server = None
+        self.tokenizer = None          # renseigné par load_model() (/tokenize)
         self._num_gpus = int(kwargs.get("num_gpus", 1))
 
     # ── Cycle de vie ─────────────────────────────────────────────────────────
@@ -51,6 +74,7 @@ class LlamaServerAdapter(BaseLLMBackend):
             server_port=int(os.environ.get("VRM_LLAMA_SERVER_PORT", "8081")),
         )
         self.model_name = path
+        self.tokenizer = _ServerTokenizer(self._server._base_url)
         return self._server
 
     def shutdown(self):

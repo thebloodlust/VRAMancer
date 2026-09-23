@@ -185,3 +185,45 @@ def test_tensor_split_falls_back_to_torch_when_binary_sees_one(monkeypatch):
     # un seul device vu -> on ne force rien, on laisse le chemin torch décider
     out = mod._local_tensor_split(1, binary="/fake")
     assert out is None or isinstance(out, list)
+
+
+def test_adapter_exposes_real_tokenizer(monkeypatch):
+    """Le chemin llama-server doit fournir un tokenizer, sinon `usage` est faux.
+
+    Sans tokenizer, l'API compte des MOTS (`len(text.split())`) : 2 851 annoncés
+    pour 8 454 tokens réels sur du code (mesuré le 2026-09-23). Le proxy interroge
+    l'endpoint /tokenize de llama-server.
+    """
+    import core.backends_llama_server as mod
+
+    class _Resp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"tokens": list(range(42))}
+
+    calls = []
+
+    def _post(url, json=None, timeout=None):
+        calls.append((url, json))
+        return _Resp()
+
+    import requests
+    monkeypatch.setattr(requests, "post", _post)
+    tok = mod._ServerTokenizer("http://127.0.0.1:8081")
+    assert len(tok.encode("def f(x): return x + 1")) == 42
+    assert calls[0][0] == "http://127.0.0.1:8081/tokenize"
+    assert calls[0][1] == {"content": "def f(x): return x + 1"}
+
+
+def test_count_tokens_uses_adapter_tokenizer():
+    """count_tokens() doit préférer le tokenizer fourni au repli par mots."""
+    from core.api.validation import count_tokens
+
+    class _Tok:
+        def encode(self, text):
+            return [0] * 99
+
+    assert count_tokens("trois mots ici", _Tok()) == 99
+    assert count_tokens("trois mots ici", None) == 3     # repli documenté
