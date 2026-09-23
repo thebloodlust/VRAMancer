@@ -293,3 +293,51 @@ def test_spec_unknown_type_is_ignored(monkeypatch):
     import core.llama_server_backend as mod
     monkeypatch.setenv("VRM_SPEC", "quantum-magic")
     assert mod._spec_flags("--spec-type none,ngram-simple") == []
+
+
+def _write_gguf(path, kvs):
+    """GGUF v3 minimal : en-tête + métadonnées (aucun tenseur)."""
+    import struct as st
+    with open(path, "wb") as f:
+        f.write(b"GGUF" + st.pack("<IQQ", 3, 0, len(kvs)))
+        for key, (typ, val) in kvs.items():
+            k = key.encode()
+            f.write(st.pack("<Q", len(k)) + k + st.pack("<I", typ))
+            if typ == 8:
+                v = val.encode()
+                f.write(st.pack("<Q", len(v)) + v)
+            elif typ == 9:                               # tableau de chaînes (vocabulaire)
+                f.write(st.pack("<IQ", 8, len(val)))
+                for item in val:
+                    b = item.encode()
+                    f.write(st.pack("<Q", len(b)) + b)
+            else:
+                f.write(st.pack("<I", val))
+
+
+def test_gguf_expert_count_reads_moe_and_dense(tmp_path):
+    import core.llama_server_backend as mod
+    moe, dense = tmp_path / "moe.gguf", tmp_path / "dense.gguf"
+    vocab = ["<a>", "<b>", "tok"] * 50
+    _write_gguf(moe, {"general.architecture": (8, "qwen35moe"),
+                      "tokenizer.ggml.tokens": (9, vocab),
+                      "qwen35moe.expert_count": (4, 256)})
+    _write_gguf(dense, {"general.architecture": (8, "qwen2"),
+                        "tokenizer.ggml.tokens": (9, vocab)})
+    assert mod.gguf_expert_count(moe) == 256
+    assert mod.gguf_expert_count(dense) == 0
+    (tmp_path / "x.txt").write_text("pas un gguf")
+    assert mod.gguf_expert_count(tmp_path / "x.txt") is None
+
+
+def test_spec_auto_enables_on_dense_disables_on_moe(tmp_path, monkeypatch):
+    """Mesuré : dense ×7.5 avec n-grammes, MoE −65 %. « auto » ne doit jamais ralentir."""
+    import core.llama_server_backend as mod
+    help_txt = "--spec-type none,draft-simple,ngram-simple"
+    moe, dense = tmp_path / "moe.gguf", tmp_path / "dense.gguf"
+    _write_gguf(moe, {"qwen35moe.expert_count": (4, 256)})
+    _write_gguf(dense, {"general.architecture": (8, "qwen2")})
+    monkeypatch.setenv("VRM_SPEC", "auto")
+    assert mod._spec_flags(help_txt, str(dense)) == ["--spec-type", "ngram-simple"]
+    assert mod._spec_flags(help_txt, str(moe)) == []
+    assert mod._spec_flags(help_txt, None) == []            # inconnu -> jamais par défaut

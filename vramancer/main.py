@@ -424,10 +424,11 @@ def _cmd_serve(args):
         os.environ.setdefault('VRM_N_CTX', '16384')  # contexte agent (vs 4096 famélique)
         os.environ.setdefault('VRM_MODEL_ALIAS', 'coder')  # nom propre pour les agents
         # Prompt-lookup (n-grammes) : un agent qui réécrit un fichier recopie surtout
-        # son prompt. Mesuré : 36.2 → 282.9 tok/s (7.8x) sur une édition de fichier.
-        os.environ.setdefault('VRM_SPEC', 'ngram')
+        # son prompt. « auto » = seulement sur un modèle DENSE (mesuré 7.5x sur une
+        # édition) ; jamais sur un MoE, où il RALENTIT (mesuré −65 %).
+        os.environ.setdefault('VRM_SPEC', 'auto')
         print("  Profil: coding (alias 'coder', n_ctx 16384, batching off, max_tokens 2048, "
-              "prompt-lookup ngram)")
+              "prompt-lookup auto : dense oui, MoE non)")
     elif profile == 'multi-user':
         os.environ.setdefault('VRM_CONTINUOUS_BATCHING', '1')
         print("  Profil: multi-user (continuous batching, 4 slots)")

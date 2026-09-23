@@ -222,7 +222,7 @@ def _server_help(binary) -> str:
         return ""
 
 
-def _compat_flags(binary) -> List[str]:
+def _compat_flags(binary, model_path=None) -> List[str]:
     """Options dont la FORME a changé selon la version de llama.cpp.
 
     Vérifié le 2026-09-22 sur b11112 : `--flash-attn` exige désormais une valeur
@@ -241,25 +241,86 @@ def _compat_flags(binary) -> List[str]:
         flags += ["--no-mmap"]
     if "--log-disable" in h:
         flags += ["--log-disable"]
-    flags += _spec_flags(h)
+    flags += _spec_flags(h, model_path)
     return flags
 
 
-def _spec_flags(help_text: str) -> List[str]:
+def gguf_expert_count(path) -> Optional[int]:
+    """Nombre d'experts d'un GGUF (0 = modèle dense), en ne lisant QUE l'en-tête.
+
+    Sans dépendance : le paquet `gguf` met 10-15 s car il indexe tous les tenseurs.
+    Renvoie None si le fichier n'est pas lisible (on ne devine jamais).
+    """
+    import struct as _st
+    scalar = {0: "B", 1: "b", 2: "H", 3: "h", 4: "I", 5: "i", 6: "f", 7: "?",
+              10: "Q", 11: "q", 12: "d"}
+    try:
+        with open(path, "rb") as f:
+            if f.read(4) != b"GGUF":
+                return None
+            version = _st.unpack("<I", f.read(4))[0]
+            if version < 2:
+                return None
+            _n_tensors, n_kv = _st.unpack("<QQ", f.read(16))
+
+            def rd_str():
+                n = _st.unpack("<Q", f.read(8))[0]
+                return f.read(n)
+
+            def skip_value(t):
+                if t in scalar:
+                    f.seek(_st.calcsize("<" + scalar[t]), 1)
+                elif t == 8:
+                    n = _st.unpack("<Q", f.read(8))[0]
+                    f.seek(n, 1)
+                elif t == 9:
+                    it, n = _st.unpack("<IQ", f.read(12))
+                    if it in scalar:
+                        f.seek(_st.calcsize("<" + scalar[it]) * n, 1)
+                    else:
+                        for _ in range(n):
+                            skip_value(it)
+                else:
+                    raise ValueError(f"type GGUF inconnu {t}")
+
+            for _ in range(n_kv):
+                key = rd_str().decode("utf-8", "replace")
+                t = _st.unpack("<I", f.read(4))[0]
+                if key.endswith(".expert_count") and t in scalar:
+                    return int(_st.unpack("<" + scalar[t], f.read(_st.calcsize("<" + scalar[t])))[0])
+                skip_value(t)
+            return 0
+    except Exception:
+        return None
+
+
+def _spec_flags(help_text: str, model_path=None) -> List[str]:
     """Décodage spéculatif par n-grammes (prompt-lookup), piloté par VRM_SPEC.
 
-    Mesuré le 2026-09-23 (Qwen2.5-Coder-32B Q4_K_M, RTX 3090) sur une tâche d'agent
-    « réécris ce fichier en renommant une fonction » : 36.2 tok/s → **282.9 tok/s
-    (7.8x)**, 673/673 tokens proposés acceptés. Sur une génération « from scratch »,
-    ni gain ni perte (37.1 vs 36.1). Le décodage spéculatif est EXACT : la sortie
-    est celle qu'aurait produite le modèle seul.
+    Mesuré le 2026-09-23 sur une tâche d'agent « réécris ce fichier en renommant une
+    fonction » (décodage EXACT : même sortie que le modèle seul) :
+      - modèle DENSE, Qwen2.5-Coder-32B Q4 (3090) : 36.2 → 282.9 tok/s (7.8x) ;
+      - modèle DENSE, Qwen2.5-Coder-32B Q6_K réparti sur 3090 + 7900 XT :
+        25.8 → 192.3 tok/s (7.5x), édition 73.9 s → 11.6 s ;
+      - modèle MoE, Qwen3.6-35B-A3B sur la même paire : 99.3 → 34.6 tok/s (−65 %)
+        alors que 93 % des tokens proposés étaient acceptés. Vérifier un lot de
+        tokens active les experts de CHAQUE token : pour un MoE la vérification
+        n'est pas « presque gratuite », et la spéculation coûte au lieu de rapporter.
 
-    VRM_SPEC : "ngram" (défaut du profil coding) · "off" · ou un type llama.cpp brut
-    (ex. "ngram-map-k"). Ignoré si le binaire ne connaît pas `--spec-type`.
+    VRM_SPEC : "auto" (défaut du profil coding : n-grammes si le modèle est DENSE,
+    rien si MoE ou illisible) · "ngram" (forcé) · "off" · ou un type llama.cpp brut.
     """
     spec = os.environ.get("VRM_SPEC", "off").strip().lower()
     if spec in ("", "off", "0", "none", "false") or "--spec-type" not in help_text:
         return []
+    if spec == "auto":
+        experts = gguf_expert_count(model_path) if model_path else None
+        if experts != 0:
+            log.info("Prompt-lookup désactivé : %s", "modèle MoE (%s experts) — mesuré "
+                     "−65 %% sur MoE" % experts if experts else "type de modèle inconnu")
+            return []
+        log.info("Prompt-lookup ngram activé (modèle dense — mesuré 7.5x sur les éditions)")
+        spec = "ngram"
     kind = "ngram-simple" if spec in ("ngram", "on", "1", "true") else spec
     if kind not in help_text:
         log.warning("VRM_SPEC=%s : type inconnu de ce llama-server, ignoré", kind)
@@ -366,7 +427,7 @@ class LlamaServerBackend:
             # RX 7900 XT : 37.78 -> 8.95 tok/s). VRM_LLAMA_NGL permet de plafonner.
             "--n-gpu-layers", os.environ.get("VRM_LLAMA_NGL", "-1"),
         ]
-        cmd += _compat_flags(binary)
+        cmd += _compat_flags(binary, model_path)
 
         # Combien de GPU sont RÉELLEMENT disponibles ? torch.cuda ne compte que les
         # cartes NVIDIA : sur une machine mixte, l'appelant passe num_local_gpus=1
