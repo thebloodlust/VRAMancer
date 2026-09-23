@@ -59,6 +59,7 @@ _ASSET_MAP = {
 _PRISM_ASSET_MAP = dict(_ASSET_MAP, **{
     "linux-cuda": "llama-{tag}-bin-linux-cuda-12.8-x64.tar.gz",
     "windows":    "llama-{tag}-bin-win-vulkan-x64.zip",
+    "linux-rocm": "llama-{tag}-bin-ubuntu-rocm-7.2-x64.tar.gz",
 })
 _FLAVORS = {
     "upstream": {"repo": "ggml-org/llama.cpp", "tag_re": r"b\d+",
@@ -164,6 +165,11 @@ def get_or_download_binary(model_path=None) -> Path:
     root.mkdir(parents=True, exist_ok=True)
 
     existing = _find_server_binary(root)
+    if flavor == "prism":
+        # Plusieurs builds du fork peuvent cohabiter (CUDA, ROCm…) : prendre le bon.
+        pk = _prism_platform_key(_platform_key())
+        existing = next((b for d in sorted(root.glob(f"*-{pk}"))
+                         if (b := _find_server_binary(d))), None)
     if existing:
         log.info("llama-server binary found: %s", existing)
         return existing
@@ -175,6 +181,9 @@ def get_or_download_binary(model_path=None) -> Path:
     _download_release_binary(flavor)
 
     ready = _find_server_binary(root)
+    if flavor == "prism":
+        ready = next((b for d in sorted(root.glob(f"*-{pk}"))
+                      if (b := _find_server_binary(d))), None)
     if ready:
         ready.chmod(0o755)
         log.info("llama-server ready: %s", ready)
@@ -185,6 +194,29 @@ def get_or_download_binary(model_path=None) -> Path:
         "Download manually from https://github.com/ggml-org/llama.cpp/releases "
         f"and place in {BINARY_DIR}"
     )
+
+
+def _prism_platform_key(pk: str) -> str:
+    """Build du fork PrismML : jamais Vulkan quand mieux existe.
+
+    Mesuré (Bonsai 2 27B PQ2_0) : noyaux Vulkan du ternaire pas au point — 0.9 tok/s
+    en Vulkan, contre 74 en CUDA sur une 3090 (2026-09-23) et 53.5 en ROCm sur une
+    RX 7900 XT (2026-09-24). VRM_PRISM_BACKEND=cuda|rocm|vulkan|cpu impose un choix.
+    """
+    forced = os.environ.get("VRM_PRISM_BACKEND")
+    if forced:
+        return f"linux-{forced}" if platform.system().lower() == "linux" else pk
+    if pk != "linux-vulkan":
+        return pk
+    if _has_nvidia():
+        return "linux-cuda"
+    try:
+        from core.rocm_runtime import rocm_usable
+        if rocm_usable():
+            return "linux-rocm"
+    except Exception:
+        log.debug("détection ROCm impossible", exc_info=True)
+    return pk
 
 
 def _download_release_binary(flavor: str = "upstream"):
@@ -205,11 +237,8 @@ def _download_release_binary(flavor: str = "upstream"):
     root = fl["dir"]
     root.mkdir(parents=True, exist_ok=True)
     pk = _platform_key()
-    if flavor == "prism" and pk == "linux-vulkan" and _has_nvidia():
-        # Mesuré le 2026-09-23 (Bonsai 2 27B, fork prism-b10709) : noyaux Vulkan du
-        # ternaire pas au point — PQ2_0 0.9 tok/s en Vulkan contre 74 en CUDA sur la
-        # même 3090. Avec une NVIDIA présente, le fork prend donc le build CUDA.
-        pk = "linux-cuda"
+    if flavor == "prism":
+        pk = _prism_platform_key(pk)
     if pk not in fl["assets"]:
         pk = "linux-cpu"
     tag = _latest_build_tag(flavor, pk if flavor != "upstream" else None)
@@ -261,9 +290,14 @@ def _find_server_binary(root: Optional[Path] = None):
 def _runtime_env(binary) -> dict:
     """Env d'exécution : les libggml-*.so vivent à côté du binaire, pas dans /usr/lib."""
     env = dict(os.environ)
-    libdir = str(Path(binary).parent)
-    env["LD_LIBRARY_PATH"] = (libdir + os.pathsep + env["LD_LIBRARY_PATH"]
-                              if env.get("LD_LIBRARY_PATH") else libdir)
+    dirs = [str(Path(binary).parent)]
+    if (Path(binary).parent / "libggml-hip.so").exists():
+        # Build ROCm (fork PrismML sur AMD) : runtime ROCm 7, installé à la demande.
+        from core.rocm_runtime import ensure_rocm_runtime
+        dirs += ensure_rocm_runtime()
+    if env.get("LD_LIBRARY_PATH"):
+        dirs.append(env["LD_LIBRARY_PATH"])
+    env["LD_LIBRARY_PATH"] = os.pathsep.join(dirs)
     return env
 
 

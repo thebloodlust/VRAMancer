@@ -14,6 +14,14 @@ Poids ternaires / 1 bit, fork llama.cpp obligatoire (le llama.cpp officiel refus
 
 (*) noyaux Vulkan du fork pas au point pour PQ2_0 (test court, `-p 16 -n 8`).
 
+**Sur AMD, c'est le pilote, pas la carte** (mesuré le 24/09 après l'ajout de l'accès
+`/dev/kfd`) : build **ROCm** du fork sur la RX 7900 XT, PQ2_0 **53.5 tok/s** (51.8 à 8K,
+prefill 450), PTQ1_0 33.9 — contre 0.9 en Vulkan. Via `vramancer serve` : 52 tok/s, réponse
+juste, calcul sur la 7900 XT seule (8.6 Go). Intégré : sur une machine AMD sans NVIDIA,
+le fork est pris en build ROCm et le runtime ROCm 7 est installé sans sudo depuis les
+paquets pip d'AMD (TheRock, ~4 Go, `~/.cache/vramancer/rocm`). Seul prérequis système :
+`sudo usermod -aG render $USER` (sinon repli Vulkan, avec ce message).
+
 Pour comparer : un 32B classique en Q4_K_M (18.5 Gio) fait 38.3 tok/s sur la même 3090 et
 **4.7 tok/s en CPU seul** — le ternaire n'y gagne presque rien (5.3) : sur AVX2 il est borné
 par le calcul, pas par la mémoire. Qualité à l'œil, sans mode réflexion : fluide, petites
@@ -21,8 +29,8 @@ erreurs (heure d'arrivée d'un train 16h03 au lieu de 16h05 ; un exemple de pali
 
 Intégré : `serve` détecte les tenseurs PrismML dans l'en-tête, télécharge la release
 précompilée du fork (build CUDA dès qu'une NVIDIA est là), et sert le modèle sans réglage
-(8.4 Go de VRAM, réponse correcte). Verdict : **utile sur GPU NVIDIA / Mac**, pas sur AMD
-ni en CPU pour l'instant.
+(8.4 Go de VRAM, réponse correcte). Verdict : **utile sur GPU NVIDIA, AMD (ROCm) et Mac**, pas
+en CPU pour l'instant.
 
 ## 2. Cache KV quantifié — intégré (`VRM_KV_TYPE=auto`)
 

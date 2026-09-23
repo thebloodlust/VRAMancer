@@ -458,3 +458,28 @@ def test_model_bigger_than_ram_is_mmapped_not_loaded(monkeypatch):
     assert mod._compat_flags("x", "/m.gguf") == ["--load-mode", "mmap"]
     monkeypatch.setattr(mod, "_too_big_for_ram", lambda p: False)
     assert mod._compat_flags("x", "/m.gguf") == ["--load-mode", "none"]
+
+
+def test_prism_fork_avoids_vulkan_when_better_exists(monkeypatch):
+    """Ternaire : Vulkan 0.9 tok/s, CUDA 74 (3090), ROCm 53.5 (7900 XT) — mesurés."""
+    import core.llama_server_backend as mod
+    import core.rocm_runtime as rr
+    monkeypatch.delenv("VRM_PRISM_BACKEND", raising=False)
+    monkeypatch.setattr(mod.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(mod, "_has_nvidia", lambda: True)
+    assert mod._prism_platform_key("linux-vulkan") == "linux-cuda"
+    monkeypatch.setattr(mod, "_has_nvidia", lambda: False)
+    monkeypatch.setattr(rr, "rocm_usable", lambda: True)
+    assert mod._prism_platform_key("linux-vulkan") == "linux-rocm"
+    monkeypatch.setattr(rr, "rocm_usable", lambda: False)        # pas d'accès /dev/kfd
+    assert mod._prism_platform_key("linux-vulkan") == "linux-vulkan"
+    monkeypatch.setenv("VRM_PRISM_BACKEND", "rocm")
+    assert mod._prism_platform_key("linux-cuda") == "linux-rocm"
+
+
+def test_therock_family_rdna3_rdna4_only():
+    from core.rocm_runtime import therock_family
+    assert therock_family(110000) == "gfx110X-all"     # RX 7900 XT
+    assert therock_family(110002) == "gfx110X-all"
+    assert therock_family(120001) == "gfx120X-all"     # RX 9070
+    assert therock_family(90010) is None                # MI200 : autre famille
