@@ -120,6 +120,12 @@ def main(argv=None):
     p_doc.add_argument("--share", action="store_true",
                        help="Dump markdown ANONYMISE (materiel + versions) a coller dans une issue GitHub")
 
+    # ---- plan ----
+    p_pl = sub.add_parser("plan", help="Place les poids d'un GGUF sur GPU / 2e GPU / RAM, par la mesure (cache pour serve)")
+    p_pl.add_argument("model", help="Chemin du fichier .gguf (1er fragment si découpé)")
+    p_pl.add_argument("--no-verify", action="store_true", help="Ne pas vérifier le placement retenu")
+    p_pl.add_argument("--depth", type=int, default=512, help="Profondeur de contexte des mesures")
+
     # ---- tune-split ----
     p_ts = sub.add_parser("tune-split", help="Mesure la meilleure repartition d'un GGUF entre GPU (mise en cache pour serve)")
     p_ts.add_argument("model", help="Chemin du fichier .gguf")
@@ -187,6 +193,13 @@ def main(argv=None):
     elif args.command == "doctor":
         from core.doctor import run_doctor
         sys.exit(run_doctor(share=getattr(args, "share", False)))
+    elif args.command == "plan":
+        from core.llama_server_backend import get_or_download_binary
+        from core.planner import plan as _plan
+        res = _plan(args.model, get_or_download_binary(), verify=not args.no_verify, depth=args.depth)
+        if res:
+            print("\nArguments llama-server :", " ".join(res.args))
+        sys.exit(0 if res else 1)
     elif args.command == "tune-split":
         from core.llama_server_backend import get_or_download_binary
         from core.split_tuner import tune

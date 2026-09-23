@@ -23,6 +23,7 @@ import weakref
 import os
 import platform
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 from typing import Iterator, List, Optional
@@ -243,6 +244,16 @@ def _compat_flags(binary, model_path=None) -> List[str]:
         flags += ["--log-disable"]
     flags += _spec_flags(h, model_path)
     return flags
+
+
+def _model_size_gib(path) -> float:
+    """Taille totale du GGUF, tous fragments « -0000k-of-0000n » compris."""
+    import re
+    p = Path(path)
+    m = re.search(r"-(\d{5})-of-(\d{5})\.gguf$", p.name)
+    files = ([p.with_name(p.name[:m.start()] + f"-{k:05d}-of-{m.group(2)}.gguf")
+              for k in range(1, int(m.group(2)) + 1)] if m else [p])
+    return sum(f.stat().st_size for f in files if f.exists()) / 2 ** 30
 
 
 def gguf_expert_count(path) -> Optional[int]:
@@ -467,16 +478,68 @@ class LlamaServerBackend:
             cmd += ["--rpc", ",".join(self._rpc_hosts)]
             log.info("RPC nodes: %s", self._rpc_hosts)
 
-        log.info("Starting llama-server: %s", " ".join(cmd[:6]) + " …")
         env = _runtime_env(binary)
-        self._proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            env=env,
-            preexec_fn=_die_with_parent if os.name == "posix" else None,
-        )
-        self._wait_ready()
+
+        # Placement MESURÉ par `vramancer plan` (répartition des couches, ou chaud sur le
+        # GPU principal + experts par étages) : prioritaire s'il existe pour ce modèle.
+        # Promesse « ne jamais planter » : si llama-server refuse de démarrer avec le plan
+        # (contexte bien plus long que celui des mesures, VRAM prise entre-temps…), on
+        # retombe sur la répartition par défaut au lieu d'échouer.
+        attempts = [cmd]
+        if not self._rpc_hosts:
+            try:
+                from core.planner import cached_plan_args
+                plan_args = cached_plan_args(model_path)
+            except Exception:
+                plan_args = None
+            if plan_args:
+                base = []
+                skip = 0
+                for a in cmd:
+                    if skip:
+                        skip -= 1
+                        continue
+                    if a in ("--n-gpu-layers", "--tensor-split"):
+                        skip = 1
+                        continue
+                    base.append(a)
+                # llama-bench sépare les règles -ot par « ; », llama-server par « , »
+                plan_args = [a.replace(";", ",") if j and plan_args[j - 1] in ("-ot", "--override-tensor")
+                             else a for j, a in enumerate(plan_args)]
+                attempts = [base + plan_args, cmd]
+                log.info("Placement mesuré (vramancer plan) : %s", " ".join(plan_args)[:160])
+
+        # MoE : dernier recours tous experts en RAM (le chaud seul tient toujours en VRAM),
+        # au lieu d'un -ngl -1 qui ne rentre pas (mesuré : DeepSeek 81 GiB → OOM).
+        try:
+            if gguf_expert_count(model_path) and "--cpu-moe" not in cmd:
+                attempts.append(cmd + ["--cpu-moe"])
+        except Exception:
+            pass
+        size_gib = _model_size_gib(model_path)
+        ready_timeout = int(max(120, 8 * size_gib))    # ~650 s pour 81 GiB lus depuis le disque
+
+        for i, attempt in enumerate(attempts):
+            log.info("Starting llama-server: %s", " ".join(attempt[:6]) + " …")
+            # stderr vers un fichier, pas un PIPE jamais lu : au-delà de 64 Ko de logs
+            # llama-server se bloquerait sur write().
+            self._stderr = tempfile.TemporaryFile()
+            self._proc = subprocess.Popen(
+                attempt,
+                stdout=subprocess.DEVNULL,
+                stderr=self._stderr,
+                env=env,
+                preexec_fn=_die_with_parent if os.name == "posix" else None,
+            )
+            try:
+                self._wait_ready(ready_timeout)
+                break
+            except RuntimeError as e:
+                _terminate_proc(self._proc)
+                if i == len(attempts) - 1:
+                    raise
+                log.warning("llama-server ne démarre pas (%s) — essai %d/%d avec un "
+                            "placement plus prudent", str(e)[-160:], i + 2, len(attempts))
         # Nettoyage même si l'appelant oublie shutdown() ou meurt : sans ça, le
         # sous-processus survit et squatte ~20 GB de VRAM.
         self._finalizer = weakref.finalize(self, _terminate_proc, self._proc)
@@ -514,7 +577,10 @@ class LlamaServerBackend:
             except Exception:
                 log.debug("llama-server health check failed", exc_info=True)
             if self._proc and self._proc.poll() is not None:
-                err = self._proc.stderr.read().decode()[:500]
+                err = ""
+                if getattr(self, "_stderr", None):
+                    self._stderr.seek(0)
+                    err = self._stderr.read().decode("utf-8", "ignore")[-800:]
                 raise RuntimeError(f"llama-server crashed: {err}")
             time.sleep(0.5)
         raise RuntimeError(f"llama-server not ready after {timeout}s")

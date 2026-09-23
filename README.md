@@ -64,6 +64,14 @@ vramancer tune-split model.gguf --ctx 16384            # local GPUs, any vendor 
 vramancer tune-split model.gguf --rpc 192.168.1.20:50052   # + a GPU on another machine
 ```
 
+**Bigger than your VRAM? Place by read intensity.** `vramancer plan model.gguf` reads the
+GGUF header, then with 2–3 short measurements fills the tiers fastest-first: for a MoE,
+the always-read tensors (attention, shared expert) go on the fastest GPU and the routed
+experts (~3% read per token) spill to the second GPU, then RAM. `serve` reuses the plan and
+falls back to a safer placement instead of failing. Measured: **DeepSeek-V4-Flash (81 GiB)
+on a 3090 + 7900 XT + RAM at 11.8 tok/s**, prediction within 3.3%; ~9.7 tok/s seen by an
+API client. ([measurements](docs/reports/PLANIFICATEUR_COUT_2026-09-23.md))
+
 **Two machines work too.** With llama.cpp RPC and real GPUs behind a shaped link, a 3090
 plus a remote 7900 XT lose only ~4% over plain gigabit Ethernet (93.8 tok/s), 25% over
 Wi-Fi — on a model neither machine can hold alone. ([measurements](docs/reports/TESTS_7900XT_JOUR2_2026-09-23.md))
@@ -368,6 +376,7 @@ vramancer hub Qwen/Qwen2.5-14B-Instruct  # Browse model formats on HF
 vramancer benchmark   # Measured GFLOPS / memory bandwidth per GPU
 vramancer split Qwen/Qwen2.5-14B-Instruct --gpus 2  # Preview model split
 vramancer tune-split model.gguf  # Measure the best layer split across mismatched GPUs
+vramancer plan model.gguf        # Place weights by tier (GPUs → RAM), measured, reused by serve
 ```
 
 ### Cluster (data-parallel across GPUs)

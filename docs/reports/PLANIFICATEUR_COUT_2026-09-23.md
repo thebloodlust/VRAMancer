@@ -169,3 +169,27 @@ quasi uniforme, le cache n'aide pas). Lent mais fonctionnel.
    distant se lit par une requête HTTP partielle : **on peut prédire avant de télécharger.**
 3. Les 2-3 meilleures options prédites sont vérifiées par des passes courtes (le
    `tune-split` actuel devient cette étape de vérification, ciblée au lieu d'exhaustive).
+
+## 7. Implémenté : `vramancer plan` (core/planner.py)
+
+Choix fait après les mesures du §5 : **pas de calibration machine générique** (46 % d'erreur
+avec de petits modèles), mais une calibration *par modèle* en 2–3 passes courtes, qui
+prédit les autres placements à 1–3 %.
+
+- **Modèle qui tient en VRAM cumulée** : une passe par GPU, ajustement linéaire du coût par
+  couche, remplissage du GPU le moins cher d'abord. Qwen3.6-35B Q6_K : prédit 106.8, vérifié
+  **107.3 tok/s** (+0.4 %), `-ngl 99 -ts 0.83/0.17`.
+- **MoE plus gros que la VRAM** : chaud sur le GPU principal, experts par étages (principal,
+  puis 2e GPU, puis RAM) via `-ot …=Vulkan1,…=CPU`. Le planificateur mesure si le 2e GPU
+  bat la RAM *pour ce modèle* et recule d'un cran sur OOM. DeepSeek-V4-Flash IQ2_XS (81 GiB) :
+  prédit 12.22, vérifié **11.82 tok/s** (−3.3 %) ; 7900 XT jugée utile (0.44 ms gagnés par
+  couche d'experts).
+- **Réutilisé par `serve`** (cache `~/.cache/vramancer/plans.json`, clé nom + taille) avec
+  repli en cascade : plan → répartition par défaut → `--cpu-moe` pour un MoE. Délai de
+  démarrage proportionnel à la taille (8 s/GiB, min. 120 s).
+- **De bout en bout** : DeepSeek via `vramancer serve` → `/v1/chat/completions`, 120 tokens
+  en 12.4 s prompt compris (≈ 9.7 tok/s côté client), réponse correcte en français.
+
+Pièges corrigés en route : llama-bench sépare les règles `-ot` par `;`, llama-server par `,` ;
+l'ancien repli `-ngl -1` sur un modèle de 81 GiB finissait en `ErrorOutOfDeviceMemory` ;
+le stderr de llama-server était un PIPE jamais lu (blocage possible après 64 Ko de logs).
