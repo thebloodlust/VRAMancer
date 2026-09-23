@@ -3,8 +3,8 @@
 > Question posée : au lieu de tâtonner modèle par modèle, peut-on **calibrer la machine une
 > fois** puis placer les poids de n'importe quel modèle sur les étages mémoire (GPU rapide,
 > GPU lent, GPU distant, DRAM, NVMe…) sans essai ? Réponse : oui pour les GPU (erreur
-> médiane 2 %), oui pour le CPU une fois modélisé correctement (6 %), avec une limite
-> découverte en route — le CPU de la VM est bridé.
+> médiane 2 %) ; pour le CPU, le bon ordre de grandeur mais pas plus (voir §5 bis) —
+> d'où une conception hybride : prédire pour classer, mesurer les 2-3 meilleures options.
 
 ## 1. Ce qui compte : les octets lus par token, pas la taille du fichier
 
@@ -88,6 +88,41 @@ dépôt mesurés dans cette VM sont bridés** et devront être refaits avec `cpu
 C'est aussi la meilleure démonstration de l'intérêt d'un planificateur *calibré* plutôt que
 *présupposé* : les coûts de l'étage CPU dépendent de la machine réelle, VM comprise.
 
+## 5 bis. Après correction de la VM (`cpu: host`, 16 vCPU, EPYC 7402 confirmé)
+
+`/proc/cpuinfo` affiche désormais « AMD EPYC 7402 24-Core Processor », AVX2 + FMA + F16C
+(pas d'AVX-512 : Zen 2), et llama.cpp charge `libggml-cpu-haswell` au lieu de `sse42`.
+Mêmes commandes qu'avant (`benchmarks/bench_cpu_tier_host.sh`) :
+
+| Mesure | Avant | Après | Gain |
+|---|---:|---:|---:|
+| MoE Q6_K, CPU seul | 7.46 | 14.13 | ×1.9 |
+| MoE Q6_K, 10 couches entières en CPU (3090) | 16.1–20.7 | 27.11 | ×1.3–1.7 |
+| dense Q6_K, 8 couches en CPU (3090) | 3.72 | 14.15 | **×3.8** |
+| MoE Q6_K, experts de 10 couches en RAM (3090) | 39.8 | 53.38 | ×1.3 |
+| MoE Q6_K, experts de 20 couches en RAM (3090) | 25.5 | 40.64 | ×1.6 |
+| **DeepSeek-V4-Flash 81 GiB, 3090 seule, tous experts en RAM** | 1.04 | **10.67** | **×10.3** |
+| DeepSeek-V4-Flash, paire, experts de 36 couches en RAM | 1.33 | 8.35 | ×6.3 |
+
+- **La prédiction du §5 (« ~10 tok/s ») était juste** : c'est l'environnement qui la faussait.
+- Un modèle de **284 milliards de paramètres à 10.7 tok/s sur une seule RTX 3090**. Réserves :
+  quant IQ2_XS (2.45 bits par poids, perte de qualité sensible) et **prefill à 24 tok/s** —
+  un prompt de 4 000 tokens prend ~3 minutes. Utilisable en conversation courte, pas pour un
+  agent de code qui renvoie tout un dépôt à chaque tour.
+- Avec les experts en RAM, **la paire fait moins bien que la 3090 seule** (8.35 contre
+  10.67) : quand l'essentiel du travail est côté CPU, ajouter la carte lente n'ajoute que son
+  coût fixe par couche. Règle pour le planificateur : experts en RAM ⇒ tout le reste sur le
+  GPU le plus rapide, seul.
+
+**Précision du modèle de coût pour l'étage CPU réel** : recalibré sur 3 mesures, il prédit
+les 3 autres à +80 %, −15 % et +28 %. Le bon ordre de grandeur, pas assez précis pour
+décider seul. (Le point « CPU seul » est probablement biaisé : sur un build Vulkan,
+llama.cpp délègue une partie des opérations au GPU même avec `-ngl 0`.)
+
+→ **Conception retenue : hybride.** Le modèle classe toutes les options en millisecondes
+(il est fiable à 2 % pour les étages GPU), puis on ne mesure que les 2 ou 3 meilleures,
+en quelques passes courtes. On garde la rapidité de la prédiction et la sûreté de la mesure.
+
 ## 6. Proposition
 
 1. `vramancer calibrate` (une fois par machine, quelques minutes) : par GPU, bande passante
@@ -97,4 +132,5 @@ C'est aussi la meilleure démonstration de l'intérêt d'un planificateur *calib
    lent, prédit tok/s pour chaque option (et chaque quant) et produit les arguments
    llama-server (`--tensor-split`, `-ot` / `--n-cpu-moe`, `-ngl`). L'en-tête d'un GGUF
    distant se lit par une requête HTTP partielle : **on peut prédire avant de télécharger.**
-3. `tune-split` devient la vérification optionnelle du plan, pas le point de départ.
+3. Les 2-3 meilleures options prédites sont vérifiées par des passes courtes (le
+   `tune-split` actuel devient cette étape de vérification, ciblée au lieu d'exhaustive).
