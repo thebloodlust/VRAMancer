@@ -227,3 +227,69 @@ def test_count_tokens_uses_adapter_tokenizer():
 
     assert count_tokens("trois mots ici", _Tok()) == 99
     assert count_tokens("trois mots ici", None) == 3     # repli documenté
+
+
+def test_rpc_devices_are_ordered_first(monkeypatch):
+    """`--tensor-split` suit l'ordre interne de llama.cpp : RPC EN TÊTE.
+
+    `--list-devices` affiche les GPU locaux d'abord ; sans réordonner, le split
+    « 83 % sur la 3090 locale » partait sur la carte distante (mesuré : 3090 à
+    6.6 GB, carte distante qui déborde, 12 tok/s au lieu de 98).
+    """
+    import core.llama_server_backend as mod
+    calls = []
+
+    class _R:
+        stdout = (b"Available devices:\n"
+                  b"  Vulkan0: NVIDIA GeForce RTX 3090 (24576 MiB, 24098 MiB free)\n"
+                  b"  RPC0: 127.0.0.1:50052 (20464 MiB, 20415 MiB free)\n")
+        stderr = b""
+
+    def _run(cmd, **k):
+        calls.append(cmd)
+        return _R()
+
+    monkeypatch.setattr(mod, "_runtime_env", lambda b: {})
+    monkeypatch.setattr(mod.subprocess, "run", _run)
+    devs = mod.backend_devices("/fake/llama-server", rpc_hosts=["127.0.0.1:50052"])
+    assert [d["id"] for d in devs] == ["RPC0", "Vulkan0"]
+    assert devs[0]["rpc"] is True and devs[1]["rpc"] is False
+    assert "--rpc" in calls[0] and "127.0.0.1:50052" in calls[0]
+
+
+def test_no_rpc_flag_without_rpc_hosts(monkeypatch):
+    import core.llama_server_backend as mod
+    calls = []
+
+    class _R:
+        stdout = b"  Vulkan0: NVIDIA GeForce RTX 3090 (24576 MiB, 24098 MiB free)\n"
+        stderr = b""
+
+    monkeypatch.setattr(mod, "_runtime_env", lambda b: {})
+    monkeypatch.setattr(mod.subprocess, "run", lambda cmd, **k: calls.append(cmd) or _R())
+    mod.backend_devices("/fake/llama-server")
+    assert "--rpc" not in calls[0]
+
+
+def test_spec_ngram_enabled_when_requested(monkeypatch):
+    """VRM_SPEC=ngram -> --spec-type ngram-simple (7.8x mesuré sur une édition d'agent)."""
+    import core.llama_server_backend as mod
+    help_txt = "--spec-type none,draft-simple,ngram-simple,ngram-map-k\n--spec-draft-n-max N"
+    monkeypatch.setenv("VRM_SPEC", "ngram")
+    assert mod._spec_flags(help_txt) == ["--spec-type", "ngram-simple"]
+    monkeypatch.setenv("VRM_SPEC_N_MAX", "16")
+    assert mod._spec_flags(help_txt) == ["--spec-type", "ngram-simple", "--spec-draft-n-max", "16"]
+
+
+def test_spec_off_by_default_and_on_old_binaries(monkeypatch):
+    import core.llama_server_backend as mod
+    monkeypatch.delenv("VRM_SPEC", raising=False)
+    assert mod._spec_flags("--spec-type none,ngram-simple") == []
+    monkeypatch.setenv("VRM_SPEC", "ngram")
+    assert mod._spec_flags("--flash-attn [on|off|auto]") == []      # binaire trop ancien
+
+
+def test_spec_unknown_type_is_ignored(monkeypatch):
+    import core.llama_server_backend as mod
+    monkeypatch.setenv("VRM_SPEC", "quantum-magic")
+    assert mod._spec_flags("--spec-type none,ngram-simple") == []

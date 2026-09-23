@@ -113,27 +113,46 @@ def candidate_splits(devices: List[dict], model_bytes: int, fast: Optional[int] 
 
 # ── Mesure ────────────────────────────────────────────────────────────────────
 
+_PP_RE = re.compile(r"\|\s*pp\d+[^|]*\|\s*([\d.]+)\s*±")
 _TG_RE = re.compile(r"\|\s*tg\d+[^|]*\|\s*([\d.]+)\s*±")
 
 
 def _bench(bench_bin: Path, model_path: str, split: List[float], n_ctx: int,
-           env: dict, reps: int = 2, timeout: int = 900) -> Optional[float]:
-    """tok/s de génération pour un split, à la profondeur de contexte demandée.
-    None si le split ne tient pas en mémoire."""
+           env: dict, reps: int = 2, timeout: int = 900,
+           rpc_hosts: Optional[List[str]] = None) -> Optional[dict]:
+    """Prefill ET génération pour un split, à la profondeur de contexte demandée.
+
+    Mesurer le prefill n'est pas un luxe : sur Qwen3.6-35B Q8_0, remplir la 3090 à
+    68 % donnait la MEILLEURE génération (96.8 tok/s) mais faisait s'effondrer le
+    prefill de 2 726 à 720 tok/s (tampons de prefill qui ne tiennent plus). Un tuner
+    aveugle au prefill aurait choisi ce split et rendu chaque long prompt 4x plus lent.
+
+    Renvoie {"pp": tok/s, "tg": tok/s} ou None si le split ne tient pas en mémoire.
+    """
     ts = "/".join(f"{s:.4f}" for s in split)
     cmd = [str(bench_bin), "-m", model_path, "-ngl", "99", "-fa", "on",
-           "-p", "0", "-n", "64", "-d", str(n_ctx), "-r", str(reps),
+           "-p", "512", "-n", "64", "-d", str(n_ctx), "-r", str(reps),
            "-ts", ts, "-o", "md"]
+    if rpc_hosts:
+        cmd += ["--rpc", ",".join(rpc_hosts)]
     try:
         r = subprocess.run(cmd, capture_output=True, timeout=timeout, env=env)
     except subprocess.TimeoutExpired:
         return None
-    m = _TG_RE.search(r.stdout.decode("utf-8", "ignore"))
-    return float(m.group(1)) if m else None
+    out = r.stdout.decode("utf-8", "ignore")
+    pp, tg = _PP_RE.search(out), _TG_RE.search(out)
+    if not tg:
+        return None
+    return {"pp": float(pp.group(1)) if pp else None, "tg": float(tg.group(1))}
+
+
+# Un split dont le prefill tombe sous cette fraction du meilleur prefill observé
+# est écarté, même s'il génère plus vite.
+PP_FLOOR = 0.6
 
 
 def tune(model_path: str, server_binary, n_ctx: int = 16384,
-         report=print) -> Optional[dict]:
+         report=print, rpc_hosts: Optional[List[str]] = None) -> Optional[dict]:
     """Mesure les candidats, garde le plus rapide qui TIENT, et le met en cache."""
     from core.llama_server_backend import backend_devices, _runtime_env
 
@@ -142,7 +161,7 @@ def tune(model_path: str, server_binary, n_ctx: int = 16384,
     if not bench_bin.exists():
         report(f"llama-bench introuvable à côté de {server_binary} — réglage impossible.")
         return None
-    devices = backend_devices(server_binary)
+    devices = backend_devices(server_binary, rpc_hosts=rpc_hosts)   # RPC en tête
     if len(devices) < 2:
         report("Un seul GPU visible : rien à répartir.")
         return None
@@ -159,11 +178,16 @@ def tune(model_path: str, server_binary, n_ctx: int = 16384,
         if split in seen_splits:
             return next(r["tok_s"] for r in results if r["split"] == split)
         seen_splits.append(split)
-        tok_s = _bench(bench_bin, model_path, split, n_ctx, env)
+        m = _bench(bench_bin, model_path, split, n_ctx, env, rpc_hosts=rpc_hosts)
         label = " / ".join(f"{x * 100:.0f}%" for x in split)
-        report(f"  {label:<24} {'ne tient pas' if tok_s is None else f'{tok_s:.1f} tok/s'}")
-        results.append({"split": split, "tok_s": tok_s})
-        return tok_s
+        if m is None:
+            report(f"  {label:<24} ne tient pas")
+        else:
+            pp = f"prefill {m['pp']:.0f}" if m.get("pp") else "prefill ?"
+            report(f"  {label:<24} {m['tg']:.1f} tok/s  ({pp})")
+        results.append({"split": split, "tok_s": m["tg"] if m else None,
+                        "pp": m.get("pp") if m else None})
+        return m["tg"] if m else None
 
     # 1. référence + remplissage maximal de chaque carte : laquelle est la rapide ?
     report("Étape 1 — quelle carte est la plus rapide ?")
@@ -191,6 +215,14 @@ def tune(model_path: str, server_binary, n_ctx: int = 16384,
     if not ok:
         report("Aucune répartition ne tient en mémoire à ce contexte.")
         return None
+    pps = [r["pp"] for r in ok if r.get("pp")]
+    if pps:
+        floor = PP_FLOOR * max(pps)
+        rejected = [r for r in ok if r.get("pp") and r["pp"] < floor]
+        for r in rejected:
+            report(f"  écarté : {' / '.join(f'{x * 100:.0f}%' for x in r['split'])} — "
+                   f"prefill {r['pp']:.0f} < {floor:.0f} (effondrement)")
+        ok = [r for r in ok if r not in rejected] or ok
     best = max(ok, key=lambda r: r["tok_s"])
     base = results[0]["tok_s"]
     gain = f" ({(best['tok_s'] / base - 1) * 100:+.0f} % vs prorata VRAM)" if base else ""

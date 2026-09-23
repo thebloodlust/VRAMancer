@@ -241,7 +241,34 @@ def _compat_flags(binary) -> List[str]:
         flags += ["--no-mmap"]
     if "--log-disable" in h:
         flags += ["--log-disable"]
+    flags += _spec_flags(h)
     return flags
+
+
+def _spec_flags(help_text: str) -> List[str]:
+    """Décodage spéculatif par n-grammes (prompt-lookup), piloté par VRM_SPEC.
+
+    Mesuré le 2026-09-23 (Qwen2.5-Coder-32B Q4_K_M, RTX 3090) sur une tâche d'agent
+    « réécris ce fichier en renommant une fonction » : 36.2 tok/s → **282.9 tok/s
+    (7.8x)**, 673/673 tokens proposés acceptés. Sur une génération « from scratch »,
+    ni gain ni perte (37.1 vs 36.1). Le décodage spéculatif est EXACT : la sortie
+    est celle qu'aurait produite le modèle seul.
+
+    VRM_SPEC : "ngram" (défaut du profil coding) · "off" · ou un type llama.cpp brut
+    (ex. "ngram-map-k"). Ignoré si le binaire ne connaît pas `--spec-type`.
+    """
+    spec = os.environ.get("VRM_SPEC", "off").strip().lower()
+    if spec in ("", "off", "0", "none", "false") or "--spec-type" not in help_text:
+        return []
+    kind = "ngram-simple" if spec in ("ngram", "on", "1", "true") else spec
+    if kind not in help_text:
+        log.warning("VRM_SPEC=%s : type inconnu de ce llama-server, ignoré", kind)
+        return []
+    out = ["--spec-type", kind]
+    n_max = os.environ.get("VRM_SPEC_N_MAX")
+    if n_max and "--spec-draft-n-max" in help_text:
+        out += ["--spec-draft-n-max", n_max]
+    return out
 
 
 def _free_port(preferred: int, tries: int = 20) -> int:
@@ -345,7 +372,7 @@ class LlamaServerBackend:
         # cartes NVIDIA : sur une machine mixte, l'appelant passe num_local_gpus=1
         # et on perdrait la carte AMD — donc le facteur 4.4x mesuré sur un modèle
         # qui ne tient que dans la VRAM cumulée. Le binaire, lui, les voit toutes.
-        seen = backend_devices(binary)
+        seen = backend_devices(binary, rpc_hosts=self._rpc_hosts)
         if len(seen) > max(1, num_local_gpus):
             log.info("%d devices vus par llama.cpp (%s) — on les utilise tous",
                      len(seen), ", ".join(d["name"] for d in seen))
@@ -363,6 +390,9 @@ class LlamaServerBackend:
                     log.info("Split mesuré (cache tune-split) : %s", split)
             except Exception:
                 log.debug("cache tune-split illisible", exc_info=True)
+            if not split and len(seen) > 1:
+                # prorata VRAM, dans l'ordre de `seen` (RPC en tête, cf. backend_devices)
+                split = [round(d["total_mib"] / 1024, 1) for d in seen]
             if not split:
                 split = _local_tensor_split(num_local_gpus, binary=binary)
                 if split and len(seen) > 1:
@@ -504,7 +534,7 @@ class LlamaServerBackend:
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def backend_devices(binary) -> List[dict]:
+def backend_devices(binary, rpc_hosts: Optional[List[str]] = None) -> List[dict]:
     """Devices tels que le BINAIRE les voit (`--list-devices`), dans SON ordre.
 
     C'est la seule source qui fasse autorité : torch.cuda ne voit que les cartes
@@ -514,9 +544,12 @@ def backend_devices(binary) -> List[dict]:
     dans aucune des deux cartes prises isolément).
     """
     out: List[dict] = []
+    cmd = [str(binary)]
+    if rpc_hosts:
+        cmd += ["--rpc", ",".join(rpc_hosts)]
+    cmd += ["--list-devices"]
     try:
-        r = subprocess.run([str(binary), "--list-devices"], capture_output=True,
-                           timeout=60, env=_runtime_env(binary))
+        r = subprocess.run(cmd, capture_output=True, timeout=60, env=_runtime_env(binary))
         text = (r.stdout + r.stderr).decode("utf-8", "ignore")
     except Exception as e:
         log.debug("--list-devices indisponible: %s", e)
@@ -526,7 +559,14 @@ def backend_devices(binary) -> List[dict]:
                          text, re.MULTILINE):
         out.append({"id": m.group(1), "name": m.group(2),
                     "total_mib": int(m.group(3)),
-                    "free_mib": int(m.group(4)) if m.group(4) else None})
+                    "free_mib": int(m.group(4)) if m.group(4) else None,
+                    "rpc": m.group(1).upper().startswith("RPC")})
+    # ORDRE : `--list-devices` affiche les GPU locaux d'abord, mais `--tensor-split`
+    # suit l'ordre interne de llama.cpp, où les périphériques RPC viennent EN TÊTE.
+    # Vérifié le 2026-09-23 (b11112) en mesurant la VRAM : `-ts 78/22` avec une
+    # 3090 locale + une 7900 XT en RPC ne laissait que 6.6 GB sur la 3090 — les 78 %
+    # partaient sur la carte distante, qui débordait (12 tok/s au lieu de 98).
+    out.sort(key=lambda d: 0 if d["rpc"] else 1)
     return out
 
 

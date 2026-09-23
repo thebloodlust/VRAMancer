@@ -28,7 +28,8 @@ def _fake_bench(fast_idx=0, per_gb_fast=0.30, per_gb_slow=1.00, model_gb=27.3, c
         if any(g > c for g, c in zip(gb, cap)):
             return None
         cost = [per_gb_fast if i == fast_idx else per_gb_slow for i in range(len(split))]
-        return round(1000.0 / sum(g * c for g, c in zip(gb, cost)), 2)
+        tg = round(1000.0 / sum(g * c for g, c in zip(gb, cost)), 2)
+        return {"pp": 2000.0, "tg": tg}
     return bench
 
 
@@ -43,7 +44,7 @@ def isolated(tmp_path, monkeypatch):
     binary.write_text("")
     (tmp_path / "llama-bench").write_text("")
     import core.llama_server_backend as lsb
-    monkeypatch.setattr(lsb, "backend_devices", lambda b: DEVS)
+    monkeypatch.setattr(lsb, "backend_devices", lambda b, rpc_hosts=None: DEVS)
     monkeypatch.setattr(lsb, "_runtime_env", lambda b: {})
     return str(model), binary
 
@@ -93,3 +94,20 @@ def test_result_is_cached_and_reused(isolated, monkeypatch):
 def test_no_split_for_single_gpu(isolated):
     model, _ = isolated
     assert st.cached_split(model, DEVS[:1], 16384) is None
+
+
+def test_tuner_rejects_split_whose_prefill_collapses(isolated, monkeypatch):
+    """Mesuré sur Q8_0 : 3090 remplie à ras bord = meilleure génération, mais prefill
+    effondré (720 contre 2 726). Le tuner doit l'écarter."""
+    model, binary = isolated
+    base = _fake_bench(fast_idx=0)
+
+    def bench(*a, **k):
+        m = base(*a, **k)
+        if m and a[2][0] > 0.80:          # split trop rempli côté carte rapide
+            m = {"pp": 700.0, "tg": m["tg"] * 1.05}
+        return m
+
+    monkeypatch.setattr(st, "_bench", bench)
+    res = st.tune(model, binary, n_ctx=16384, report=lambda *_: None)
+    assert res["split"][0] <= 0.80, f"split à prefill effondré retenu : {res['split']}"

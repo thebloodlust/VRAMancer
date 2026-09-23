@@ -124,6 +124,7 @@ def main(argv=None):
     p_ts = sub.add_parser("tune-split", help="Mesure la meilleure repartition d'un GGUF entre GPU (mise en cache pour serve)")
     p_ts.add_argument("model", help="Chemin du fichier .gguf")
     p_ts.add_argument("--ctx", type=int, default=16384, help="Contexte a valider (defaut 16384 = profil coding)")
+    p_ts.add_argument("--rpc", type=str, default=None, help="Serveurs RPC distants (ex: 192.168.1.20:50052,…)")
 
     # ---- history ----
     p_hist = sub.add_parser("history", help="Historique local des requetes (tok/s, OOM, tendances)")
@@ -189,7 +190,8 @@ def main(argv=None):
     elif args.command == "tune-split":
         from core.llama_server_backend import get_or_download_binary
         from core.split_tuner import tune
-        res = tune(args.model, get_or_download_binary(), n_ctx=args.ctx)
+        rpc = [h.strip() for h in args.rpc.split(",")] if args.rpc else None
+        res = tune(args.model, get_or_download_binary(), n_ctx=args.ctx, rpc_hosts=rpc)
         sys.exit(0 if res else 1)
     elif args.command == "history":
         _cmd_history(args)
@@ -421,7 +423,11 @@ def _cmd_serve(args):
         os.environ.setdefault('VRM_DEFAULT_MAX_TOKENS', '2048')
         os.environ.setdefault('VRM_N_CTX', '16384')  # contexte agent (vs 4096 famélique)
         os.environ.setdefault('VRM_MODEL_ALIAS', 'coder')  # nom propre pour les agents
-        print("  Profil: coding (alias 'coder', n_ctx 16384, batching off, max_tokens 2048)")
+        # Prompt-lookup (n-grammes) : un agent qui réécrit un fichier recopie surtout
+        # son prompt. Mesuré : 36.2 → 282.9 tok/s (7.8x) sur une édition de fichier.
+        os.environ.setdefault('VRM_SPEC', 'ngram')
+        print("  Profil: coding (alias 'coder', n_ctx 16384, batching off, max_tokens 2048, "
+              "prompt-lookup ngram)")
     elif profile == 'multi-user':
         os.environ.setdefault('VRM_CONTINUOUS_BATCHING', '1')
         print("  Profil: multi-user (continuous batching, 4 slots)")
