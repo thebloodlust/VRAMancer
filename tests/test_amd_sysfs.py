@@ -91,3 +91,36 @@ def test_benchmark_cli_uses_existing_profiler_api():
     assert "benchmark_gpu(" not in body, "méthode inexistante réintroduite"
     assert "profile_gpus()" in body
     assert hasattr(LayerProfiler, "profile_gpus")
+
+
+def test_mixed_vendor_machine_routes_to_subprocess(monkeypatch):
+    """Machine NVIDIA + AMD : le binding CUDA in-process ignorerait la carte AMD.
+
+    Mesuré le 2026-09-22 : sur un modèle de 27 GB (qui ne tient pas dans les 24 GB
+    de la 3090), le binding échoue à charger, alors que la paire donne 91.7 tok/s.
+    select_backend doit donc router vers le sous-processus llama-server.
+    """
+    import core.backends as backends
+
+    monkeypatch.setattr(backends, "_is_gguf_model", lambda n: True)
+    monkeypatch.setattr(backends, "_llamacpp_available", lambda: True)
+    monkeypatch.setattr(backends, "_llamacpp_can_offload", lambda: True)   # roue CUDA OK
+    monkeypatch.setattr(backends, "_has_amd_gpu", lambda: True)            # mais AMD présente
+    monkeypatch.delenv("VRM_FORCE_LLAMACPP_INPROC", raising=False)
+
+    b = backends.select_backend("modele.gguf", backend="auto", num_gpus=1)
+    assert type(b).__name__ == "LlamaServerAdapter", type(b).__name__
+
+
+def test_force_inproc_escape_hatch(monkeypatch):
+    """VRM_FORCE_LLAMACPP_INPROC=1 doit rendre la main au binding in-process."""
+    import core.backends as backends
+
+    monkeypatch.setattr(backends, "_is_gguf_model", lambda n: True)
+    monkeypatch.setattr(backends, "_llamacpp_available", lambda: True)
+    monkeypatch.setattr(backends, "_llamacpp_can_offload", lambda: True)
+    monkeypatch.setattr(backends, "_has_amd_gpu", lambda: True)
+    monkeypatch.setenv("VRM_FORCE_LLAMACPP_INPROC", "1")
+
+    b = backends.select_backend("modele.gguf", backend="auto", num_gpus=1)
+    assert type(b).__name__ == "LlamaCppBackend", type(b).__name__

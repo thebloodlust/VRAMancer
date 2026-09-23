@@ -135,3 +135,53 @@ def test_compat_flags_adapt_to_binary_help(monkeypatch):
 
     monkeypatch.setattr(mod, "_server_help", lambda b: "--flash-attn\n--no-mmap\n--log-disable")
     assert mod._compat_flags("x") == ["--flash-attn", "--no-mmap", "--log-disable"]
+
+
+# --- multi-vendeurs : ne pas laisser une carte AMD inutilisée (2026-09-22) ---
+
+_LIST_DEVICES_MIXED = """\
+Available devices:
+  Vulkan0: NVIDIA GeForce RTX 3090 (24576 MiB, 24098 MiB free)
+  Vulkan1: AMD Radeon RX 7900 XT (RADV NAVI31) (20464 MiB, 20415 MiB free)
+"""
+
+
+def test_backend_devices_parses_both_vendors(monkeypatch):
+    """`--list-devices` est la seule source qui voit NVIDIA *et* AMD."""
+    import core.llama_server_backend as mod
+    monkeypatch.setattr(mod, "_server_help", lambda b: "")
+    monkeypatch.setattr(mod, "_runtime_env", lambda b: {})
+
+    class _R:
+        stdout = _LIST_DEVICES_MIXED.encode()
+        stderr = b""
+
+    monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: _R())
+    devs = mod.backend_devices("/fake/llama-server")
+    assert [d["id"] for d in devs] == ["Vulkan0", "Vulkan1"]
+    assert devs[0]["total_mib"] == 24576 and devs[1]["total_mib"] == 20464
+    assert "AMD" in devs[1]["name"]
+
+
+def test_tensor_split_uses_both_cards(monkeypatch):
+    """Le split doit couvrir les DEUX cartes, pas seulement celles vues par torch.
+
+    Sans ça, un modèle de 27 GB était servi sur la seule 3090 (24 GB) : échec de
+    chargement, ou 20.7 tok/s au lieu de 91.7 mesurés sur la paire.
+    """
+    import core.llama_server_backend as mod
+    monkeypatch.setattr(mod, "backend_devices", lambda b: [
+        {"id": "Vulkan0", "name": "NVIDIA GeForce RTX 3090", "total_mib": 24576, "free_mib": None},
+        {"id": "Vulkan1", "name": "AMD Radeon RX 7900 XT", "total_mib": 20464, "free_mib": None},
+    ])
+    assert mod._local_tensor_split(0, binary="/fake") == [24.0, 20.0]
+
+
+def test_tensor_split_falls_back_to_torch_when_binary_sees_one(monkeypatch):
+    import core.llama_server_backend as mod
+    monkeypatch.setattr(mod, "backend_devices", lambda b: [
+        {"id": "Vulkan0", "name": "NVIDIA GeForce RTX 3090", "total_mib": 24576, "free_mib": None},
+    ])
+    # un seul device vu -> on ne force rien, on laisse le chemin torch décider
+    out = mod._local_tensor_split(1, binary="/fake")
+    assert out is None or isinstance(out, list)
