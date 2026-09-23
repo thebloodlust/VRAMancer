@@ -1,0 +1,9 @@
+=== profondeur 8192 ===
+| qwen35moe 35B.A3B Q6_K         |  27.29 GiB |    34.66 B | Vulkan     |  99 |   1 |          pp8192 |       2766.30 ± 0.00 |
+| qwen35moe 35B.A3B Q6_K         |  27.29 GiB |    34.66 B | Vulkan     |  99 |   1 |   tg128 @ d8192 |         88.89 ± 0.00 |
+=== profondeur 32768 ===
+| qwen35moe 35B.A3B Q6_K         |  27.29 GiB |    34.66 B | Vulkan     |  99 |   1 |         pp32768 |       2518.23 ± 0.00 |
+| qwen35moe 35B.A3B Q6_K         |  27.29 GiB |    34.66 B | Vulkan     |  99 |   1 |  tg128 @ d32768 |         81.28 ± 0.00 |
+=== profondeur 65536 ===
+| qwen35moe 35B.A3B Q6_K         |  27.29 GiB |    34.66 B | Vulkan     |  99 |   1 |         pp65536 |       2258.49 ± 0.00 |
+| qwen35moe 35B.A3B Q6_K         |  27.29 GiB |    34.66 B | Vulkan     |  99 |   1 |  tg128 @ d65536 |         69.64 ± 0.00 |

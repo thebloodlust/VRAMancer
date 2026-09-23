@@ -331,7 +331,26 @@ support AMD sont acquis, dans le dépôt, définitivement.
 
 ---
 
-## 9. Ce qui reste ouvert
+## 9. Dernière passe (23/09) — tout ce qui nécessitait encore la carte
+
+| Test | Résultat |
+|---|---|
+| **Reproduction du 4,4×** (autre noyau, 3 répétitions) | paire **91,60 tok/s** (vs 91,68) — écart 0,1 %. La 3090 seule en débordement varie davantage (16,1 à 20,7), donc le rapport est de 4,4× à 5,7× ; on annonce la borne basse |
+| **Aider sur la paire** (Q6_K 27 GB, profil coding 16K) | bug corrigé en **27 s**, 4/4 tests passent, seul le fichier source modifié |
+| **Contexte long sur la paire** | 8K : 88,9 tok/s · 32K : 81,3 tok/s · **64K : 69,6 tok/s** (prefill 2 258–2 766 tok/s) |
+| **Stabilité de la paire sous charge** | 16 × 1 500 tokens, 4 min continues, **99,9 tok/s agrégés**, 0 erreur noyau, 56 °C / 41 °C max |
+| Nouveau bug trouvé | `usage` comptait des **mots** au lieu de tokens (2 851 annoncés pour 8 454) — corrigé |
+
+Audit complet du projet : `docs/reports/AUDIT_2026-09-23.md`.
+
+**Il ne reste plus aucun test technique qui ait besoin de la 7900 XT.** La décision de la
+garder ou de la vendre dépend désormais du récit de lancement (voir l'audit, §6) :
+si le post est publié avec les chiffres de la paire 3090 + 7900 XT, il faut la garder le
+temps de pouvoir reproduire ce qu'on publie.
+
+---
+
+## 10. Ce qui reste ouvert
 
 - ~~D3.d, paire 3090 + 7900 XT~~ → **MESURÉ et tranché** (§8). Plus rien à faire.
 - **D3.a** (bridge cross-vendor en Python) : nécessite ROCm/torch-hip, non installé.
