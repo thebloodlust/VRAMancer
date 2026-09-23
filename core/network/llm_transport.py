@@ -723,6 +723,15 @@ class LLMTransport:
         self._tier = TransportTier.STUB if _STUB_MODE else self._local_conn._detect_tier()
         self._tcp_fallback: Dict[str, socket.socket] = {}
         self._lock = threading.Lock()
+        # File de réception FIFO par (pair, couche). L'ancien `_recv_queue` ne gardait
+        # que le DERNIER tenseur par couche : deux tenseurs de la même couche arrivés
+        # avant consommation → le premier était écrasé, perdu sans erreur (mesuré le
+        # 2026-09-23 : 2 tenseurs sur le fil, 1 disponible). Bornée pour ne jamais
+        # grossir sans fin si personne ne consomme.
+        from collections import deque as _deque
+        self._recv_fifo: Dict[Tuple[str, int], Any] = defaultdict(
+            lambda: _deque(maxlen=int(os.environ.get("VRM_VTP_RECV_DEPTH", "64"))))
+        self._recv_cv = threading.Condition()
         self._seq_counter = 0
         # Stats
         self._stats = {
@@ -851,6 +860,9 @@ class LLMTransport:
 
             sock.settimeout(None)
             self._tcp_fallback[peer_node_id] = sock
+            if not hasattr(self, "_tcp_addr"):
+                self._tcp_addr = {}
+            self._tcp_addr[peer_node_id] = (host, port)
             self._tier = TransportTier.ZEROCOPY_TCP
             log.info(f"VTP: TCP connected to {peer_node_id} ({host}:{port}) with handshake")
             return True
@@ -1100,23 +1112,55 @@ class LLMTransport:
         else:
             raw = bytes(tensor)
 
-        try:
-            sock.sendall(hdr_bytes)
-            # Send payload — numpy array supports buffer protocol (zero-copy)
-            sock.sendall(raw)
-            self._stats["tcp_fallback_ops"] += 1
-            return {
-                "method": "zerocopy_tcp",
-                "bytes": header.payload_bytes,
-                "tier": TransportTier.ZEROCOPY_TCP.name,
-            }
-        except Exception as exc:
-            log.error(f"VTP TCP send to {dst_node} failed: {exc}")
-            return {"method": "tcp_failed", "bytes": 0, "error": str(exc)}
+        for attempt in (1, 2):
+            try:
+                sock.sendall(hdr_bytes)
+                # Send payload — numpy array supports buffer protocol (zero-copy)
+                sock.sendall(raw)
+                self._stats["tcp_fallback_ops"] += 1
+                return {
+                    "method": "zerocopy_tcp",
+                    "bytes": header.payload_bytes,
+                    "tier": TransportTier.ZEROCOPY_TCP.name,
+                    **({"reconnected": True} if attempt == 2 else {}),
+                }
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError) as exc:
+                # Connexion tombée (pair redémarré, coupure réseau…) : une reconnexion
+                # avec nouveau handshake, puis on rejoue l'envoi. Une seule fois.
+                addr = getattr(self, "_tcp_addr", {}).get(dst_node)
+                if attempt == 1 and addr and self.connect_peer_tcp(dst_node, *addr):
+                    log.warning(f"VTP: connexion vers {dst_node} rétablie ({exc})")
+                    sock = self._tcp_fallback.get(dst_node)
+                    continue
+                log.error(f"VTP TCP send to {dst_node} failed: {exc}")
+                return {"method": "tcp_failed", "bytes": 0, "error": str(exc)}
+            except Exception as exc:
+                log.error(f"VTP TCP send to {dst_node} failed: {exc}")
+                return {"method": "tcp_failed", "bytes": 0, "error": str(exc)}
+        return {"method": "tcp_failed", "bytes": 0, "error": "reconnexion impossible"}
 
     # ------------------------------------------------------------------
     # Core recv
     # ------------------------------------------------------------------
+    def pop_received(self, src_node: str, layer_id: int,
+                     timeout_s: float = 30.0) -> Optional[Tuple[Any, TensorHeader]]:
+        """Plus ancien tenseur reçu de `src_node` pour `layer_id` (FIFO), ou None.
+
+        API de consommation côté serveur VTP : les tenseurs arrivent dans l'ordre
+        d'envoi et aucun n'est écrasé par le suivant.
+        """
+        key = (src_node, layer_id)
+        deadline = time.monotonic() + timeout_s
+        with self._recv_cv:
+            while True:
+                q = self._recv_fifo.get(key)
+                if q:
+                    return q.popleft()
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return None
+                self._recv_cv.wait(remaining)
+
     def recv_tensor(self, src_node: str, gpu_id: int = 0,
                     timeout_s: float = 30.0) -> Optional[Tuple[Any, TensorHeader]]:
         """Receive a tensor from a remote node.
@@ -1553,7 +1597,8 @@ class VTPServer:
         while self._running:
             try:
                 conn.settimeout(30.0)
-                hdr_data = self._tcp_recv_exact_static(conn, _HEADER_PAD)
+                hdr_data = self._tcp_recv_exact_static(conn, _HEADER_PAD,
+                                                       raise_idle_timeout=True)
                 if not hdr_data:
                     log.info(f"VTP: connection closed by {peer_id}")
                     break
@@ -1593,7 +1638,20 @@ class VTPServer:
                         recv_key = (peer_id, header.layer_id)
                         if not hasattr(self.transport, '_recv_queue'):
                             self.transport._recv_queue = {}
+                        # compat : dernier tenseur par couche (lu par examples/)
                         self.transport._recv_queue[recv_key] = (tensor, header)
+                        # chemin fiable : FIFO, rien n'est écrasé
+                        fifo = getattr(self.transport, "_recv_fifo", None)
+                        if fifo is not None:
+                            with self.transport._recv_cv:
+                                q = fifo[recv_key]
+                                if q.maxlen and len(q) == q.maxlen:
+                                    self.transport._stats["recv_dropped"] = \
+                                        self.transport._stats.get("recv_dropped", 0) + 1
+                                    log.warning(f"VTP: file de réception pleine pour "
+                                                f"{recv_key}, tenseur le plus ancien écarté")
+                                q.append((tensor, header))
+                                self.transport._recv_cv.notify_all()
                         self.transport._stats["tensors_recv"] += 1
                         self.transport._stats["bytes_recv"] += header.payload_bytes
                     continue
@@ -1635,8 +1693,16 @@ class VTPServer:
         return json.dumps(info).encode("utf-8")
 
     @staticmethod
-    def _tcp_recv_exact_static(sock: socket.socket, size: int) -> Optional[bytes]:
-        """Read exactly `size` bytes from socket."""
+    def _tcp_recv_exact_static(sock: socket.socket, size: int,
+                               raise_idle_timeout: bool = False) -> Optional[bytes]:
+        """Read exactly `size` bytes from socket.
+
+        `raise_idle_timeout=True` : un délai dépassé AVANT le premier octet est
+        relevé tel quel (connexion simplement inactive), au lieu d'être confondu avec
+        une fermeture. Sans ça, le serveur coupait toute connexion inactive 30 s et le
+        heartbeat prévu dans `_recv_loop` n'était jamais envoyé (mesuré le
+        2026-09-23 : après 35 s sans message, envois suivants en « Broken pipe »).
+        """
         if size <= 0:
             return b""
         buf = bytearray(size)
@@ -1646,6 +1712,8 @@ class VTPServer:
             try:
                 n = sock.recv_into(view[received:])
             except socket.timeout:
+                if raise_idle_timeout and received == 0:
+                    raise
                 return None
             if n == 0:
                 return None
