@@ -126,6 +126,11 @@ def main(argv=None):
     p_pl.add_argument("--no-verify", action="store_true", help="Ne pas vérifier le placement retenu")
     p_pl.add_argument("--depth", type=int, default=512, help="Profondeur de contexte des mesures")
 
+    # ---- invite (ajout de nœuds) ----
+    p_inv = sub.add_parser("invite", help="Affiche la commande qui fait rejoindre une autre machine (Linux, macOS, Windows)")
+    p_inv.add_argument("--port", type=int, default=5055, help="Port du service d'invitation")
+    p_inv.add_argument("--host", default=None, help="Adresse annoncée aux autres machines (défaut : IP locale)")
+
     # ---- tune-split ----
     p_ts = sub.add_parser("tune-split", help="Mesure la meilleure repartition d'un GGUF entre GPU (mise en cache pour serve)")
     p_ts.add_argument("model", help="Chemin du fichier .gguf")
@@ -193,6 +198,8 @@ def main(argv=None):
     elif args.command == "doctor":
         from core.doctor import run_doctor
         sys.exit(run_doctor(share=getattr(args, "share", False)))
+    elif args.command == "invite":
+        _cmd_invite(args)
     elif args.command == "plan":
         from core.llama_server_backend import get_or_download_binary
         from core.planner import plan as _plan
@@ -412,6 +419,34 @@ def _cmd_run(args):
     finally:
         pipeline.shutdown()
         print("Shutdown complete.")
+
+
+def _cmd_invite(args):
+    """Service d'invitation : une commande à coller sur la machine qui rejoint."""
+    from core.join import serve_invites, binary_tag
+    from core.llama_server_backend import get_or_download_binary
+    tag = binary_tag(get_or_download_binary())
+    if not tag:
+        print("Version llama.cpp du binaire local inconnue (VRM_LLAMA_SERVER_BIN ?) : "
+              "impossible de garantir le même protocole RPC des deux côtés.")
+        sys.exit(1)
+
+    def joined(key, info):
+        print(f"  + nœud {key} ({info.get('os', '?')}, {info.get('asset', '?')}) — "
+              "relancer `vramancer serve` pour l'utiliser")
+
+    httpd, token, url = serve_invites(tag, port=args.port, public_host=args.host, on_join=joined)
+    print(f"Invitation ouverte (llama.cpp {tag}). Sur la machine à ajouter :\n")
+    print(f"  Linux / macOS : curl -fsSL '{url}/join.sh?t={token}' | sh")
+    print(f"  Windows       : irm '{url}/join.ps1?t={token}' | iex\n")
+    print("Réseau local ou tunnel (WireGuard, Tailscale) UNIQUEMENT : rpc-server n'a pas "
+          "d'authentification.\nCtrl+C pour fermer l'invitation (les nœuds ajoutés restent).")
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        httpd.server_close()
 
 
 def _cmd_serve(args):

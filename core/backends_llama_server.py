@@ -69,8 +69,19 @@ class LlamaServerAdapter(BaseLLMBackend):
         num_gpus = int(kwargs.get("num_gpus", self._num_gpus))
         logger.info("llama-server (sous-processus) : %s, n_ctx=%d, gpus=%d",
                     path, n_ctx, num_gpus)
+        # Nœuds distants : VRM_RPC_HOSTS explicite, sinon ceux qui ont rejoint via
+        # `vramancer invite` et répondent maintenant (VRM_JOINED_NODES=0 pour ignorer).
+        rpc = [h.strip() for h in os.environ.get("VRM_RPC_HOSTS", "").split(",") if h.strip()]
+        if not rpc and os.environ.get("VRM_JOINED_NODES", "1") != "0":
+            try:
+                from core.join import joined_rpc_hosts
+                rpc = joined_rpc_hosts()
+            except Exception:
+                logger.debug("registre des nœuds illisible", exc_info=True)
+        if rpc:
+            logger.info("Nœuds RPC : %s", ", ".join(rpc))
         self._server = LlamaServerBackend(
-            path, num_local_gpus=num_gpus, n_ctx=n_ctx,
+            path, rpc_hosts=rpc or None, num_local_gpus=num_gpus, n_ctx=n_ctx,
             server_port=int(os.environ.get("VRM_LLAMA_SERVER_PORT", "8081")),
         )
         self.model_name = path
