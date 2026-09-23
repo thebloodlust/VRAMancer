@@ -72,6 +72,13 @@ falls back to a safer placement instead of failing. Measured: **DeepSeek-V4-Flas
 on a 3090 + 7900 XT + RAM at 11.8 tok/s**, prediction within 3.3%; ~9.7 tok/s seen by an
 API client. ([measurements](docs/reports/PLANIFICATEUR_COUT_2026-09-23.md))
 
+**Slow beats crashed.** Bigger than your RAM, the model is memory-mapped and read from disk
+as needed: DeepSeek-V4-Flash (81 GiB, 284B parameters) still answers at **2.1 tok/s with RAM
+capped at 16 GB**. Long contexts switch the KV cache to q8_0/q4_0 instead of running out of
+VRAM (+0.03 % / +0.2 % perplexity measured). Ternary PrismML models (Bonsai 27B in 6.7 GiB,
+74 tok/s on a 3090) get their llama.cpp fork downloaded automatically.
+([measurements](docs/reports/IDEES_SOIREE_2026-09-23.md))
+
 **Two machines work too.** With llama.cpp RPC and real GPUs behind a shaped link, a 3090
 plus a remote 7900 XT lose only ~4% over plain gigabit Ethernet (93.8 tok/s), 25% over
 Wi-Fi — on a model neither machine can hold alone. ([measurements](docs/reports/TESTS_7900XT_JOUR2_2026-09-23.md))
@@ -377,6 +384,8 @@ vramancer benchmark   # Measured GFLOPS / memory bandwidth per GPU
 vramancer split Qwen/Qwen2.5-14B-Instruct --gpus 2  # Preview model split
 vramancer tune-split model.gguf  # Measure the best layer split across mismatched GPUs
 vramancer plan model.gguf        # Place weights by tier (GPUs → RAM), measured, reused by serve
+vramancer predict org/repo/model.gguf  # Fits? where? how fast? — before downloading (reads ~11 MB)
+vramancer invite                 # One command to add another machine (Linux, macOS, Windows)
 ```
 
 ### Cluster (data-parallel across GPUs)

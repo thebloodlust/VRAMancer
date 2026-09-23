@@ -126,6 +126,10 @@ def main(argv=None):
     p_pl.add_argument("--no-verify", action="store_true", help="Ne pas vérifier le placement retenu")
     p_pl.add_argument("--depth", type=int, default=512, help="Profondeur de contexte des mesures")
 
+    # ---- predict (avant téléchargement) ----
+    p_pr = sub.add_parser("predict", help="Tient ou pas, où vont les poids, quel débit — AVANT de télécharger (org/depot/fichier.gguf ou chemin local)")
+    p_pr.add_argument("model", help="org/depot/fichier.gguf (Hugging Face), URL, ou chemin local")
+
     # ---- invite (ajout de nœuds) ----
     p_inv = sub.add_parser("invite", help="Affiche la commande qui fait rejoindre une autre machine (Linux, macOS, Windows)")
     p_inv.add_argument("--port", type=int, default=5055, help="Port du service d'invitation")
@@ -198,6 +202,11 @@ def main(argv=None):
     elif args.command == "doctor":
         from core.doctor import run_doctor
         sys.exit(run_doctor(share=getattr(args, "share", False)))
+    elif args.command == "predict":
+        from core.predict import remote_profile, local_profile, machine_tiers, predict, fmt_prediction
+        from core.llama_server_backend import backend_devices, get_or_download_binary
+        prof = local_profile(args.model) if os.path.exists(args.model) else remote_profile(args.model)
+        print(fmt_prediction(prof, predict(prof, machine_tiers(backend_devices(get_or_download_binary())))))
     elif args.command == "invite":
         _cmd_invite(args)
     elif args.command == "plan":

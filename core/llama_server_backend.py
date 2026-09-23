@@ -291,7 +291,15 @@ def _compat_flags(binary, model_path=None) -> List[str]:
     flags: List[str] = []
     if "--flash-attn" in h:
         flags += ["--flash-attn", "on"] if "[on|off|auto]" in h else ["--flash-attn"]
-    if "--load-mode" in h:
+    if model_path and _too_big_for_ram(model_path):
+        # Plus gros que la RAM disponible : sans mmap, le noyau tue le processus (OOM).
+        # Avec mmap, les poids hors VRAM restent sur disque et sont relus à la demande :
+        # lent mais ça répond (DeepSeek-V4-Flash, RAM plafonnée : cf. rapport 2026-09-23).
+        if "--load-mode" in h:
+            flags += ["--load-mode", "mmap"]
+        log.warning("Modèle plus gros que la RAM disponible : chargement en mmap, les "
+                    "poids hors VRAM seront relus depuis le disque (lent, mais sans planter)")
+    elif "--load-mode" in h:
         flags += ["--load-mode", "none"]
     elif "--no-mmap" in h or not h:
         flags += ["--no-mmap"]
@@ -299,6 +307,18 @@ def _compat_flags(binary, model_path=None) -> List[str]:
         flags += ["--log-disable"]
     flags += _spec_flags(h, model_path)
     return flags
+
+
+def _too_big_for_ram(model_path, reserve_gib: float = 8.0) -> bool:
+    """Le modèle dépasse-t-il la RAM disponible (MemAvailable − réserve) ?"""
+    try:
+        for line in open("/proc/meminfo"):
+            if line.startswith("MemAvailable:"):
+                avail = int(line.split()[1]) / 2 ** 20
+                return _model_size_gib(model_path) > avail - reserve_gib
+    except (OSError, ValueError):
+        pass
+    return False
 
 
 def _model_size_gib(path) -> float:
@@ -324,8 +344,11 @@ def _gguf_header(path, tensor_types: bool = False, tensors: bool = False) -> Opt
     import struct as _st
     scalar = {0: "B", 1: "b", 2: "H", 3: "h", 4: "I", 5: "i", 6: "f", 7: "?",
               10: "Q", 11: "q", 12: "d"}
+    import contextlib
     try:
-        with open(path, "rb") as f:
+        # `path` peut être un objet fichier (lecture distante par plages HTTP, core/predict.py)
+        opened = contextlib.nullcontext(path) if hasattr(path, "read") else open(path, "rb")
+        with opened as f:
             if f.read(4) != b"GGUF":
                 return None
             version = _st.unpack("<I", f.read(4))[0]
@@ -379,7 +402,8 @@ def _gguf_header(path, tensor_types: bool = False, tensors: bool = False) -> Opt
             if tensors:
                 align = int(kv.get("general.alignment", 32))
                 data_start = -(-f.tell() // align) * align
-                data_len = os.fstat(f.fileno()).st_size - data_start
+                size = getattr(f, "size", None) or os.fstat(f.fileno()).st_size
+                data_len = size - data_start
                 ends = sorted({off for _, _, off in infos} | {data_len})
                 nxt = {o: ends[i + 1] for i, o in enumerate(ends[:-1])}
                 out["tensors"] = [(n, t, nxt[o] - o) for n, t, o in infos]

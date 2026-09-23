@@ -447,3 +447,14 @@ def test_kv_cache_quantized_only_when_context_does_not_fit(tmp_path, monkeypatch
     assert mod.kv_cache_flags(m, 49152, dev) == []
     monkeypatch.setenv("VRM_KV_TYPE", "q8_0")
     assert mod.kv_cache_flags(m, 1024, dev) == ["--cache-type-k", "q8_0", "--cache-type-v", "q8_0"]
+
+
+def test_model_bigger_than_ram_is_mmapped_not_loaded(monkeypatch):
+    """Sans mmap, un modèle plus gros que la RAM finit tué par l'OOM killer."""
+    import core.llama_server_backend as mod
+    monkeypatch.setattr(mod, "_server_help", lambda b: "-lm, --load-mode MODE")
+    monkeypatch.setattr(mod, "_spec_flags", lambda h, m: [])
+    monkeypatch.setattr(mod, "_too_big_for_ram", lambda p: True)
+    assert mod._compat_flags("x", "/m.gguf") == ["--load-mode", "mmap"]
+    monkeypatch.setattr(mod, "_too_big_for_ram", lambda p: False)
+    assert mod._compat_flags("x", "/m.gguf") == ["--load-mode", "none"]
