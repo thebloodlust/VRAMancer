@@ -5,6 +5,11 @@
 
 ---
 
+> **VERDICT FINAL (23/09, fin de journée) : tu peux revendre la carte.** Tout ce qui
+> ne pouvait être mesuré qu'avec elle l'a été — voir §10 et le rapport complet
+> `docs/reports/TESTS_7900XT_JOUR2_2026-09-23.md`. Elle est saine (30 min à 289 W sans
+> erreur ni bridage), et ce qu'elle a apporté au projet reste dans le code.
+
 ## 1. Réponse courte
 
 > **Mise à jour finale (00 h 10) — LA CONCLUSION A CHANGÉ.** Un premier verdict disait
@@ -350,10 +355,76 @@ temps de pouvoir reproduire ce qu'on publie.
 
 ---
 
-## 10. Ce qui reste ouvert
+## 10. Jour 2 — tout ce qui restait à tester, et ce que ça a donné
 
-- ~~D3.d, paire 3090 + 7900 XT~~ → **MESURÉ et tranché** (§8). Plus rien à faire.
-- **D3.a** (bridge cross-vendor en Python) : nécessite ROCm/torch-hip, non installé.
-  Rien de ce qui a été mesuré aujourd'hui ne passe par ROCm — Vulkan/RADV a suffi.
-- **D3.b** : 2e machine physique. La simulation Docker dégrossit, elle ne remplace pas.
-- **D1** : PyPI, tag `v2.0.0`, publication du post — manuel, à toi.
+### 10.1 Quatre améliorations de VRAMancer, mesurées
+
+| Amélioration | Gain mesuré |
+|---|---|
+| **`vramancer tune-split`** : partage entre GPU mesuré au lieu du prorata VRAM | **+28 %** de bout en bout à travers `serve` (74.5 → 95.7 tok/s) |
+| **Prompt-lookup automatique sur les modèles denses** (profil `coding`) | **×7.5** sur une édition de fichier d'agent (73.9 s → 11.6 s) |
+| …et **jamais sur un MoE**, où il ralentit | évite −65 % sur la configuration phare |
+| **Multi-machines réparé** (`rpc_hosts`, `tune-split --rpc`) | 2 PC en gigabit : 93.8 tok/s, −4 % seulement |
+
+### 10.2 Ce que la paire vaut vraiment, en une table
+
+| Le modèle… | Paire 3090 + 7900 XT | Mesure |
+|---|---|---|
+| tient sur la 3090 | ❌ −32 % | 136 → 92 tok/s |
+| ne tient que sur les deux — **MoE** | ✅ ×4.4 | 20.7 → 91.7 (106 avec tune-split) |
+| ne tient que sur les deux — **dense** | ✅ **×7.5** | 3.7 → 27.9 |
+| dépasse les deux | ⚠️ +28 %, inutilisable | 1.08 → 1.38 |
+| dupliqué sur chaque carte (data-parallel) | ⚠️ +7 % sous forte charge seulement | 149 → 160 |
+
+### 10.3 Idées testées et écartées (résultats négatifs, publiés tels quels)
+
+- **7900 XT comme moteur de brouillon** (décodage spéculatif) : +2 % en génération,
+  +49 % en édition — écrasé par les n-grammes, qui n'ont besoin d'aucun 2e GPU.
+- **Data-parallel sur GPU dépareillés** : ne paie que sous forte charge (+7 % à 16 clients),
+  au prix d'une latence de queue ×1.6.
+
+### 10.4 Bugs trouvés ce jour-là (11, tous corrigés)
+
+Passerelle cluster : route `chat` absente (404 pour les agents), nœud mort qui aspire le
+trafic (12 requêtes sur 16 perdues), routage aveugle à la vitesse. VTP : connexion qui
+meurt après 30 s d'inactivité, tenseurs écrasés à la réception. AITP : tenseurs mélangés et
+livrés **corrompus**. RPC : ordre des GPU inversé dans le partage. Tuner : prefill qui
+s'effondre sans qu'on le voie. `usage` qui comptait des mots. Prompt-lookup activé sur un
+MoE (mon propre commit, corrigé dans l'heure). Et un constat : `ClusterRouter` ne peut pas
+faire de cross-vendor tel qu'il est écrit.
+
+### 10.5 Bilan de santé pour la revente
+
+**PowerColor RX 7900 XT**, VBIOS `113-EXT84768-001`, 20 GB Samsung. 30 minutes de charge
+continue dont 15 à pleine puissance : **289 W** (au plafond), jonction 89 °C, mémoire 88 °C,
+bord 52 °C, **débit identique de la première à la dernière minute**, aucune erreur noyau.
+Deux jours d'utilisation intensive sans un seul incident amdgpu.
+
+À retenir avant de la démonter : le correctif `amdgpu.runpm=0` n'a plus d'objet sans elle,
+et la 5070 Ti retrouvera ses propres chiffres dans le README (le tableau Benchmarks les
+décrit déjà). Tout ce qui a été ajouté pour les GPU AMD et le multi-vendeurs continuera
+de fonctionner — et sera re-testable dès qu'une autre carte AMD passera par là.
+
+---
+
+## 11. Ce qui reste ouvert (aucun point ne nécessite la 7900 XT)
+
+**À faire par toi :**
+- `git push` — tout le travail de ces deux jours n'existe que sur ce disque ;
+- révoquer le token GitHub ; puis D1 : PyPI, tag `v2.0.0`, post de lancement.
+
+**À faire dans le code, sans matériel particulier :**
+- profil `coding` plafonné à 16K (`VRM_N_CTX`), alors que la paire tenait 64K à 69.6 tok/s ;
+- deux `vramancer serve` sur une même machine se disputent le port des métriques ;
+- `ClusterRouter` ne sait pas faire de cross-vendor (workers `transformers` sur `cuda:0`) ;
+- AITP : pas de fragmentation au-delà d'un datagramme, Reed-Solomon en Python pur
+  (2.7 Mo/s) — pour des activations, préférer le RPC de llama.cpp ;
+- `usage` compte encore des mots pour les backends sans tokenizer (Ollama).
+
+**À faire avec du matériel, plus tard :**
+- **D3.b, une vraie 2e machine** : la simulation netem avec de vrais GPU (§10) dit
+  « −4 % en gigabit », à confirmer sur deux PC réels ;
+- la **5070 Ti** de retour : relancer `vramancer tune-split` — le partage optimal
+  3090 + 5070 Ti n'est pas le prorata non plus, c'est probablement du gain gratuit ;
+- **D3.a (ROCm)** : sans objet — tout ce qui a été mesuré est passé par Vulkan/RADV,
+  et le verdict D3.d dit de ne pas écrire de pont maison.

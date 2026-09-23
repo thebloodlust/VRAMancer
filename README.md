@@ -44,11 +44,29 @@ under the *combined* VRAM ceiling. Measured on a 3090 + 7900 XT:
 | Your model… | Mixing vendors |
 |---|---|
 | fits on your fastest card | costs you 32% — use the one card |
-| **fits only in the two cards combined** | **4.4× (20.7 → 91.7 tok/s)** — the whole point |
+| **fits only in the two cards combined** (MoE, Qwen3.6-35B Q6_K) | **4.4× (20.7 → 91.7 tok/s)**, 106 with `tune-split` |
+| **fits only in the two cards combined** (dense, Qwen2.5-Coder-32B Q6_K) | **7.5× (3.7 → 27.9 tok/s)** |
 | exceeds both cards combined | +28%, still unusable (1.08 → 1.38 tok/s) |
+| duplicated on each card (data-parallel) | +7% under heavy load only |
 
-The middle row is where this project lives: it is what lets you run a 27 GB Q6_K instead
-of a 20 GB Q4_K_M, at 92 tok/s, on cards nobody would call a matched pair.
+The combined-VRAM rows are where this project lives: they let you run a 27 GB Q6_K instead
+of a 20 GB Q4_K_M, at 92–106 tok/s, on cards nobody would call a matched pair.
+
+**Don't split by VRAM — split by speed.** Splitting layers in proportion to each card's VRAM
+(llama.cpp's default) leaves a lot on the table when the cards aren't equally fast: layers
+run one after another, so the fast card should take as many as it can hold.
+`vramancer tune-split` measures it once (a few `llama-bench` runs at your real context
+length, guarding against prefill collapse) and `serve` reuses the result:
+**+28% end-to-end** through `vramancer serve` on a 3090 + 7900 XT (74.5 → 95.7 tok/s).
+
+```bash
+vramancer tune-split model.gguf --ctx 16384            # local GPUs, any vendor mix
+vramancer tune-split model.gguf --rpc 192.168.1.20:50052   # + a GPU on another machine
+```
+
+**Two machines work too.** With llama.cpp RPC and real GPUs behind a shaped link, a 3090
+plus a remote 7900 XT lose only ~4% over plain gigabit Ethernet (93.8 tok/s), 25% over
+Wi-Fi — on a model neither machine can hold alone. ([measurements](docs/reports/TESTS_7900XT_JOUR2_2026-09-23.md))
 
 What survived is what this project actually is: **orchestration across mismatched GPUs on
 top of accelerate/llama.cpp/vLLM**, plus the optimisations that *did* measure (prompt-lookup
@@ -278,6 +296,13 @@ OPENAI_API_BASE=http://localhost:5030/v1 OPENAI_API_KEY=dummy \
   aider --model openai/qwen3.6-coder --no-stream
 ```
 
+**Prompt-lookup, automatically — but only where it helps.** An agent rewriting a file
+mostly copies its own prompt, so speculative decoding by n-gram lookup is a large, exact
+(same output) speed-up: **7.5× on a whole-file edit** with a dense 32B model split across
+two GPUs (73.9 s → 11.6 s). On a **MoE** model it does the opposite — **−65%** — because
+verifying a batch of drafted tokens wakes different experts for each one. `--profile coding`
+reads the GGUF header and enables it for dense models only (`VRM_SPEC=ngram|off` to force).
+
 Function calling works (parses Qwen's `<tool_call>` format → OpenAI `tool_calls`), the full
 tool round-trip is handled, and malformed calls never escape. Full guide, other agents
 (Cline/Continue), pitfalls and measured perf: **[docs/coding_agents.md](docs/coding_agents.md)**.
@@ -340,8 +365,9 @@ vramancer health      # System health check
 vramancer dashboard   # Real-time web dashboard (GPU/VRAM/tok-s)
 vramancer history     # Recent requests (tok/s, OOM, trends)
 vramancer hub Qwen/Qwen2.5-14B-Instruct  # Browse model formats on HF
-vramancer benchmark   # GPU matmul benchmark
+vramancer benchmark   # Measured GFLOPS / memory bandwidth per GPU
 vramancer split Qwen/Qwen2.5-14B-Instruct --gpus 2  # Preview model split
+vramancer tune-split model.gguf  # Measure the best layer split across mismatched GPUs
 ```
 
 ### Cluster (data-parallel across GPUs)
