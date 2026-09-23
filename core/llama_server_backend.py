@@ -35,6 +35,9 @@ log = logging.getLogger("vramancer.llama_server")
 # ── Constants ──────────────────────────────────────────────────────────────────
 
 BINARY_DIR  = Path.home() / ".cache" / "vramancer" / "bin"
+# Fork PrismML (modèles ternaires / 1 bit « Bonsai ») : rangé À PART, sinon la recherche
+# récursive de BINARY_DIR pourrait le choisir pour un modèle ordinaire.
+PRISM_BINARY_DIR = Path.home() / ".cache" / "vramancer" / "bin-prism"
 SERVER_PORT = int(os.environ.get("VRM_LLAMA_SERVER_PORT", "8081"))
 
 # GitHub release assets. Vérifié le 2026-09-22 sur la release b11112 : upstream
@@ -42,8 +45,6 @@ SERVER_PORT = int(os.environ.get("VRM_LLAMA_SERVER_PORT", "8081"))
 # (cuda-12.8, vulkan, rocm…), et la release « latest » est un tag de version
 # (v0.4.1) qui ne contient QU'UN nightly-tag.txt — il faut donc résoudre le vrai
 # tag de build bNNNNN avant de construire une URL.
-_RELEASES_API = "https://api.github.com/repos/ggml-org/llama.cpp/releases"
-_RELEASE_DL = "https://github.com/ggml-org/llama.cpp/releases/download"
 _ASSET_MAP = {
     "linux-cuda":   "llama-{tag}-bin-ubuntu-cuda-12.8-x64.tar.gz",
     "linux-vulkan": "llama-{tag}-bin-ubuntu-vulkan-x64.tar.gz",
@@ -52,6 +53,22 @@ _ASSET_MAP = {
     "darwin-x86":   "llama-{tag}-bin-macos-x64.tar.gz",
     "windows":      "llama-{tag}-bin-win-cuda-12.4-x64.zip",
 }
+# Même convention de noms chez PrismML, sauf le build CUDA Linux (vérifié sur
+# prism-b10709-9a9394a, 2026-09-23). Certaines de leurs releases n'ont que les
+# cudart Windows : on prend la plus récente qui contient VRAIMENT l'asset voulu.
+_PRISM_ASSET_MAP = dict(_ASSET_MAP, **{
+    "linux-cuda": "llama-{tag}-bin-linux-cuda-12.8-x64.tar.gz",
+    "windows":    "llama-{tag}-bin-win-vulkan-x64.zip",
+})
+_FLAVORS = {
+    "upstream": {"repo": "ggml-org/llama.cpp", "tag_re": r"b\d+",
+                 "dir": BINARY_DIR, "assets": _ASSET_MAP},
+    "prism":    {"repo": "PrismML-Eng/llama.cpp", "tag_re": r"prism-b\d+-[0-9a-f]+",
+                 "dir": PRISM_BINARY_DIR, "assets": _PRISM_ASSET_MAP},
+}
+# Types de tenseurs privés du fork PrismML (ggml.h du fork : PQ2_0, PTQ1_0). Le
+# llama.cpp officiel refuse de charger ces fichiers (vérifié b11112).
+PRISM_TENSOR_TYPES = {142, 143}
 
 
 def _has_amd_gpu() -> bool:
@@ -59,6 +76,14 @@ def _has_amd_gpu() -> bool:
     try:
         from core.amd_sysfs import has_amd_gpu
         return has_amd_gpu()
+    except Exception:
+        return False
+
+
+def _has_nvidia() -> bool:
+    try:
+        subprocess.run(["nvidia-smi"], capture_output=True, check=True)
+        return True
     except Exception:
         return False
 
@@ -75,25 +100,36 @@ def _platform_key() -> str:
         return "darwin-arm" if platform.machine() == "arm64" else "darwin-x86"
     if sys_name == "windows":
         return "windows"
-    try:
-        subprocess.run(["nvidia-smi"], capture_output=True, check=True)
+    nvidia = _has_nvidia()
+    amd = _has_amd_gpu()
+    if nvidia and not amd:
         return "linux-cuda"
-    except Exception:
-        pass
-    if _has_amd_gpu():
+    if amd:
+        # NVIDIA + AMD : seul Vulkan voit les deux cartes (le build CUDA ignore l'AMD).
         return "linux-vulkan"
     return "linux-cpu"
 
 
-def _latest_build_tag() -> str:
-    """Dernier tag de BUILD (bNNNNN), pas le tag de version."""
+def _latest_build_tag(flavor: str = "upstream", asset_key: Optional[str] = None) -> str:
+    """Dernier tag de BUILD (bNNNNN), pas le tag de version.
+
+    Avec `asset_key`, seulement une release qui publie cet asset (les releases
+    PrismML sont parfois incomplètes).
+    """
     import re
+    fl = _FLAVORS[flavor]
     try:
-        resp = _requests.get(f"{_RELEASES_API}?per_page=10", timeout=15)
+        resp = _requests.get(f"https://api.github.com/repos/{fl['repo']}/releases?per_page=10",
+                             timeout=15)
         for rel in resp.json():
             tag = rel.get("tag_name", "")
-            if re.fullmatch(r"b\d+", tag):
-                return tag
+            if not re.fullmatch(fl["tag_re"], tag):
+                continue
+            if asset_key:
+                want = fl["assets"][asset_key].format(tag=tag)
+                if want not in {a.get("name") for a in rel.get("assets", [])}:
+                    continue
+            return tag
     except Exception as e:
         log.warning("Impossible de résoudre le tag llama.cpp (%s)", e)
     raise RuntimeError(
@@ -103,33 +139,42 @@ def _latest_build_tag() -> str:
     )
 
 
-def get_or_download_binary() -> Path:
+def get_or_download_binary(model_path=None) -> Path:
     """Chemin du binaire llama-server (téléchargé si absent).
 
     `VRM_LLAMA_SERVER_BIN` court-circuite tout : utile pour pointer un build
     local (ex. un build Vulkan compilé soi-même) sans rien télécharger.
+    Un modèle PrismML (tenseurs ternaires) prend le fork PrismML
+    (`VRM_PRISM_SERVER_BIN` pour un build local).
     """
-    override = os.environ.get("VRM_LLAMA_SERVER_BIN")
+    flavor = "prism" if model_path and needs_prism_fork(model_path) else "upstream"
+    override = os.environ.get("VRM_PRISM_SERVER_BIN" if flavor == "prism"
+                              else "VRM_LLAMA_SERVER_BIN")
     if override:
         p = Path(override).expanduser()
         if p.is_dir():
             p = p / "llama-server"
         if not p.exists():
-            raise RuntimeError(f"VRM_LLAMA_SERVER_BIN pointe sur un binaire inexistant: {p}")
-        log.info("llama-server (VRM_LLAMA_SERVER_BIN): %s", p)
+            raise RuntimeError(f"{'VRM_PRISM_SERVER_BIN' if flavor == 'prism' else 'VRM_LLAMA_SERVER_BIN'}"
+                               f" pointe sur un binaire inexistant: {p}")
+        log.info("llama-server (%s, variable d'environnement): %s", flavor, p)
         return p
 
-    BINARY_DIR.mkdir(parents=True, exist_ok=True)
+    root = _FLAVORS[flavor]["dir"]
+    root.mkdir(parents=True, exist_ok=True)
 
-    existing = _find_server_binary()
+    existing = _find_server_binary(root)
     if existing:
         log.info("llama-server binary found: %s", existing)
         return existing
 
-    log.info("Downloading llama-server binary…")
-    _download_release_binary()
+    if flavor == "prism":
+        log.info("Modèle PrismML (poids ternaires) : téléchargement du fork llama.cpp PrismML…")
+    else:
+        log.info("Downloading llama-server binary…")
+    _download_release_binary(flavor)
 
-    ready = _find_server_binary()
+    ready = _find_server_binary(root)
     if ready:
         ready.chmod(0o755)
         log.info("llama-server ready: %s", ready)
@@ -142,7 +187,7 @@ def get_or_download_binary() -> Path:
     )
 
 
-def _download_release_binary():
+def _download_release_binary(flavor: str = "upstream"):
     """Télécharge la release llama.cpp et extrait l'archive TELLE QUELLE.
 
     Deux pièges vérifiés le 2026-09-22 sur b11112 :
@@ -156,18 +201,27 @@ def _download_release_binary():
     import tarfile
     import zipfile
 
-    BINARY_DIR.mkdir(parents=True, exist_ok=True)
-    tag = _latest_build_tag()
+    fl = _FLAVORS[flavor]
+    root = fl["dir"]
+    root.mkdir(parents=True, exist_ok=True)
     pk = _platform_key()
-    asset = _ASSET_MAP.get(pk, _ASSET_MAP["linux-cpu"]).format(tag=tag)
-    url = f"{_RELEASE_DL}/{tag}/{asset}"
+    if flavor == "prism" and pk == "linux-vulkan" and _has_nvidia():
+        # Mesuré le 2026-09-23 (Bonsai 2 27B, fork prism-b10709) : noyaux Vulkan du
+        # ternaire pas au point — PQ2_0 0.9 tok/s en Vulkan contre 74 en CUDA sur la
+        # même 3090. Avec une NVIDIA présente, le fork prend donc le build CUDA.
+        pk = "linux-cuda"
+    if pk not in fl["assets"]:
+        pk = "linux-cpu"
+    tag = _latest_build_tag(flavor, pk if flavor != "upstream" else None)
+    asset = fl["assets"][pk].format(tag=tag)
+    url = f"https://github.com/{fl['repo']}/releases/download/{tag}/{asset}"
 
     log.info("Downloading %s (%s) …", url, pk)
     resp = _requests.get(url, timeout=300, stream=True)
     resp.raise_for_status()
     data = resp.content
 
-    dest_root = BINARY_DIR / f"{tag}-{pk}"
+    dest_root = root / f"{tag}-{pk}"
     if dest_root.exists():
         import shutil
         shutil.rmtree(dest_root, ignore_errors=True)
@@ -180,7 +234,7 @@ def _download_release_binary():
         with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tf:
             tf.extractall(dest_root, filter="data")
 
-    found = _find_server_binary()
+    found = _find_server_binary(root)
     if found:
         found.chmod(0o755)
         for sibling in found.parent.glob("llama-*"):
@@ -191,13 +245,14 @@ def _download_release_binary():
     log.info("llama.cpp %s (%s) extrait dans %s", tag, pk, dest_root)
 
 
-def _find_server_binary():
-    """Cherche llama-server dans BINARY_DIR (récursif : les archives ont un bin/)."""
+def _find_server_binary(root: Optional[Path] = None):
+    """Cherche llama-server dans `root` (récursif : les archives ont un bin/)."""
+    root = root or BINARY_DIR
     for name in ("llama-server", "llama-server.exe", "server", "server.exe"):
-        direct = BINARY_DIR / name
+        direct = root / name
         if direct.is_file():
             return direct
-    for cand in sorted(BINARY_DIR.rglob("llama-server*")):
+    for cand in sorted(root.rglob("llama-server*")):
         if cand.is_file():
             return cand
     return None
@@ -256,11 +311,15 @@ def _model_size_gib(path) -> float:
     return sum(f.stat().st_size for f in files if f.exists()) / 2 ** 30
 
 
-def gguf_expert_count(path) -> Optional[int]:
-    """Nombre d'experts d'un GGUF (0 = modèle dense), en ne lisant QUE l'en-tête.
+def _gguf_header(path, tensor_types: bool = False, tensors: bool = False) -> Optional[dict]:
+    """Lit l'en-tête GGUF SANS dépendance. None si le fichier n'est pas lisible
+    (on ne devine jamais).
 
-    Sans dépendance : le paquet `gguf` met 10-15 s car il indexe tous les tenseurs.
-    Renvoie None si le fichier n'est pas lisible (on ne devine jamais).
+    Renvoie {"expert_count", "kv"} (métadonnées scalaires et chaînes courtes), plus
+    "tensor_types" et/ou "tensors" [(nom, type, octets)] à la demande. La taille d'un
+    tenseur se déduit des décalages de données : ça marche pour TOUT type, y compris
+    ceux que le paquet `gguf` ne connaît pas (types ternaires PrismML 142, 143, sur
+    lesquels il lève ValueError) — et sans ses 10-15 s d'indexation.
     """
     import struct as _st
     scalar = {0: "B", 1: "b", 2: "H", 3: "h", 4: "I", 5: "i", 6: "f", 7: "?",
@@ -272,7 +331,7 @@ def gguf_expert_count(path) -> Optional[int]:
             version = _st.unpack("<I", f.read(4))[0]
             if version < 2:
                 return None
-            _n_tensors, n_kv = _st.unpack("<QQ", f.read(16))
+            n_tensors, n_kv = _st.unpack("<QQ", f.read(16))
 
             def rd_str():
                 n = _st.unpack("<Q", f.read(8))[0]
@@ -294,15 +353,114 @@ def gguf_expert_count(path) -> Optional[int]:
                 else:
                     raise ValueError(f"type GGUF inconnu {t}")
 
+            kv = {}
             for _ in range(n_kv):
                 key = rd_str().decode("utf-8", "replace")
                 t = _st.unpack("<I", f.read(4))[0]
-                if key.endswith(".expert_count") and t in scalar:
-                    return int(_st.unpack("<" + scalar[t], f.read(_st.calcsize("<" + scalar[t])))[0])
-                skip_value(t)
-            return 0
+                if t in scalar:
+                    fmt = "<" + scalar[t]
+                    kv[key] = _st.unpack(fmt, f.read(_st.calcsize(fmt)))[0]
+                elif t == 8:
+                    kv[key] = rd_str().decode("utf-8", "replace")[:256]
+                else:
+                    skip_value(t)
+            out = {"kv": kv, "expert_count": next(
+                (int(v) for k, v in kv.items() if k.endswith(".expert_count")), 0)}
+            if not (tensor_types or tensors):
+                return out
+            infos = []
+            for _ in range(n_tensors):
+                name = rd_str().decode("utf-8", "replace")
+                n_dims = _st.unpack("<I", f.read(4))[0]
+                f.seek(8 * n_dims, 1)                                  # dimensions
+                ttype, off = _st.unpack("<IQ", f.read(12))
+                infos.append((name, ttype, off))
+            out["tensor_types"] = {t for _, t, _ in infos}
+            if tensors:
+                align = int(kv.get("general.alignment", 32))
+                data_start = -(-f.tell() // align) * align
+                data_len = os.fstat(f.fileno()).st_size - data_start
+                ends = sorted({off for _, _, off in infos} | {data_len})
+                nxt = {o: ends[i + 1] for i, o in enumerate(ends[:-1])}
+                out["tensors"] = [(n, t, nxt[o] - o) for n, t, o in infos]
+            return out
     except Exception:
         return None
+
+
+def gguf_expert_count(path) -> Optional[int]:
+    """Nombre d'experts d'un GGUF (0 = modèle dense), en ne lisant QUE l'en-tête."""
+    h = _gguf_header(path)
+    return None if h is None else h["expert_count"]
+
+
+def needs_prism_fork(path) -> bool:
+    """Le GGUF contient-il des tenseurs ternaires PrismML (Bonsai) ?"""
+    h = _gguf_header(path, tensor_types=True)
+    return bool(h and h.get("tensor_types", set()) & PRISM_TENSOR_TYPES)
+
+
+def kv_bytes_per_token(path) -> Optional[int]:
+    """Octets de cache KV par token en f16, d'après l'en-tête (None si inconnu).
+
+    Modèles hybrides (Qwen3.5/3.6 : 1 couche d'attention sur 4, le reste en SSM) :
+    seules les couches d'attention pleine ont un cache KV.
+    """
+    h = _gguf_header(path)
+    if not h:
+        return None
+    kv = h["kv"]
+    arch = kv.get("general.architecture")
+    try:
+        n_layer = int(kv[f"{arch}.block_count"])
+        n_head = int(kv[f"{arch}.attention.head_count"])
+        n_kv = int(kv.get(f"{arch}.attention.head_count_kv", n_head))
+        d = int(kv[f"{arch}.embedding_length"]) // n_head
+        kl = int(kv.get(f"{arch}.attention.key_length", d))
+        vl = int(kv.get(f"{arch}.attention.value_length", d))
+    except (KeyError, TypeError, ValueError, ZeroDivisionError):
+        return None
+    interval = int(kv.get(f"{arch}.full_attention_interval", 1) or 1)
+    return -(-n_layer // interval) * n_kv * (kl + vl) * 2
+
+
+# Octets par élément relatifs à f16 (blocs de 32 : q8_0 = 34 o, q4_0 = 18 o).
+_KV_TYPES = (("f16", 1.0), ("q8_0", 34 / 64), ("q4_0", 18 / 64))
+
+
+def kv_cache_flags(model_path, n_ctx: int, devices: List[dict], help_text: str = "") -> List[str]:
+    """Type du cache KV : f16 si le contexte tient, sinon q8_0, sinon q4_0 (VRM_KV_TYPE=auto).
+
+    Mesuré le 2026-09-23 sur Qwen2.5-Coder-32B Q4_K_M, une 3090 seule : f16 ne tient
+    pas à 24K tokens, q8_0 oui (26.9 tok/s), q4_0 tient à 48K (20.2 tok/s). Perplexité
+    wikitext-2 : f16 6.210, q8_0 6.212 (+0.03 %), q4_0 6.225 (+0.2 %) ; débit −4 à −6 %.
+    Quantifier plutôt que planter. Seulement si le modèle tient en VRAM : au-delà, c'est
+    `vramancer plan` qui a mesuré la place réellement disponible.
+    VRM_KV_TYPE=f16|q8_0|q4_0 impose un type.
+    """
+    want = os.environ.get("VRM_KV_TYPE", "auto")
+    if help_text and "--cache-type-k" not in help_text:
+        return []
+    if want != "auto":
+        return [] if want == "f16" else ["--cache-type-k", want, "--cache-type-v", want]
+    per_tok = kv_bytes_per_token(model_path)
+    free = sum(d.get("free_mib", 0) for d in devices if d.get("rpc") is not True) * 2 ** 20
+    if not per_tok or not free:
+        return []
+    size = _model_size_gib(model_path) * 2 ** 30
+    headroom = free - size - 2 ** 30 * max(1, len(devices))    # tampons de calcul
+    if size > free or headroom <= 0:
+        return []
+    for name, ratio in _KV_TYPES:
+        if per_tok * ratio * n_ctx <= headroom:
+            if name != "f16":
+                log.info("Cache KV en %s : %d tokens de contexte en f16 (%.1f Gio) dépassent "
+                         "la VRAM restante (%.1f Gio). Perte mesurée ≤ 0.2 %% de perplexité.",
+                         name, n_ctx, per_tok * n_ctx / 2 ** 30, headroom / 2 ** 30)
+                return ["--cache-type-k", name, "--cache-type-v", name]
+            return []
+    log.warning("Contexte de %d tokens trop long même en q4_0 : réduire VRM_N_CTX", n_ctx)
+    return ["--cache-type-k", "q4_0", "--cache-type-v", "q4_0"]
 
 
 def _spec_flags(help_text: str, model_path=None) -> List[str]:
@@ -417,7 +575,7 @@ class LlamaServerBackend:
         self._proc: Optional[subprocess.Popen] = None
         self._base_url    = f"http://127.0.0.1:{server_port}"
 
-        binary = Path(binary_path) if binary_path else get_or_download_binary()
+        binary = Path(binary_path) if binary_path else get_or_download_binary(model_path)
 
         # Un llama-server orphelin (parent tué sans shutdown) garde le port ET la
         # VRAM : le démarrage suivant échouait alors de façon incompréhensible
@@ -449,6 +607,7 @@ class LlamaServerBackend:
             log.info("%d devices vus par llama.cpp (%s) — on les utilise tous",
                      len(seen), ", ".join(d["name"] for d in seen))
             num_local_gpus = len(seen)
+        cmd += kv_cache_flags(model_path, n_ctx, seen, _server_help(binary))
 
         # Répartition entre GPU : d'abord un split MESURÉ (vramancer tune-split),
         # sinon le prorata VRAM. Le prorata laisse jusqu'à 16 % sur la table quand

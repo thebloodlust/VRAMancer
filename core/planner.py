@@ -84,22 +84,25 @@ def _shards(path: str) -> List[str]:
 
 def profile_model(path: str) -> ModelProfile:
     """Lit les tailles de tenseurs (tous les fragments d'un GGUF découpé)."""
-    import gguf  # dépendance de llama-cpp-python ; lent (indexe les tenseurs) mais une fois
+    # Lecteur d'en-tête maison : le paquet `gguf` lève ValueError sur les types qu'il ne
+    # connaît pas (ternaires PrismML) et met 10-15 s à indexer les tenseurs.
+    from core.llama_server_backend import _gguf_header
     shards = _shards(path)
     total, per_layer = 0, {}
     n_layers = ne = nu = 0
     for i, sh in enumerate(shards):
-        r = gguf.GGUFReader(sh)
+        h = _gguf_header(sh, tensors=True)
+        if h is None:
+            raise ValueError(f"en-tête GGUF illisible : {sh}")
         if i == 0:
-            arch = bytes(r.fields["general.architecture"].parts[-1]).decode()
-            n_layers = int(r.fields[f"{arch}.block_count"].parts[-1][0])
-            if f"{arch}.expert_count" in r.fields:
-                ne = int(r.fields[f"{arch}.expert_count"].parts[-1][0])
-                nu = int(r.fields[f"{arch}.expert_used_count"].parts[-1][0])
-        for t in r.tensors:
-            b = int(t.n_bytes)
+            kv = h["kv"]
+            arch = kv["general.architecture"]
+            n_layers = int(kv[f"{arch}.block_count"])
+            ne = int(kv.get(f"{arch}.expert_count", 0))
+            nu = int(kv.get(f"{arch}.expert_used_count", 0))
+        for name, _t, b in h["tensors"]:
             total += b
-            m = EXP_RE.match(t.name)
+            m = EXP_RE.match(name)
             if m:
                 layer = int(m.group(1))
                 per_layer[layer] = per_layer.get(layer, 0) + b

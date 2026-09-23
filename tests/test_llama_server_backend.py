@@ -341,3 +341,109 @@ def test_spec_auto_enables_on_dense_disables_on_moe(tmp_path, monkeypatch):
     assert mod._spec_flags(help_txt, str(dense)) == ["--spec-type", "ngram-simple"]
     assert mod._spec_flags(help_txt, str(moe)) == []
     assert mod._spec_flags(help_txt, None) == []            # inconnu -> jamais par défaut
+
+
+# ── en-tête GGUF maison, modèles PrismML ────────────────────────────────────
+
+def _write_gguf_tensors(path, tensors, kv=None, align=32):
+    """GGUF v3 minimal : métadonnées scalaires/chaînes + tenseurs (nom, type, octets)."""
+    import struct
+    kv = kv or {"general.architecture": "llama", "llama.block_count": 2}
+    out = bytearray(b"GGUF" + struct.pack("<IQQ", 3, len(tensors), len(kv)))
+
+    def s(x):
+        b = x.encode()
+        return struct.pack("<Q", len(b)) + b
+    for k, v in kv.items():
+        out += s(k) + (struct.pack("<I", 8) + s(v) if isinstance(v, str)
+                       else struct.pack("<II", 4, v))
+    off = 0
+    for name, ttype, n in tensors:
+        out += s(name) + struct.pack("<I", 1) + struct.pack("<Q", n) + struct.pack("<IQ", ttype, off)
+        off += -(-n // align) * align
+    out += b"\0" * (-len(out) % align)
+    for _name, _t, n in tensors:
+        out += b"\1" * n + b"\0" * (-n % align)
+    path.write_bytes(bytes(out))
+
+
+def test_gguf_header_reads_sizes_of_unknown_tensor_types(tmp_path):
+    """Les types ternaires PrismML (142) font lever le paquet gguf ; pas notre lecteur."""
+    from core.llama_server_backend import _gguf_header, needs_prism_fork
+    m = tmp_path / "bonsai.gguf"
+    _write_gguf_tensors(m, [("blk.0.attn_q.weight", 142, 96), ("output_norm.weight", 0, 64)])
+    h = _gguf_header(m, tensors=True)
+    assert h["kv"]["general.architecture"] == "llama"
+    assert [(n, t, b) for n, t, b in h["tensors"]] == [
+        ("blk.0.attn_q.weight", 142, 96), ("output_norm.weight", 0, 64)]
+    assert needs_prism_fork(m) is True
+
+
+def test_ordinary_gguf_does_not_need_prism(tmp_path):
+    from core.llama_server_backend import needs_prism_fork
+    m = tmp_path / "q4.gguf"
+    _write_gguf_tensors(m, [("blk.0.attn_q.weight", 12, 64)])
+    assert needs_prism_fork(m) is False
+    assert needs_prism_fork(tmp_path / "absent.gguf") is False
+
+
+def test_mixed_nvidia_amd_takes_vulkan(monkeypatch):
+    """Le build CUDA ne voit pas la carte AMD : NVIDIA + AMD → Vulkan."""
+    import core.llama_server_backend as mod
+    monkeypatch.setattr(mod.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(mod, "_has_nvidia", lambda: True)
+    monkeypatch.setattr(mod, "_has_amd_gpu", lambda: True)
+    assert mod._platform_key() == "linux-vulkan"
+    monkeypatch.setattr(mod, "_has_amd_gpu", lambda: False)
+    assert mod._platform_key() == "linux-cuda"
+
+
+def test_prism_release_skips_releases_without_the_asset(monkeypatch):
+    """Certaines releases PrismML ne publient que les cudart Windows."""
+    import core.llama_server_backend as mod
+
+    class R:
+        def json(self):
+            return [
+                {"tag_name": "prism-b10710-aaaaaaa", "assets": [{"name": "cudart-win.zip"}]},
+                {"tag_name": "prism-b10709-9a9394a", "assets": [
+                    {"name": "llama-prism-b10709-9a9394a-bin-linux-cuda-12.8-x64.tar.gz"}]},
+            ]
+    monkeypatch.setattr(mod._requests, "get", lambda *a, **k: R())
+    assert mod._latest_build_tag("prism", "linux-cuda") == "prism-b10709-9a9394a"
+
+
+def _kv_model(tmp_path, weights_gib=0.0):
+    m = tmp_path / "dense.gguf"
+    _write_gguf_tensors(m, [("blk.0.attn_q.weight", 12, 64)], kv={
+        "general.architecture": "qwen2", "qwen2.block_count": 64,
+        "qwen2.embedding_length": 5120, "qwen2.attention.head_count": 40,
+        "qwen2.attention.head_count_kv": 8})
+    return m
+
+
+def test_kv_bytes_per_token_dense_and_hybrid(tmp_path):
+    from core.llama_server_backend import kv_bytes_per_token
+    assert kv_bytes_per_token(_kv_model(tmp_path)) == 64 * 8 * 256 * 2     # Qwen2.5-32B
+    h = tmp_path / "hybrid.gguf"
+    _write_gguf_tensors(h, [("x", 0, 32)], kv={
+        "general.architecture": "qwen35moe", "qwen35moe.block_count": 40,
+        "qwen35moe.embedding_length": 2048, "qwen35moe.attention.head_count": 16,
+        "qwen35moe.attention.head_count_kv": 2, "qwen35moe.attention.key_length": 256,
+        "qwen35moe.attention.value_length": 256, "qwen35moe.full_attention_interval": 4})
+    assert kv_bytes_per_token(h) == 10 * 2 * 512 * 2                          # 1 couche sur 4
+
+
+def test_kv_cache_quantized_only_when_context_does_not_fit(tmp_path, monkeypatch):
+    """Reproduit la mesure 3090 seule + Qwen2.5-32B Q4_K_M (18.5 Gio) : f16 → q8_0 → q4_0."""
+    import core.llama_server_backend as mod
+    monkeypatch.delenv("VRM_KV_TYPE", raising=False)
+    monkeypatch.setattr(mod, "_model_size_gib", lambda p: 18.48)
+    m, dev = _kv_model(tmp_path), [{"id": "Vulkan0", "free_mib": 24098}]
+    assert mod.kv_cache_flags(m, 16384, dev) == []                 # mesuré : tient en f16
+    assert mod.kv_cache_flags(m, 24576, dev)[1] == "q8_0"          # f16 OOM, q8_0 26.9 tok/s
+    assert mod.kv_cache_flags(m, 49152, dev)[1] == "q4_0"          # q8_0 OOM, q4_0 20.2 tok/s
+    monkeypatch.setattr(mod, "_model_size_gib", lambda p: 40.0)    # ne tient pas : le plan décide
+    assert mod.kv_cache_flags(m, 49152, dev) == []
+    monkeypatch.setenv("VRM_KV_TYPE", "q8_0")
+    assert mod.kv_cache_flags(m, 1024, dev) == ["--cache-type-k", "q8_0", "--cache-type-v", "q8_0"]

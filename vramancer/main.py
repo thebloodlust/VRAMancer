@@ -196,7 +196,7 @@ def main(argv=None):
     elif args.command == "plan":
         from core.llama_server_backend import get_or_download_binary
         from core.planner import plan as _plan
-        res = _plan(args.model, get_or_download_binary(), verify=not args.no_verify, depth=args.depth)
+        res = _plan(args.model, get_or_download_binary(args.model), verify=not args.no_verify, depth=args.depth)
         if res:
             print("\nArguments llama-server :", " ".join(res.args))
         sys.exit(0 if res else 1)
@@ -204,7 +204,7 @@ def main(argv=None):
         from core.llama_server_backend import get_or_download_binary
         from core.split_tuner import tune
         rpc = [h.strip() for h in args.rpc.split(",")] if args.rpc else None
-        res = tune(args.model, get_or_download_binary(), n_ctx=args.ctx, rpc_hosts=rpc)
+        res = tune(args.model, get_or_download_binary(args.model), n_ctx=args.ctx, rpc_hosts=rpc)
         sys.exit(0 if res else 1)
     elif args.command == "history":
         _cmd_history(args)
