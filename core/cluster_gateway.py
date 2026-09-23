@@ -19,31 +19,59 @@ from typing import Any, Dict, List, Optional
 
 
 class NodePool:
-    """Liste de nœuds + routage least-loaded (in-flight par nœud)."""
+    """Routage « moins de connexions PONDÉRÉ » par la vitesse mesurée de chaque nœud.
+
+    Mesuré le 2026-09-23 (RTX 3090 + RX 7900 XT, même modèle sur chaque nœud,
+    16 requêtes, 4 en parallèle) avec l'ancien routage « least-loaded » pur :
+    3090 seule 150.6 tok/s ; passerelle 3090 + 7900 XT **104.1 tok/s** (−31 %),
+    p95 16.2 s au lieu de 5.8 s. Ajouter un nœud lent FAISAIT BAISSER le débit : le
+    nœud lent recevait autant de travail que le rapide dès qu'il avait moins de
+    requêtes en cours. On minimise désormais (en_cours + 1) / vitesse, où la vitesse
+    est une moyenne glissante des tokens/s observés sur les réponses de CE nœud.
+
+    Deuxième défaut corrigé : le « trou noir ». Un nœud mort échoue instantanément,
+    donc paraît toujours le moins chargé et aspirait le trafic jusqu'au prochain
+    contrôle de santé (5 s) — 12 requêtes sur 16 perdues en test. Un échec le retire
+    désormais immédiatement ; le contrôle de santé le réintègre quand il répond.
+    """
+
+    EWMA = 0.3
 
     def __init__(self, urls: List[str]):
         self.nodes = [{"url": u.rstrip("/"), "inflight": 0, "ok": True,
-                       "served": 0, "errors": 0} for u in urls]
+                       "served": 0, "errors": 0, "tok_s": None} for u in urls]
         self._lock = threading.Lock()
 
-    def pick(self) -> Optional[Dict[str, Any]]:
+    def pick(self, exclude=()) -> Optional[Dict[str, Any]]:
         with self._lock:
-            healthy = [n for n in self.nodes if n["ok"]]
-            if not healthy:
-                healthy = self.nodes  # tente quand même
-            if not healthy:
+            cand = [n for n in self.nodes if n["ok"] and n["url"] not in exclude]
+            if not cand:
+                cand = [n for n in self.nodes if n["url"] not in exclude]  # tente quand même
+            if not cand:
                 return None
-            n = min(healthy, key=lambda x: x["inflight"])
+            # nœud jamais mesuré : on le teste une fois (sinon sa vitesse reste inconnue)
+            unknown = [n for n in cand if n["tok_s"] is None and n["inflight"] == 0]
+            if unknown:
+                n = unknown[0]
+            else:
+                known = [n["tok_s"] for n in cand if n["tok_s"]]
+                default = sum(known) / len(known) if known else 1.0
+                n = min(cand, key=lambda x: (x["inflight"] + 1) / (x["tok_s"] or default))
             n["inflight"] += 1
             return n
 
-    def done(self, n: Dict[str, Any], ok: bool):
+    def done(self, n: Dict[str, Any], ok: bool, tokens: int = 0, seconds: float = 0.0):
         with self._lock:
             n["inflight"] = max(0, n["inflight"] - 1)
             if ok:
                 n["served"] += 1
+                if tokens > 0 and seconds > 0:
+                    speed = tokens / seconds
+                    n["tok_s"] = speed if n["tok_s"] is None else \
+                        (1 - self.EWMA) * n["tok_s"] + self.EWMA * speed
             else:
                 n["errors"] += 1
+                n["ok"] = False          # retiré tout de suite ; _health_loop le réintègre
 
     def snapshot(self) -> List[Dict[str, Any]]:
         with self._lock:
@@ -145,23 +173,52 @@ def cluster_gateway(nodes: Optional[List[str]] = None, discover: bool = False,
         snap = pool.snapshot()
         return jsonify({"ok": True, "node_count": len(snap), "nodes": snap})
 
+    def _proxy(path: str):
+        """Transmet la requête au meilleur nœud ; en cas d'échec, UN nouvel essai ailleurs."""
+        body = request.get_json(silent=True) or {}
+        tried: List[str] = []
+        last_err = "no node available"
+        for _attempt in range(2):
+            n = pool.pick(exclude=tried)
+            if n is None:
+                break
+            tried.append(n["url"])
+            t0 = time.perf_counter()
+            try:
+                out = _http_post(n["url"] + path, body, req_timeout)
+                dt = time.perf_counter() - t0
+                toks = int((out.get("usage") or {}).get("completion_tokens") or 0)
+                pool.done(n, True, tokens=toks, seconds=dt)
+                out.setdefault("vramancer", {})["node"] = n["url"]
+                out["vramancer"]["gateway_s"] = round(dt, 3)
+                if len(tried) > 1:
+                    out["vramancer"]["retried_from"] = tried[0]
+                return jsonify(out)
+            except Exception as e:
+                pool.done(n, False)
+                last_err = f"node {n['url']}: {e}"
+        return jsonify({"error": last_err}), 502 if tried else 503
+
     @app.route("/v1/completions", methods=["POST"])
     @app.route("/api/generate", methods=["POST"])
     def completions():
-        body = request.get_json(silent=True) or {}
-        n = pool.pick()
-        if n is None:
-            return jsonify({"error": "no node available"}), 503
-        t0 = time.perf_counter()
-        try:
-            out = _http_post(n["url"] + "/v1/completions", body, req_timeout)
-            pool.done(n, True)
-            out.setdefault("vramancer", {})["node"] = n["url"]
-            out["vramancer"]["gateway_s"] = round(time.perf_counter() - t0, 3)
-            return jsonify(out)
-        except Exception as e:
-            pool.done(n, False)
-            return jsonify({"error": f"node {n['url']}: {e}"}), 502
+        return _proxy("/v1/completions")
+
+    # Les agents de code (Aider, Cline, Continue…) parlent /v1/chat/completions.
+    # Sans cette route, le cas d'usage phare du projet ne passait pas par le cluster (404).
+    @app.route("/v1/chat/completions", methods=["POST"])
+    def chat_completions():
+        return _proxy("/v1/chat/completions")
+
+    @app.route("/v1/models")
+    def models():
+        for n in pool.snapshot():
+            if n["ok"]:
+                try:
+                    return jsonify(_http_get(n["url"] + "/v1/models", timeout=5.0))
+                except Exception:
+                    continue
+        return jsonify({"object": "list", "data": []})
 
     print(f"[gateway] API: http://{host}:{port}/v1/completions  ·  /health", flush=True)
     srv = make_server(host, port, app, threaded=True)
