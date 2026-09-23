@@ -123,6 +123,41 @@ llama.cpp délègue une partie des opérations au GPU même avec `-ngl 0`.)
 (il est fiable à 2 % pour les étages GPU), puis on ne mesure que les 2 ou 3 meilleures,
 en quelques passes courtes. On garde la rapidité de la prédiction et la sûreté de la mesure.
 
+## 5 ter. La hiérarchie complète, mesurée (VM en `cpu: host`)
+
+Principe validé : **amener le calcul aux données, jamais l'inverse.** Utiliser la VRAM d'un
+2e GPU comme simple stockage pour le 1er (poids recopiés à chaque token par PCIe) avait été
+réfuté (61-73 % du débit de référence) ; faire calculer chaque étage sur ce qu'il détient
+fonctionne.
+
+DeepSeek-V4-Flash 81 GiB (284B, 92 % d'experts routés, 1.74 GiB d'experts par couche) :
+
+| Placement des experts | Prefill | Génération |
+|---|---:|---:|
+| tous en RAM, 3090 seule | 23.8 | 10.67 |
+| 3090 remplie (9 couches), 34 en RAM | 28.8 | 11.66 |
+| 3090 : 9 · 7900 XT : 5 · RAM : 29 | 33.5 | 11.42 |
+| **3090 : 9 · 7900 XT : 10 · RAM : 24** | **38.9** | **12.07** |
+
+La hiérarchie à trois étages est la meilleure, mais la 7900 XT n'y apporte que +3.5 % en
+génération (+35 % en prefill) : chaque couche qui lui est confiée impose un aller-retour
+3090 → hôte → 7900 XT → 3090 (pas de lien direct entre cartes), qui coûte presque autant que
+le calcul CPU qu'il évite. Piège rencontré : `-sm none` retire le 2e GPU du planificateur de
+llama.cpp (« buffer that cannot run the operation ») ; il faut le garder déclaré
+(`-ts 99/1`) et y envoyer les experts par `-ot`.
+
+| Étage | Débit effectif mesuré |
+|---|---|
+| L0 VRAM RTX 3090 | ~925 GiB/s + 122 µs/couche |
+| L1 VRAM RX 7900 XT | ~928 GiB/s + 248 µs/couche + aller-retour entre cartes |
+| L2 RAM + CPU EPYC 7402 (AVX2, 16 vCPU) | ~58 GiB/s effectifs |
+| L3 GPU distant (RPC llama.cpp) | −4 % en 1 GbE, −25 % en Wi-Fi, −72 % derrière un VPN à 20 ms |
+| L4 disque de la VM | 2.6 Go/s séquentiel, 1.8 Go/s en lectures de 4 Mo aléatoires |
+
+Au-delà de la RAM (modèle > 172 Go), des experts lus depuis le disque donneraient un ordre
+de ~1 tok/s pour DeepSeek (1.75 GiB d'experts actifs par token ; l'usage des experts étant
+quasi uniforme, le cache n'aide pas). Lent mais fonctionnel.
+
 ## 6. Proposition
 
 1. `vramancer calibrate` (une fois par machine, quelques minutes) : par GPU, bande passante
