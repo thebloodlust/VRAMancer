@@ -351,9 +351,23 @@ class LlamaServerBackend:
                      len(seen), ", ".join(d["name"] for d in seen))
             num_local_gpus = len(seen)
 
-        # Tensor split across local GPUs proportional to VRAM
+        # Répartition entre GPU : d'abord un split MESURÉ (vramancer tune-split),
+        # sinon le prorata VRAM. Le prorata laisse jusqu'à 16 % sur la table quand
+        # les cartes n'ont pas la même vitesse (mesuré 3090 + 7900 XT, 2026-09-23).
         if num_local_gpus > 1:
-            split = _local_tensor_split(num_local_gpus, binary=binary)
+            split = None
+            try:
+                from core.split_tuner import cached_split
+                split = cached_split(model_path, seen, n_ctx)
+                if split:
+                    log.info("Split mesuré (cache tune-split) : %s", split)
+            except Exception:
+                log.debug("cache tune-split illisible", exc_info=True)
+            if not split:
+                split = _local_tensor_split(num_local_gpus, binary=binary)
+                if split and len(seen) > 1:
+                    log.info("Split au prorata VRAM %s — `vramancer tune-split %s` "
+                             "peut trouver mieux", split, Path(model_path).name)
             if split:
                 cmd += ["--tensor-split", ",".join(str(s) for s in split)]
 

@@ -120,6 +120,11 @@ def main(argv=None):
     p_doc.add_argument("--share", action="store_true",
                        help="Dump markdown ANONYMISE (materiel + versions) a coller dans une issue GitHub")
 
+    # ---- tune-split ----
+    p_ts = sub.add_parser("tune-split", help="Mesure la meilleure repartition d'un GGUF entre GPU (mise en cache pour serve)")
+    p_ts.add_argument("model", help="Chemin du fichier .gguf")
+    p_ts.add_argument("--ctx", type=int, default=16384, help="Contexte a valider (defaut 16384 = profil coding)")
+
     # ---- history ----
     p_hist = sub.add_parser("history", help="Historique local des requetes (tok/s, OOM, tendances)")
     p_hist.add_argument("--limit", type=int, default=20, help="Nombre de requetes a afficher")
@@ -181,6 +186,11 @@ def main(argv=None):
     elif args.command == "doctor":
         from core.doctor import run_doctor
         sys.exit(run_doctor(share=getattr(args, "share", False)))
+    elif args.command == "tune-split":
+        from core.llama_server_backend import get_or_download_binary
+        from core.split_tuner import tune
+        res = tune(args.model, get_or_download_binary(), n_ctx=args.ctx)
+        sys.exit(0 if res else 1)
     elif args.command == "history":
         _cmd_history(args)
     elif args.command == "cluster":
