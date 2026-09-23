@@ -61,8 +61,10 @@ def try_send(proto, size, fec_on):
     try:
         proto.send_anycast("::1", 1, os.urandom(size))
         return "envoyé"
-    except OSError as e:
+    except OSError as e:                    # v1 : erreur brute du noyau
         return f"ÉCHEC ({e.strerror or e})"
+    except ValueError:                      # v2 : refus explicite avant l'envoi
+        return "REFUSÉ (message explicite : trop gros pour UDP, utiliser TCP)"
 
 
 for size in (8 * 1024, 60 * 1024, 70 * 1024, 640 * 1024, 700 * 1024, 5 * 1024 * 1024):
@@ -81,9 +83,15 @@ PORT = 47011
 rx = AITPProtocol(port=PORT)
 rx.enable_fec(10, 2)
 received = {}
-th = threading.Thread(target=rx.recv_loop,
-                      kwargs={"callback": lambda lid, d, f, a: received.__setitem__(lid, d)},
-                      daemon=True)
+deliveries = []
+
+
+def _on_tensor(lid, d, f, a):
+    received[lid] = d
+    deliveries.append((lid, d))
+
+
+th = threading.Thread(target=rx.recv_loop, kwargs={"callback": _on_tensor}, daemon=True)
 th.start()
 tx = AITPProtocol(port=PORT + 1)
 tx.enable_fec(10, 2)
@@ -129,18 +137,45 @@ tx.sock = real_sock
 # ── 4. Collision : deux tenseurs de la même couche en vol ────────────────────
 section("4. Collision : 2 tenseurs successifs de la MÊME couche")
 received.clear()
+got_all = []
+rx_cb_orig = None
+
+
+class _CaptureSock:
+    """Capture les paquets émis au lieu de les envoyer, pour les entrelacer ensuite."""
+
+    def __init__(self, sock):
+        self._s = sock
+        self.captured = []
+
+    def sendto(self, pkt, addr):
+        self.captured.append((pkt, addr))
+        return len(pkt)
+
+    def __getattr__(self, name):
+        return getattr(self._s, name)
+
+
 a, b = os.urandom(50 * 1024), os.urandom(50 * 1024)
-sa = tx._fec.encode(a)
-sb = tx._fec.encode(b)
-import struct as _st  # noqa: E402
-from experimental.aitp_protocol import FLAG_FEC  # noqa: E402
-# entrelace : A0 B0 A1 B1 … comme deux envois concurrents sur le même lien
-for i in range(12):
-    for data, shards in ((a, sa), (b, sb)):
-        meta = _st.pack("!HHI", len(shards), i, len(data))
-        tx.sock.sendto(tx.create_packet(7, meta + shards[i], flags=FLAG_FEC), ("::1", PORT))
-time.sleep(0.5)
-r = received.get(7)
-print("  résultat couche 7 :", "== A" if r == a else "== B" if r == b else
-      ("MÉLANGE CORROMPU de A et B" if r is not None else "rien reçu"))
+cap_a, cap_b = _CaptureSock(real_sock), _CaptureSock(real_sock)
+tx.sock = cap_a
+tx.send_anycast("::1", 7, a)          # vrai chemin d'envoi (méta FEC de la version courante)
+tx.sock = cap_b
+tx.send_anycast("::1", 7, b)
+tx.sock = real_sock
+# entrelace A0 B0 A1 B1 … comme deux envois concurrents sur le même lien
+deliveries = []
+th_cb = rx  # le récepteur de la section 3 tourne toujours
+received_list = []
+deliveries.clear()
+for (pa, ad), (pb, _) in zip(cap_a.captured, cap_b.captured):
+    real_sock.sendto(pa, ad)
+    real_sock.sendto(pb, ad)
+time.sleep(0.8)
+got7 = [d for lid, d in deliveries if lid == 7]
+labels = ["A intact" if d == a else "B intact" if d == b else "CORROMPU" for d in got7]
+print(f"  tenseurs livrés pour la couche 7 : {labels or ['aucun']}")
+verdict = ("OK — les deux tenseurs sont livrés intacts" if sorted(labels) == ["A intact", "B intact"]
+           else "DÉFAUT — données mélangées ou perdues")
+print(f"  → {verdict}")
 rx.stop_recv()

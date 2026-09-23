@@ -25,7 +25,16 @@ logger = logging.getLogger(__name__)
 
 AITP_HEADER_FORMAT = "!2sBBQI"
 AITP_MAGIC = b"VT"
-AITP_VERSION = 1
+AITP_VERSION = 2
+# v2 (2026-09-23) : la méta FEC porte un IDENTIFIANT DE MESSAGE. En v1, le réassemblage
+# n'était indexé que par layer_id : deux tenseurs de la même couche en vol en même temps
+# (cas normal du décodage pipeliné) mélangeaient leurs fragments et le récepteur livrait
+# un tenseur CORROMPU sans erreur — mesuré par benchmarks/bench_aitp_protocol.py.
+FEC_META_V1 = "!HHI"      # total_shards, shard_idx, original_size
+FEC_META_V2 = "!HHII"     # + msg_id
+# Un datagramme UDP ne dépasse pas 65 507 octets : au-delà, sendto() échoue.
+MAX_DATAGRAM = 65507
+FEC_REASSEMBLY_TIMEOUT_S = float(os.environ.get("VRM_AITP_FEC_TIMEOUT", "5"))
 
 # ── Standard AITP port (configurable via VRM_AITP_PORT) ────────────────
 AITP_PORT = int(os.environ.get("VRM_AITP_PORT", "55555"))
@@ -89,6 +98,8 @@ class AITPProtocol:
         self.anycast_ipv6 = anycast_ipv6
         self._fec = None
         self._recv_running = False
+        self._msg_seq = 0
+        self._seq_lock = __import__("threading").Lock()
 
         _init_aitp_metrics()
 
@@ -183,13 +194,18 @@ class AITPProtocol:
         if self._fec is not None:
             # FEC encode: split into shards and send each as a separate packet
             shards = self._fec.encode(tensor_bytes)
+            with self._seq_lock:
+                msg_id = self._msg_seq
+                self._msg_seq = (self._msg_seq + 1) & 0xFFFFFFFF
             for shard_idx, shard_data in enumerate(shards):
-                # Prepend shard metadata: [total_shards(2B), shard_idx(2B), original_size(4B)]
-                meta = struct.pack("!HHI", len(shards), shard_idx, len(tensor_bytes))
+                meta = struct.pack(FEC_META_V2, len(shards), shard_idx,
+                                   len(tensor_bytes), msg_id)
                 packet = self.create_packet(layer_id, meta + shard_data, flags=FLAG_FEC)
+                self._check_size(packet, len(tensor_bytes))
                 self.sock.sendto(packet, (routing_address, self.port))
         else:
             packet = self.create_packet(layer_id, tensor_bytes)
+            self._check_size(packet, len(tensor_bytes))
             self.sock.sendto(packet, (routing_address, self.port))
 
         if _AITP_SENT:
@@ -202,6 +218,17 @@ class AITPProtocol:
         logger.debug(f"AITP sent to {routing_address} layer={layer_id} "
                      f"size={len(tensor_bytes)} fec={self._fec is not None}")
 
+    def _check_size(self, packet: bytes, tensor_size: int) -> None:
+        """Message clair plutôt qu'un `OSError: Message too long` venu du noyau."""
+        if len(packet) > MAX_DATAGRAM:
+            limit = "~64 Ko" if self._fec is None else f"~{64 * self._fec.data_shards} Ko"
+            raise ValueError(
+                f"AITP : tenseur de {tensor_size} octets trop gros pour UDP "
+                f"(paquet de {len(packet)} > {MAX_DATAGRAM}). Limite actuelle {limit} "
+                f"par tenseur ; AITP ne fragmente pas au-delà. Pour des activations de "
+                f"prefill (plusieurs Mo), utiliser le transport TCP (VTP / RPC)."
+            )
+
     # ── Receive loop ────────────────────────────────────────────────
 
     def recv_loop(self, callback=None, timeout: float = 1.0):
@@ -213,8 +240,11 @@ class AITPProtocol:
         self._recv_running = True
         logger.info(f"AITP recv_loop started on [::]:{self.port}")
 
-        # FEC reassembly buffer: {layer_id: {shard_idx: data, ...}}
+        # FEC reassembly buffer: {(addr, layer_id, msg_id): {...}}
         fec_buf: dict = {}
+        # messages déjà reconstruits : leurs fragments de parité tardifs sont ignorés
+        # (sinon ils rouvriraient un réassemblage qui finirait en faux « perdu »)
+        fec_done: dict = {}
 
         while self._recv_running:
             try:
@@ -224,23 +254,53 @@ class AITPProtocol:
                 if parsed["flags"] & FLAG_FEC and self._fec is not None:
                     # FEC shard — reassemble
                     tensor_data = parsed["tensor_data"]
-                    if len(tensor_data) < 8:
-                        continue
-                    total, idx, orig_size = struct.unpack("!HHI", tensor_data[:8])
-                    shard_data = tensor_data[8:]
                     lid = parsed["layer_id"]
-                    if lid not in fec_buf:
-                        fec_buf[lid] = {"total": total, "orig": orig_size, "shards": {}}
-                    fec_buf[lid]["shards"][idx] = shard_data
+                    if parsed["version"] >= 2:
+                        hdr = struct.calcsize(FEC_META_V2)
+                        if len(tensor_data) < hdr:
+                            continue
+                        total, idx, orig_size, msg_id = struct.unpack(
+                            FEC_META_V2, tensor_data[:hdr])
+                    else:  # compat v1 : pas d'identifiant, risque de mélange documenté
+                        hdr = struct.calcsize(FEC_META_V1)
+                        if len(tensor_data) < hdr:
+                            continue
+                        total, idx, orig_size = struct.unpack(FEC_META_V1, tensor_data[:hdr])
+                        msg_id = -1
+                    shard_data = tensor_data[hdr:]
+                    key = (addr[0] if addr else None, lid, msg_id)
+
+                    # purge des réassemblages incomplets trop vieux (pertes > parité) :
+                    # sans ça le tampon grossit indéfiniment
+                    now = time.monotonic()
+                    for k in [k for k, v in fec_buf.items()
+                              if now - v["t0"] > FEC_REASSEMBLY_TIMEOUT_S]:
+                        del fec_buf[k]
+                        if _AITP_ERRORS:
+                            _AITP_ERRORS.labels("fec_timeout").inc()
+                        logger.warning("AITP : tenseur couche=%s msg=%s perdu "
+                                       "(trop de fragments manquants)", k[1], k[2])
+
+                    for k in [k for k, t in fec_done.items()
+                              if now - t > FEC_REASSEMBLY_TIMEOUT_S]:
+                        del fec_done[k]
+                    if key in fec_done:
+                        continue
+                    if key not in fec_buf:
+                        fec_buf[key] = {"total": total, "orig": orig_size,
+                                        "shards": {}, "t0": now}
+                    fec_buf[key]["shards"][idx] = shard_data
 
                     # Try decode when enough shards collected
-                    if len(fec_buf[lid]["shards"]) >= self._fec.data_shards:
+                    if len(fec_buf[key]["shards"]) >= self._fec.data_shards:
                         try:
                             reconstructed = self._fec.decode(
-                                fec_buf[lid]["shards"],
-                                fec_buf[lid]["orig"],
+                                fec_buf[key]["shards"],
+                                fec_buf[key]["orig"],
                             )
-                            del fec_buf[lid]
+                            del fec_buf[key]
+                            if msg_id >= 0:
+                                fec_done[key] = now
                             if callback:
                                 callback(lid, reconstructed, parsed["flags"], addr)
                         except Exception as e:

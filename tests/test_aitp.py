@@ -127,7 +127,8 @@ class TestAITPProtocol:
         assert parsed["layer_id"] == 42
         assert parsed["tensor_data"] == tensor
         assert parsed["flags"] == 0
-        assert parsed["version"] == 1
+        from experimental.aitp_protocol import AITP_VERSION
+        assert parsed["version"] == AITP_VERSION   # v2 : identifiant de message FEC
 
     def test_hmac_tampering_rejected(self):
         from experimental.aitp_protocol import AITPProtocol
@@ -293,3 +294,85 @@ class TestAITPSensing:
         assert payload_data["uid"] == sensor.node_uid
         # So peers should remain empty
         assert len(sensor.peers) == 0
+
+
+# ── v2 : identifiant de message (2026-09-23) ────────────────────────────────
+
+class TestAITPv2MessageId:
+    """Deux tenseurs de la même couche en vol ne doivent JAMAIS être mélangés.
+
+    En v1, le réassemblage FEC n'était indexé que par layer_id : des fragments
+    entrelacés de deux envois concurrents produisaient un tenseur corrompu, livré
+    sans erreur (mesuré par benchmarks/bench_aitp_protocol.py).
+    """
+
+    def _pair(self, port):
+        import threading
+        from experimental.aitp_protocol import AITPProtocol
+        rx = AITPProtocol(port=port)
+        rx.enable_fec(10, 2)
+        got = []
+        th = threading.Thread(target=rx.recv_loop,
+                              kwargs={"callback": lambda l, d, f, a: got.append((l, d)),
+                                      "timeout": 0.2}, daemon=True)
+        th.start()
+        tx = AITPProtocol(port=port + 1)
+        tx.enable_fec(10, 2)
+        tx.port = port            # viser le récepteur comme un nœud distant
+        return rx, tx, got
+
+    def test_interleaved_same_layer_both_intact(self):
+        import os
+        import time
+
+        rx, tx, got = self._pair(47101)
+        real = tx.sock
+
+        class _Cap:
+            def __init__(self):
+                self.pkts = []
+
+            def sendto(self, pkt, addr):
+                self.pkts.append((pkt, addr))
+                return len(pkt)
+
+        a, b = os.urandom(20 * 1024), os.urandom(20 * 1024)
+        ca, cb = _Cap(), _Cap()
+        tx.sock = ca
+        tx.send_anycast("::1", 7, a)
+        tx.sock = cb
+        tx.send_anycast("::1", 7, b)
+        tx.sock = real
+        for (pa, ad), (pb, _) in zip(ca.pkts, cb.pkts):
+            real.sendto(pa, ad)
+            real.sendto(pb, ad)
+        deadline = time.time() + 5
+        while len(got) < 2 and time.time() < deadline:
+            time.sleep(0.05)
+        rx.stop_recv()
+        payloads = sorted(d for l, d in got if l == 7)
+        assert payloads == sorted([a, b]), f"{len(got)} tenseurs livrés, contenu mélangé ?"
+
+    def test_late_parity_shards_do_not_trigger_false_loss(self):
+        """Les fragments de parité arrivant APRÈS la reconstruction sont ignorés."""
+        import os
+        import time
+
+        rx, tx, got = self._pair(47111)
+        payload = os.urandom(10 * 1024)
+        tx.send_anycast("::1", 3, payload)
+        deadline = time.time() + 5
+        while not got and time.time() < deadline:
+            time.sleep(0.05)
+        time.sleep(0.3)
+        rx.stop_recv()
+        assert [d for _, d in got] == [payload]     # livré une fois, intact
+
+    def test_oversize_tensor_gives_clear_error(self):
+        import os
+
+        import pytest
+        from experimental.aitp_protocol import AITPProtocol
+        tx = AITPProtocol(port=47121)
+        with pytest.raises(ValueError, match="trop gros pour UDP"):
+            tx.send_anycast("::1", 1, os.urandom(200 * 1024))
