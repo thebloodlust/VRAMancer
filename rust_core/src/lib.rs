@@ -1,17 +1,17 @@
+use pyo3::exceptions::{PyConnectionError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::exceptions::{PyValueError, PyConnectionError};
 use pyo3::types::PyBytes;
 
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
-use tokio::sync::Semaphore;
 use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::{Read, Write};
 use std::sync::Arc;
 use std::sync::Mutex;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
+use tokio::sync::Semaphore;
 
 // Définition de notre type HMAC
 type HmacSha256 = Hmac<Sha256>;
@@ -57,9 +57,9 @@ const NET_IO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 #[pyclass]
 #[derive(Clone, Debug, PartialEq)]
 pub enum TransportTier {
-    DirectRdma,     // Niveau 1: GPUDirect / InfiniBand (Bypass CPU Total) - Futur
-    ZeroCopyTcp,    // Niveau 2: Safetensors Buffer partagé + TCP natif
-    StandardTcp,    // Niveau 3: Fallback Python Pickle + TCP local
+    DirectRdma,  // Niveau 1: GPUDirect / InfiniBand (Bypass CPU Total) - Futur
+    ZeroCopyTcp, // Niveau 2: Safetensors Buffer partagé + TCP natif
+    StandardTcp, // Niveau 3: Fallback Python Pickle + TCP local
 }
 
 /// Détecte le meilleur tier réseau disponible sur ce nœud host
@@ -72,7 +72,6 @@ fn detect_best_transport() -> TransportTier {
     }
     TransportTier::ZeroCopyTcp
 }
-
 
 // =========================================================================
 // CUDA Driver API — direct FFI for P2P and async transfers
@@ -121,19 +120,17 @@ mod cuda_ffi {
     pub fn init() -> Result<(), String> {
         static INIT_DONE: std::sync::Once = std::sync::Once::new();
         let mut init_err: Option<String> = None;
-        INIT_DONE.call_once(|| {
-            unsafe {
-                let sym: Result<libloading::Symbol<unsafe extern "C" fn(u32) -> CUresult>, _> =
-                    lib().get(b"cuInit\0");
-                match sym {
-                    Ok(f) => {
-                        let res = f(0);
-                        if res != 0 {
-                            init_err = Some(format!("cuInit returned {res}"));
-                        }
+        INIT_DONE.call_once(|| unsafe {
+            let sym: Result<libloading::Symbol<unsafe extern "C" fn(u32) -> CUresult>, _> =
+                lib().get(b"cuInit\0");
+            match sym {
+                Ok(f) => {
+                    let res = f(0);
+                    if res != 0 {
+                        init_err = Some(format!("cuInit returned {res}"));
                     }
-                    Err(e) => init_err = Some(format!("cuInit not found: {e}")),
                 }
+                Err(e) => init_err = Some(format!("cuInit not found: {e}")),
             }
         });
         match init_err {
@@ -145,9 +142,9 @@ mod cuda_ffi {
     /// cuMemcpyDtoD_v2(dst, src, ByteCount)
     pub fn memcpy_dtod(dst: u64, src: u64, bytes: usize) -> Result<(), String> {
         unsafe {
-            let sym: libloading::Symbol<unsafe extern "C" fn(u64, u64, usize) -> CUresult> =
-                lib().get(b"cuMemcpyDtoD_v2\0")
-                    .map_err(|e| format!("cuMemcpyDtoD_v2 not found: {e}"))?;
+            let sym: libloading::Symbol<unsafe extern "C" fn(u64, u64, usize) -> CUresult> = lib()
+                .get(b"cuMemcpyDtoD_v2\0")
+                .map_err(|e| format!("cuMemcpyDtoD_v2 not found: {e}"))?;
             let res = sym(dst, src, bytes);
             if res != 0 {
                 return Err(format!("cuMemcpyDtoD_v2 returned {res}"));
@@ -162,7 +159,8 @@ mod cuda_ffi {
     pub fn memcpy_dtod_async(dst: u64, src: u64, bytes: usize, stream: u64) -> Result<(), String> {
         unsafe {
             let sym: libloading::Symbol<unsafe extern "C" fn(u64, u64, usize, u64) -> CUresult> =
-                lib().get(b"cuMemcpyDtoDAsync_v2\0")
+                lib()
+                    .get(b"cuMemcpyDtoDAsync_v2\0")
                     .map_err(|e| format!("cuMemcpyDtoDAsync_v2 not found: {e}"))?;
             let res = sym(dst, src, bytes, stream);
             if res != 0 {
@@ -176,7 +174,8 @@ mod cuda_ffi {
     pub fn memcpy_htod(dst_dev: u64, src_host: *const u8, bytes: usize) -> Result<(), String> {
         unsafe {
             let sym: libloading::Symbol<unsafe extern "C" fn(u64, *const u8, usize) -> CUresult> =
-                lib().get(b"cuMemcpyHtoD_v2\0")
+                lib()
+                    .get(b"cuMemcpyHtoD_v2\0")
                     .map_err(|e| format!("cuMemcpyHtoD_v2 not found: {e}"))?;
             let res = sym(dst_dev, src_host, bytes);
             if res != 0 {
@@ -190,7 +189,8 @@ mod cuda_ffi {
     pub fn memcpy_dtoh(dst_host: *mut u8, src_dev: u64, bytes: usize) -> Result<(), String> {
         unsafe {
             let sym: libloading::Symbol<unsafe extern "C" fn(*mut u8, u64, usize) -> CUresult> =
-                lib().get(b"cuMemcpyDtoH_v2\0")
+                lib()
+                    .get(b"cuMemcpyDtoH_v2\0")
                     .map_err(|e| format!("cuMemcpyDtoH_v2 not found: {e}"))?;
             let res = sym(dst_host, src_dev, bytes);
             if res != 0 {
@@ -204,9 +204,12 @@ mod cuda_ffi {
     /// True P2P copy between GPUs — works on bare metal when P2P is enabled.
     /// Falls back to implicit CPU staging via the driver if P2P is blocked.
     pub fn memcpy_peer_async(
-        dst_dev: u64, dst_ctx: u64,
-        src_dev: u64, src_ctx: u64,
-        bytes: usize, stream: u64,
+        dst_dev: u64,
+        dst_ctx: u64,
+        src_dev: u64,
+        src_ctx: u64,
+        bytes: usize,
+        stream: u64,
     ) -> Result<(), String> {
         unsafe {
             let sym: libloading::Symbol<
@@ -225,11 +228,10 @@ mod cuda_ffi {
     /// cuDeviceCanAccessPeer(&canAccess, dev, peerDev)
     pub fn can_access_peer(dev: i32, peer_dev: i32) -> Result<bool, String> {
         unsafe {
-            let sym: libloading::Symbol<
-                unsafe extern "C" fn(*mut i32, i32, i32) -> CUresult,
-            > = lib()
-                .get(b"cuDeviceCanAccessPeer\0")
-                .map_err(|e| format!("cuDeviceCanAccessPeer not found: {e}"))?;
+            let sym: libloading::Symbol<unsafe extern "C" fn(*mut i32, i32, i32) -> CUresult> =
+                lib()
+                    .get(b"cuDeviceCanAccessPeer\0")
+                    .map_err(|e| format!("cuDeviceCanAccessPeer not found: {e}"))?;
             let mut can_access: i32 = 0;
             let res = sym(&mut can_access, dev, peer_dev);
             if res != 0 {
@@ -242,9 +244,9 @@ mod cuda_ffi {
     /// cuCtxEnablePeerAccess(peerCtx, flags)
     pub fn ctx_enable_peer_access(peer_ctx: u64) -> Result<(), String> {
         unsafe {
-            let sym: libloading::Symbol<unsafe extern "C" fn(u64, u32) -> CUresult> =
-                lib().get(b"cuCtxEnablePeerAccess\0")
-                    .map_err(|e| format!("cuCtxEnablePeerAccess not found: {e}"))?;
+            let sym: libloading::Symbol<unsafe extern "C" fn(u64, u32) -> CUresult> = lib()
+                .get(b"cuCtxEnablePeerAccess\0")
+                .map_err(|e| format!("cuCtxEnablePeerAccess not found: {e}"))?;
             let res = sym(peer_ctx, 0);
             // CUDA_ERROR_PEER_ACCESS_ALREADY_ENABLED = 704
             if res != 0 && res != 704 {
@@ -257,9 +259,9 @@ mod cuda_ffi {
     /// cuMemAlloc_v2(dptr, bytesize) — allocate device memory
     pub fn mem_alloc_device(bytes: usize) -> Result<u64, String> {
         unsafe {
-            let sym: libloading::Symbol<unsafe extern "C" fn(*mut u64, usize) -> CUresult> =
-                lib().get(b"cuMemAlloc_v2\0")
-                    .map_err(|e| format!("cuMemAlloc_v2 not found: {e}"))?;
+            let sym: libloading::Symbol<unsafe extern "C" fn(*mut u64, usize) -> CUresult> = lib()
+                .get(b"cuMemAlloc_v2\0")
+                .map_err(|e| format!("cuMemAlloc_v2 not found: {e}"))?;
             let mut dptr: u64 = 0;
             let res = sym(&mut dptr, bytes);
             if res != 0 {
@@ -272,9 +274,9 @@ mod cuda_ffi {
     /// cuMemFree_v2(dptr) — free device memory
     pub fn mem_free_device(dptr: u64) -> Result<(), String> {
         unsafe {
-            let sym: libloading::Symbol<unsafe extern "C" fn(u64) -> CUresult> =
-                lib().get(b"cuMemFree_v2\0")
-                    .map_err(|e| format!("cuMemFree_v2 not found: {e}"))?;
+            let sym: libloading::Symbol<unsafe extern "C" fn(u64) -> CUresult> = lib()
+                .get(b"cuMemFree_v2\0")
+                .map_err(|e| format!("cuMemFree_v2 not found: {e}"))?;
             let res = sym(dptr);
             if res != 0 {
                 return Err(format!("cuMemFree returned {res}"));
@@ -287,7 +289,8 @@ mod cuda_ffi {
     pub fn mem_alloc_host(bytes: usize) -> Result<*mut u8, String> {
         unsafe {
             let sym: libloading::Symbol<unsafe extern "C" fn(*mut *mut u8, usize) -> CUresult> =
-                lib().get(b"cuMemAllocHost_v2\0")
+                lib()
+                    .get(b"cuMemAllocHost_v2\0")
                     .map_err(|e| format!("cuMemAllocHost_v2 not found: {e}"))?;
             let mut ptr: *mut u8 = std::ptr::null_mut();
             let res = sym(&mut ptr, bytes);
@@ -301,9 +304,9 @@ mod cuda_ffi {
     /// cuMemFreeHost(p)
     pub fn mem_free_host(ptr: *mut u8) -> Result<(), String> {
         unsafe {
-            let sym: libloading::Symbol<unsafe extern "C" fn(*mut u8) -> CUresult> =
-                lib().get(b"cuMemFreeHost\0")
-                    .map_err(|e| format!("cuMemFreeHost not found: {e}"))?;
+            let sym: libloading::Symbol<unsafe extern "C" fn(*mut u8) -> CUresult> = lib()
+                .get(b"cuMemFreeHost\0")
+                .map_err(|e| format!("cuMemFreeHost not found: {e}"))?;
             let res = sym(ptr);
             if res != 0 {
                 return Err(format!("cuMemFreeHost returned {res}"));
@@ -315,9 +318,9 @@ mod cuda_ffi {
     /// cuCtxSetCurrent(ctx) — set the CUDA context for the current thread
     pub fn ctx_set_current(ctx: u64) -> Result<(), String> {
         unsafe {
-            let sym: libloading::Symbol<unsafe extern "C" fn(u64) -> CUresult> =
-                lib().get(b"cuCtxSetCurrent\0")
-                    .map_err(|e| format!("cuCtxSetCurrent not found: {e}"))?;
+            let sym: libloading::Symbol<unsafe extern "C" fn(u64) -> CUresult> = lib()
+                .get(b"cuCtxSetCurrent\0")
+                .map_err(|e| format!("cuCtxSetCurrent not found: {e}"))?;
             let res = sym(ctx);
             if res != 0 {
                 return Err(format!("cuCtxSetCurrent returned {res}"));
@@ -329,9 +332,9 @@ mod cuda_ffi {
     /// cuDevicePrimaryCtxRetain(pctx, dev)
     pub fn device_primary_ctx_retain(dev: i32) -> Result<u64, String> {
         unsafe {
-            let sym: libloading::Symbol<unsafe extern "C" fn(*mut u64, i32) -> CUresult> =
-                lib().get(b"cuDevicePrimaryCtxRetain\0")
-                    .map_err(|e| format!("cuDevicePrimaryCtxRetain not found: {e}"))?;
+            let sym: libloading::Symbol<unsafe extern "C" fn(*mut u64, i32) -> CUresult> = lib()
+                .get(b"cuDevicePrimaryCtxRetain\0")
+                .map_err(|e| format!("cuDevicePrimaryCtxRetain not found: {e}"))?;
             let mut ctx: u64 = 0;
             let res = sym(&mut ctx, dev);
             if res != 0 {
@@ -383,103 +386,135 @@ mod cuda_ffi {
 
     pub fn stream_create() -> Result<u64, String> {
         unsafe {
-            let sym: libloading::Symbol<unsafe extern "C" fn(*mut u64, u32) -> CUresult> =
-                lib().get(b"cuStreamCreate\0")
-                    .map_err(|e| format!("cuStreamCreate not found: {e}"))?;
+            let sym: libloading::Symbol<unsafe extern "C" fn(*mut u64, u32) -> CUresult> = lib()
+                .get(b"cuStreamCreate\0")
+                .map_err(|e| format!("cuStreamCreate not found: {e}"))?;
             let mut stream: u64 = 0;
             let res = sym(&mut stream, 0); // default stream flags
-            if res != 0 { return Err(format!("cuStreamCreate returned {res}")); }
+            if res != 0 {
+                return Err(format!("cuStreamCreate returned {res}"));
+            }
             Ok(stream)
         }
     }
 
     pub fn stream_synchronize(stream: u64) -> Result<(), String> {
         unsafe {
-            let sym: libloading::Symbol<unsafe extern "C" fn(u64) -> CUresult> =
-                lib().get(b"cuStreamSynchronize\0")
-                    .map_err(|e| format!("cuStreamSynchronize not found: {e}"))?;
+            let sym: libloading::Symbol<unsafe extern "C" fn(u64) -> CUresult> = lib()
+                .get(b"cuStreamSynchronize\0")
+                .map_err(|e| format!("cuStreamSynchronize not found: {e}"))?;
             let res = sym(stream);
-            if res != 0 { return Err(format!("cuStreamSynchronize returned {res}")); }
+            if res != 0 {
+                return Err(format!("cuStreamSynchronize returned {res}"));
+            }
             Ok(())
         }
     }
 
     pub fn stream_destroy(stream: u64) -> Result<(), String> {
         unsafe {
-            let sym: libloading::Symbol<unsafe extern "C" fn(u64) -> CUresult> =
-                lib().get(b"cuStreamDestroy_v2\0")
-                    .map_err(|e| format!("cuStreamDestroy_v2 not found: {e}"))?;
+            let sym: libloading::Symbol<unsafe extern "C" fn(u64) -> CUresult> = lib()
+                .get(b"cuStreamDestroy_v2\0")
+                .map_err(|e| format!("cuStreamDestroy_v2 not found: {e}"))?;
             let res = sym(stream);
-            if res != 0 { return Err(format!("cuStreamDestroy returned {res}")); }
+            if res != 0 {
+                return Err(format!("cuStreamDestroy returned {res}"));
+            }
             Ok(())
         }
     }
 
     pub fn event_create() -> Result<u64, String> {
         unsafe {
-            let sym: libloading::Symbol<unsafe extern "C" fn(*mut u64, u32) -> CUresult> =
-                lib().get(b"cuEventCreate\0")
-                    .map_err(|e| format!("cuEventCreate not found: {e}"))?;
+            let sym: libloading::Symbol<unsafe extern "C" fn(*mut u64, u32) -> CUresult> = lib()
+                .get(b"cuEventCreate\0")
+                .map_err(|e| format!("cuEventCreate not found: {e}"))?;
             let mut event: u64 = 0;
             let res = sym(&mut event, 0x02); // CU_EVENT_DISABLE_TIMING
-            if res != 0 { return Err(format!("cuEventCreate returned {res}")); }
+            if res != 0 {
+                return Err(format!("cuEventCreate returned {res}"));
+            }
             Ok(event)
         }
     }
 
     pub fn event_record(event: u64, stream: u64) -> Result<(), String> {
         unsafe {
-            let sym: libloading::Symbol<unsafe extern "C" fn(u64, u64) -> CUresult> =
-                lib().get(b"cuEventRecord\0")
-                    .map_err(|e| format!("cuEventRecord not found: {e}"))?;
+            let sym: libloading::Symbol<unsafe extern "C" fn(u64, u64) -> CUresult> = lib()
+                .get(b"cuEventRecord\0")
+                .map_err(|e| format!("cuEventRecord not found: {e}"))?;
             let res = sym(event, stream);
-            if res != 0 { return Err(format!("cuEventRecord returned {res}")); }
+            if res != 0 {
+                return Err(format!("cuEventRecord returned {res}"));
+            }
             Ok(())
         }
     }
 
     pub fn event_destroy(event: u64) -> Result<(), String> {
         unsafe {
-            let sym: libloading::Symbol<unsafe extern "C" fn(u64) -> CUresult> =
-                lib().get(b"cuEventDestroy_v2\0")
-                    .map_err(|e| format!("cuEventDestroy_v2 not found: {e}"))?;
+            let sym: libloading::Symbol<unsafe extern "C" fn(u64) -> CUresult> = lib()
+                .get(b"cuEventDestroy_v2\0")
+                .map_err(|e| format!("cuEventDestroy_v2 not found: {e}"))?;
             let res = sym(event);
-            if res != 0 { return Err(format!("cuEventDestroy returned {res}")); }
+            if res != 0 {
+                return Err(format!("cuEventDestroy returned {res}"));
+            }
             Ok(())
         }
     }
 
     pub fn stream_wait_event(stream: u64, event: u64) -> Result<(), String> {
         unsafe {
-            let sym: libloading::Symbol<unsafe extern "C" fn(u64, u64, u32) -> CUresult> =
-                lib().get(b"cuStreamWaitEvent\0")
-                    .map_err(|e| format!("cuStreamWaitEvent not found: {e}"))?;
+            let sym: libloading::Symbol<unsafe extern "C" fn(u64, u64, u32) -> CUresult> = lib()
+                .get(b"cuStreamWaitEvent\0")
+                .map_err(|e| format!("cuStreamWaitEvent not found: {e}"))?;
             let res = sym(stream, event, 0);
-            if res != 0 { return Err(format!("cuStreamWaitEvent returned {res}")); }
+            if res != 0 {
+                return Err(format!("cuStreamWaitEvent returned {res}"));
+            }
             Ok(())
         }
     }
 
     /// cuMemcpyDtoHAsync_v2(dstHost, srcDevice, ByteCount, hStream)
-    pub fn memcpy_dtoh_async(dst_host: *mut u8, src_dev: u64, bytes: usize, stream: u64) -> Result<(), String> {
+    pub fn memcpy_dtoh_async(
+        dst_host: *mut u8,
+        src_dev: u64,
+        bytes: usize,
+        stream: u64,
+    ) -> Result<(), String> {
         unsafe {
-            let sym: libloading::Symbol<unsafe extern "C" fn(*mut u8, u64, usize, u64) -> CUresult> =
-                lib().get(b"cuMemcpyDtoHAsync_v2\0")
-                    .map_err(|e| format!("cuMemcpyDtoHAsync_v2 not found: {e}"))?;
+            let sym: libloading::Symbol<
+                unsafe extern "C" fn(*mut u8, u64, usize, u64) -> CUresult,
+            > = lib()
+                .get(b"cuMemcpyDtoHAsync_v2\0")
+                .map_err(|e| format!("cuMemcpyDtoHAsync_v2 not found: {e}"))?;
             let res = sym(dst_host, src_dev, bytes, stream);
-            if res != 0 { return Err(format!("cuMemcpyDtoHAsync returned {res}")); }
+            if res != 0 {
+                return Err(format!("cuMemcpyDtoHAsync returned {res}"));
+            }
             Ok(())
         }
     }
 
     /// cuMemcpyHtoDAsync_v2(dstDevice, srcHost, ByteCount, hStream)
-    pub fn memcpy_htod_async(dst_dev: u64, src_host: *const u8, bytes: usize, stream: u64) -> Result<(), String> {
+    pub fn memcpy_htod_async(
+        dst_dev: u64,
+        src_host: *const u8,
+        bytes: usize,
+        stream: u64,
+    ) -> Result<(), String> {
         unsafe {
-            let sym: libloading::Symbol<unsafe extern "C" fn(u64, *const u8, usize, u64) -> CUresult> =
-                lib().get(b"cuMemcpyHtoDAsync_v2\0")
-                    .map_err(|e| format!("cuMemcpyHtoDAsync_v2 not found: {e}"))?;
+            let sym: libloading::Symbol<
+                unsafe extern "C" fn(u64, *const u8, usize, u64) -> CUresult,
+            > = lib()
+                .get(b"cuMemcpyHtoDAsync_v2\0")
+                .map_err(|e| format!("cuMemcpyHtoDAsync_v2 not found: {e}"))?;
             let res = sym(dst_dev, src_host, bytes, stream);
-            if res != 0 { return Err(format!("cuMemcpyHtoDAsync returned {res}")); }
+            if res != 0 {
+                return Err(format!("cuMemcpyHtoDAsync returned {res}"));
+            }
             Ok(())
         }
     }
@@ -532,13 +567,23 @@ mod cuda_ffi {
 
             // DtoH: GPU_src -> pinned buffer (async on s_dtoh)
             ctx_set_current(src_ctx)?;
-            memcpy_dtoh_async(host_bufs[buf_idx], src_dev_ptr + offset as u64, chunk, s_dtoh)?;
+            memcpy_dtoh_async(
+                host_bufs[buf_idx],
+                src_dev_ptr + offset as u64,
+                chunk,
+                s_dtoh,
+            )?;
             event_record(ev_dtoh, s_dtoh)?;
 
             // HtoD: pinned buffer -> GPU_dst (async on s_htod, after DtoH done)
             ctx_set_current(dst_ctx)?;
             stream_wait_event(s_htod, ev_dtoh)?;
-            memcpy_htod_async(dst_dev_ptr + offset as u64, host_bufs[buf_idx] as *const u8, chunk, s_htod)?;
+            memcpy_htod_async(
+                dst_dev_ptr + offset as u64,
+                host_bufs[buf_idx] as *const u8,
+                chunk,
+                s_htod,
+            )?;
             event_record(ev_htod, s_htod)?;
         }
 
@@ -584,13 +629,13 @@ struct GpuPipeline {
     dst_ctx: u64,
     s_dtoh: u64,
     s_htod: u64,
-    s_p2p: u64,          // Dedicated stream for P2P transfers
+    s_p2p: u64, // Dedicated stream for P2P transfers
     ev_dtoh: u64,
     ev_htod: u64,
-    ev_buf_free: Vec<u64>,  // Per-buffer "done consuming" events
+    ev_buf_free: Vec<u64>, // Per-buffer "done consuming" events
     host_bufs: Vec<*mut u8>,
     chunk_bytes: usize,
-    p2p_enabled: bool,    // True if cuDeviceCanAccessPeer succeeds
+    p2p_enabled: bool, // True if cuDeviceCanAccessPeer succeeds
 }
 
 // SAFETY: The raw pointers (host_bufs) are pinned CUDA host memory that is
@@ -624,7 +669,7 @@ impl GpuPipeline {
             )));
         }
         let chunk_bytes = chunk_mb * 1024 * 1024;
-        let n_bufs = 3usize;  // Triple-buffering for full overlap
+        let n_bufs = 3usize; // Triple-buffering for full overlap
 
         let src_ctx = cuda_ffi::device_primary_ctx_retain(src_gpu)
             .map_err(|e| PyValueError::new_err(format!("src ctx: {e}")))?;
@@ -662,8 +707,7 @@ impl GpuPipeline {
         }
 
         // Create streams on src context
-        cuda_ffi::ctx_set_current(src_ctx)
-            .map_err(|e| PyValueError::new_err(e))?;
+        cuda_ffi::ctx_set_current(src_ctx).map_err(|e| PyValueError::new_err(e))?;
         let s_dtoh = cuda_ffi::stream_create()
             .map_err(|e| PyValueError::new_err(format!("stream DtoH: {e}")))?;
         let ev_dtoh = cuda_ffi::event_create()
@@ -672,8 +716,7 @@ impl GpuPipeline {
         let s_p2p = cuda_ffi::stream_create()
             .map_err(|e| PyValueError::new_err(format!("stream P2P: {e}")))?;
 
-        cuda_ffi::ctx_set_current(dst_ctx)
-            .map_err(|e| PyValueError::new_err(e))?;
+        cuda_ffi::ctx_set_current(dst_ctx).map_err(|e| PyValueError::new_err(e))?;
         let s_htod = cuda_ffi::stream_create()
             .map_err(|e| PyValueError::new_err(format!("stream HtoD: {e}")))?;
         let ev_htod = cuda_ffi::event_create()
@@ -688,9 +731,19 @@ impl GpuPipeline {
         }
 
         Ok(GpuPipeline {
-            src_gpu, dst_gpu, src_ctx, dst_ctx,
-            s_dtoh, s_htod, s_p2p, ev_dtoh, ev_htod,
-            ev_buf_free, host_bufs, chunk_bytes, p2p_enabled,
+            src_gpu,
+            dst_gpu,
+            src_ctx,
+            dst_ctx,
+            s_dtoh,
+            s_htod,
+            s_p2p,
+            ev_dtoh,
+            ev_htod,
+            ev_buf_free,
+            host_bufs,
+            chunk_bytes,
+            p2p_enabled,
         })
     }
 
@@ -699,7 +752,13 @@ impl GpuPipeline {
     ///
     /// If P2P is available: uses cuMemcpyPeerAsync (single stream, zero CPU staging).
     /// Otherwise: triple-buffered async CPU-staged transfer with overlapped DMA.
-    fn transfer(&self, py: Python, src_ptr: u64, dst_ptr: u64, size_bytes: usize) -> PyResult<bool> {
+    fn transfer(
+        &self,
+        py: Python,
+        src_ptr: u64,
+        dst_ptr: u64,
+        size_bytes: usize,
+    ) -> PyResult<bool> {
         if self.p2p_enabled {
             return self._transfer_p2p(py, src_ptr, dst_ptr, size_bytes);
         }
@@ -707,17 +766,21 @@ impl GpuPipeline {
     }
 
     /// P2P direct transfer via cuMemcpyPeerAsync. Zero CPU staging.
-    fn _transfer_p2p(&self, py: Python, src_ptr: u64, dst_ptr: u64, size_bytes: usize) -> PyResult<bool> {
+    fn _transfer_p2p(
+        &self,
+        py: Python,
+        src_ptr: u64,
+        dst_ptr: u64,
+        size_bytes: usize,
+    ) -> PyResult<bool> {
         let src_ctx = self.src_ctx;
         let dst_ctx = self.dst_ctx;
         let s_p2p = self.s_p2p;
 
         py.allow_threads(move || {
-            cuda_ffi::ctx_set_current(src_ctx)
-                .map_err(|e| PyValueError::new_err(e))?;
-            cuda_ffi::memcpy_peer_async(
-                dst_ptr, dst_ctx, src_ptr, src_ctx, size_bytes, s_p2p,
-            ).map_err(|e| PyValueError::new_err(format!("P2P transfer: {e}")))?;
+            cuda_ffi::ctx_set_current(src_ctx).map_err(|e| PyValueError::new_err(e))?;
+            cuda_ffi::memcpy_peer_async(dst_ptr, dst_ctx, src_ptr, src_ctx, size_bytes, s_p2p)
+                .map_err(|e| PyValueError::new_err(format!("P2P transfer: {e}")))?;
             cuda_ffi::stream_synchronize(s_p2p)
                 .map_err(|e| PyValueError::new_err(format!("P2P sync: {e}")))?;
             Ok(true)
@@ -728,7 +791,13 @@ impl GpuPipeline {
     /// Buffer N: DtoH in flight on s_dtoh
     /// Buffer N-1: HtoD in flight on s_htod
     /// Buffer N-2: free (just finished HtoD)
-    fn _transfer_staged(&self, py: Python, src_ptr: u64, dst_ptr: u64, size_bytes: usize) -> PyResult<bool> {
+    fn _transfer_staged(
+        &self,
+        py: Python,
+        src_ptr: u64,
+        dst_ptr: u64,
+        size_bytes: usize,
+    ) -> PyResult<bool> {
         let s_dtoh = self.s_dtoh;
         let s_htod = self.s_htod;
         let ev_dtoh = self.ev_dtoh;
@@ -751,43 +820,38 @@ impl GpuPipeline {
 
                 // Wait for this buffer to be free (previous HtoD using it must complete)
                 if i >= n_bufs {
-                    cuda_ffi::ctx_set_current(src_ctx)
-                        .map_err(|e| PyValueError::new_err(e))?;
+                    cuda_ffi::ctx_set_current(src_ctx).map_err(|e| PyValueError::new_err(e))?;
                     cuda_ffi::stream_wait_event(s_dtoh, ev_buf_free[buf_idx])
                         .map_err(|e| PyValueError::new_err(e))?;
                 }
 
                 // DtoH: GPU_src -> pinned buffer
-                cuda_ffi::ctx_set_current(src_ctx)
+                cuda_ffi::ctx_set_current(src_ctx).map_err(|e| PyValueError::new_err(e))?;
+                cuda_ffi::memcpy_dtoh_async(buf_ptr, src_ptr + offset as u64, chunk, s_dtoh)
                     .map_err(|e| PyValueError::new_err(e))?;
-                cuda_ffi::memcpy_dtoh_async(
-                    buf_ptr, src_ptr + offset as u64, chunk, s_dtoh,
-                ).map_err(|e| PyValueError::new_err(e))?;
-                cuda_ffi::event_record(ev_dtoh, s_dtoh)
-                    .map_err(|e| PyValueError::new_err(e))?;
+                cuda_ffi::event_record(ev_dtoh, s_dtoh).map_err(|e| PyValueError::new_err(e))?;
 
                 // HtoD: pinned buffer -> GPU_dst (after DtoH done)
-                cuda_ffi::ctx_set_current(dst_ctx)
-                    .map_err(|e| PyValueError::new_err(e))?;
+                cuda_ffi::ctx_set_current(dst_ctx).map_err(|e| PyValueError::new_err(e))?;
                 cuda_ffi::stream_wait_event(s_htod, ev_dtoh)
                     .map_err(|e| PyValueError::new_err(e))?;
                 cuda_ffi::memcpy_htod_async(
-                    dst_ptr + offset as u64, buf_ptr as *const u8, chunk, s_htod,
-                ).map_err(|e| PyValueError::new_err(e))?;
+                    dst_ptr + offset as u64,
+                    buf_ptr as *const u8,
+                    chunk,
+                    s_htod,
+                )
+                .map_err(|e| PyValueError::new_err(e))?;
                 // Record per-buffer completion so we know when this buf is free
                 cuda_ffi::event_record(ev_buf_free[buf_idx], s_htod)
                     .map_err(|e| PyValueError::new_err(e))?;
             }
 
             // Synchronize both streams
-            cuda_ffi::ctx_set_current(src_ctx)
-                .map_err(|e| PyValueError::new_err(e))?;
-            cuda_ffi::stream_synchronize(s_dtoh)
-                .map_err(|e| PyValueError::new_err(e))?;
-            cuda_ffi::ctx_set_current(dst_ctx)
-                .map_err(|e| PyValueError::new_err(e))?;
-            cuda_ffi::stream_synchronize(s_htod)
-                .map_err(|e| PyValueError::new_err(e))?;
+            cuda_ffi::ctx_set_current(src_ctx).map_err(|e| PyValueError::new_err(e))?;
+            cuda_ffi::stream_synchronize(s_dtoh).map_err(|e| PyValueError::new_err(e))?;
+            cuda_ffi::ctx_set_current(dst_ctx).map_err(|e| PyValueError::new_err(e))?;
+            cuda_ffi::stream_synchronize(s_htod).map_err(|e| PyValueError::new_err(e))?;
 
             Ok(true)
         })
@@ -848,20 +912,21 @@ fn direct_vram_load(_py: Python, _payload: &[u8]) -> PyResult<u64> {
 #[cfg(not(feature = "cuda"))]
 #[pyfunction]
 fn direct_vram_load(_py: Python, _payload: &[u8]) -> PyResult<u64> {
-    Err(PyValueError::new_err("Ce module Rust a été compilé sans la feature CUDA intégrée."))
+    Err(PyValueError::new_err(
+        "Ce module Rust a été compilé sans la feature CUDA intégrée.",
+    ))
 }
 
 /// (Option B - Le Data Plane Tokio Zéro-Copie)
 /// Accepte directement des MemoryViews ou Safetensors bytes sans passer par Pickle
 #[pyfunction]
 fn send_tensor_p2p(
-    py: Python, 
-    host: String, 
-    port: u16, 
-    secret: &[u8], 
-    payload: &[u8]
+    py: Python,
+    host: String,
+    port: u16,
+    secret: &[u8],
+    payload: &[u8],
 ) -> PyResult<Py<PyBytes>> {
-    
     // 1. Signature ultra-rapide (C-speed)
     let mut mac = HmacSha256::new_from_slice(secret)
         .map_err(|_| PyValueError::new_err("Erreur Secret HMAC"))?;
@@ -876,34 +941,45 @@ fn send_tensor_p2p(
     let result: Result<Vec<u8>, String> = py.allow_threads(|| {
         // Lancement d'un runtime Tokio temporaire dédié au transfert massif
         let rt = shared_runtime();
-        
+
         rt.block_on(async {
             let addr = format!("{}:{}", host, port);
-            
+
             // Connexion asynchrone
-            let mut stream = tokio::time::timeout(NET_CONNECT_TIMEOUT, TcpStream::connect(&addr)).await
+            let mut stream = tokio::time::timeout(NET_CONNECT_TIMEOUT, TcpStream::connect(&addr))
+                .await
                 .map_err(|_| format!("Timeout connexion TCP vers {}", addr))?
                 .map_err(|e| format!("Echec connexion TCP vers {}: {}", addr, e))?;
 
             // Envoi optimisé du Header (Total Len)
-            stream.write_u64(total_len).await
+            stream
+                .write_u64(total_len)
+                .await
                 .map_err(|e| format!("Echec envoi Header: {}", e))?;
-            
+
             // Envoi de la Signature Zero-Trust
-            stream.write_all(&signature).await
+            stream
+                .write_all(&signature)
+                .await
                 .map_err(|e| format!("Echec envoi Signature: {}", e))?;
-                
+
             // Envoi du Tenseur de plusieurs Go
-            stream.write_all(payload).await
+            stream
+                .write_all(payload)
+                .await
                 .map_err(|e| format!("Echec envoi Payload: {}", e))?;
 
             // Attente (sans bloquer Python) de la longueur de la réponse
-            let resp_len = stream.read_u64().await
+            let resp_len = stream
+                .read_u64()
+                .await
                 .map_err(|e| format!("Echec lecture réponse Header: {}", e))?;
 
             // Allocation et lecture de la réponse (bornée — anti-OOM)
             let mut resp_data = vec![0u8; check_payload_len(resp_len)?];
-            stream.read_exact(&mut resp_data).await
+            stream
+                .read_exact(&mut resp_data)
+                .await
                 .map_err(|e| format!("Echec lecture réponse Body: {}", e))?;
 
             Ok(resp_data)
@@ -922,7 +998,7 @@ fn send_tensor_p2p(
 #[pyfunction]
 fn receive_tensor_p2p(py: Python, port: u16, secret: &[u8]) -> PyResult<Py<PyBytes>> {
     let secret_vec = secret.to_vec();
-    
+
     // On relâche le GIL pour ne pas bloquer le serveur web Python
     let result: Result<Vec<u8>, String> = py.allow_threads(|| {
         let rt = shared_runtime();
@@ -930,21 +1006,21 @@ fn receive_tensor_p2p(py: Python, port: u16, secret: &[u8]) -> PyResult<Py<PyByt
             let addr = format!("0.0.0.0:{}", port);
             let listener = tokio::net::TcpListener::bind(&addr).await
                 .map_err(|e| format!("Echec écoute TCP sur le port {}: {}", port, e))?;
-            
+
             // Attente du premier nœud distant qui se connecte
             let (mut socket, _) = listener.accept().await
                 .map_err(|e| format!("Echec acceptation de la connexion TCP: {}", e))?;
-                
+
             let total_len = tokio::time::timeout(NET_IO_TIMEOUT, socket.read_u64()).await
                 .map_err(|_| "Timeout lecture en-tête distant".to_string())?
                 .map_err(|e| format!("Echec lecture de l'en-tête distant: {}", e))?;
-                
+
             // Lecture des 32 octets de signature
             let mut signature = vec![0u8; 32];
             tokio::time::timeout(NET_IO_TIMEOUT, socket.read_exact(&mut signature)).await
                 .map_err(|_| "Timeout lecture signature HMAC".to_string())?
                 .map_err(|e| format!("Echec lecture signature HMAC: {}", e))?;
-                
+
             // Lecture intégrale du Gigabytes de VRAM/Tenseur.
             // Garde anti-underflow (total_len doit contenir au moins les 32
             // octets de signature) + borne anti-OOM.
@@ -956,22 +1032,22 @@ fn receive_tensor_p2p(py: Python, port: u16, secret: &[u8]) -> PyResult<Py<PyByt
             tokio::time::timeout(NET_IO_TIMEOUT, socket.read_exact(&mut payload)).await
                 .map_err(|_| "Timeout lecture du payload Tensor".to_string())?
                 .map_err(|e| format!("Echec lecture du payload de données Tensor: {}", e))?;
-                
+
             // Vérification de sécurité (Si un hacker tente d'envoyer du code corrompu, ça dégage ici)
             let mut mac = HmacSha256::new_from_slice(&secret_vec).map_err(|e| format!("Clé HMAC invalide: {}", e))?;
             mac.update(&payload);
             if mac.verify_slice(&signature).is_err() {
                 return Err("ALERTE INTRUSION : Signature HMAC-SHA256 Invalide ! Tentative de transfert P2P rejetée.".to_string());
             }
-            
+
             // Envoi de l'accusé de réception (ACK) pour libérer le socket distant
             socket.write_u64(2).await.unwrap_or(());
             socket.write_all(b"OK").await.unwrap_or(());
-            
+
             Ok(payload)
         })
     });
-    
+
     match result {
         Ok(data) => Ok(PyBytes::new(py, &data).into()),
         Err(e) => Err(PyConnectionError::new_err(e)),
@@ -984,22 +1060,27 @@ fn receive_tensor_p2p(py: Python, port: u16, secret: &[u8]) -> PyResult<Py<PyByt
 fn sign_payload_fast(py: Python, secret: &[u8], payload: &[u8]) -> PyResult<Py<PyBytes>> {
     let mut mac = HmacSha256::new_from_slice(secret)
         .map_err(|_| PyValueError::new_err("Erreur lors de l'initialisation du Secret HMAC"))?;
-    
+
     mac.update(payload);
     let result = mac.finalize().into_bytes();
-    
+
     // On retourne les bytes directement dans le format natif de Python
     Ok(PyBytes::new(py, &result).into())
 }
 
 /// Vérifie ultra-rapidement une signature HMAC-SHA256 en Rust.
 #[pyfunction]
-fn verify_hmac_fast(_py: Python, secret: &[u8], payload: &[u8], signature: &[u8]) -> PyResult<bool> {
+fn verify_hmac_fast(
+    _py: Python,
+    secret: &[u8],
+    payload: &[u8],
+    signature: &[u8],
+) -> PyResult<bool> {
     let mut mac = HmacSha256::new_from_slice(secret)
         .map_err(|_| PyValueError::new_err("Erreur lors de l'initialisation du Secret HMAC"))?;
-    
+
     mac.update(payload);
-    
+
     // Si verify_slice ne panic pas (Ok), la signature est bonne.
     match mac.verify_slice(signature) {
         Ok(_) => Ok(true),
@@ -1015,15 +1096,25 @@ fn cxl_direct_memory_dump(py: Python, path: String, ptr: usize, num_bytes: usize
     // sans sonder l'OS) mais bloque les footguns évidents (segfault sur null/0).
     if ptr == 0 || num_bytes == 0 || num_bytes > MAX_PAYLOAD_BYTES as usize {
         return Err(PyValueError::new_err(format!(
-            "cxl_direct_memory_dump: pointeur/taille invalide (ptr={:#x}, bytes={})", ptr, num_bytes
+            "cxl_direct_memory_dump: pointeur/taille invalide (ptr={:#x}, bytes={})",
+            ptr, num_bytes
         )));
     }
     py.allow_threads(|| {
         // SAFETY: We assume the caller provides a valid pointer and length. Risk of segfault if incorrect,
         // but Rust handles the file writing safely and bypassing the GIL.
         let slice = unsafe { std::slice::from_raw_parts(ptr as *const u8, num_bytes) };
-        let mut file = OpenOptions::new().write(true).create(true).truncate(true).open(&path)
-            .map_err(|e| PyValueError::new_err(format!("Software CXL Error: Unable to map memory bus to NVMe path at {}: {}", path, e)))?;
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&path)
+            .map_err(|e| {
+                PyValueError::new_err(format!(
+                    "Software CXL Error: Unable to map memory bus to NVMe path at {}: {}",
+                    path, e
+                ))
+            })?;
         file.write_all(slice)
             .map_err(|e| PyValueError::new_err(format!("Software CXL Write Error: {}", e)))?;
         Ok(())
@@ -1037,14 +1128,19 @@ fn cxl_direct_memory_load(py: Python, path: String, ptr: usize, num_bytes: usize
     // dangereux encore qu'une lecture) — refuser null/0/oversize d'emblée.
     if ptr == 0 || num_bytes == 0 || num_bytes > MAX_PAYLOAD_BYTES as usize {
         return Err(PyValueError::new_err(format!(
-            "cxl_direct_memory_load: pointeur/taille invalide (ptr={:#x}, bytes={})", ptr, num_bytes
+            "cxl_direct_memory_load: pointeur/taille invalide (ptr={:#x}, bytes={})",
+            ptr, num_bytes
         )));
     }
     py.allow_threads(|| {
         // SAFETY: Same as above.
         let slice = unsafe { std::slice::from_raw_parts_mut(ptr as *mut u8, num_bytes) };
-        let mut file = OpenOptions::new().read(true).open(&path)
-            .map_err(|e| PyValueError::new_err(format!("Software CXL Error: Failed memory page fault. Data inaccessible on NVMe at {}: {}", path, e)))?;
+        let mut file = OpenOptions::new().read(true).open(&path).map_err(|e| {
+            PyValueError::new_err(format!(
+                "Software CXL Error: Failed memory page fault. Data inaccessible on NVMe at {}: {}",
+                path, e
+            ))
+        })?;
         file.read_exact(slice)
             .map_err(|e| PyValueError::new_err(format!("Software CXL Read Error: {}", e)))?;
         Ok(())
@@ -1061,7 +1157,7 @@ fn generate_xor_parity(py: Python, shards: Vec<&[u8]>) -> PyResult<Py<PyBytes>> 
         if max_len == 0 || shards.is_empty() {
             return (vec![], 0);
         }
-        
+
         let mut parity_buf = vec![0u8; max_len];
         for shard in shards {
             // Processing XOR (Rust will heavily optimize this via LLVM vectorizer like AVX-512)
@@ -1075,7 +1171,7 @@ fn generate_xor_parity(py: Python, shards: Vec<&[u8]>) -> PyResult<Py<PyBytes>> 
     if max_len == 0 {
         return Ok(PyBytes::new(py, &[]).into());
     }
-    
+
     Ok(PyBytes::new(py, &parity).into())
 }
 
@@ -1097,7 +1193,7 @@ fn repair_xor_shard(py: Python, valid_shards: Vec<&[u8]>, parity: &[u8]) -> PyRe
         }
         rec_buf
     });
-    
+
     Ok(PyBytes::new(py, &reconstructed).into())
 }
 
@@ -1136,7 +1232,8 @@ fn send_tensor_chunked(
         let rt = shared_runtime();
         rt.block_on(async move {
             let addr = format!("{}:{}", host, port);
-            let mut stream = tokio::time::timeout(NET_CONNECT_TIMEOUT, TcpStream::connect(&addr)).await
+            let mut stream = tokio::time::timeout(NET_CONNECT_TIMEOUT, TcpStream::connect(&addr))
+                .await
                 .map_err(|_| format!("Timeout connect to {}", addr))?
                 .map_err(|e| format!("Connect to {}: {}", addr, e))?;
 
@@ -1144,24 +1241,46 @@ fn send_tensor_chunked(
             let num_chunks = ((payload_vec.len() + chunk_sz - 1) / chunk_sz) as u32;
 
             // Header: [total_len: u64] [num_chunks: u32] [chunk_size: u32]
-            stream.write_u64(total_len).await.map_err(|e| format!("Header: {}", e))?;
-            stream.write_u32(num_chunks).await.map_err(|e| format!("Header: {}", e))?;
-            stream.write_u32(chunk_sz as u32).await.map_err(|e| format!("Header: {}", e))?;
+            stream
+                .write_u64(total_len)
+                .await
+                .map_err(|e| format!("Header: {}", e))?;
+            stream
+                .write_u32(num_chunks)
+                .await
+                .map_err(|e| format!("Header: {}", e))?;
+            stream
+                .write_u32(chunk_sz as u32)
+                .await
+                .map_err(|e| format!("Header: {}", e))?;
 
             let mut acked: u64 = 0;
             for (i, chunk) in payload_vec.chunks(chunk_sz).enumerate() {
                 // Sign each chunk
-                let mut mac = HmacSha256::new_from_slice(&secret_vec).map_err(|e| format!("Clé HMAC invalide: {}", e))?;
+                let mut mac = HmacSha256::new_from_slice(&secret_vec)
+                    .map_err(|e| format!("Clé HMAC invalide: {}", e))?;
                 mac.update(chunk);
                 let sig = mac.finalize().into_bytes();
 
                 // [sig: 32 bytes] [chunk_len: u32] [chunk_data]
-                stream.write_all(&sig).await.map_err(|e| format!("Chunk {} sig: {}", i, e))?;
-                stream.write_u32(chunk.len() as u32).await.map_err(|e| format!("Chunk {} len: {}", i, e))?;
-                stream.write_all(chunk).await.map_err(|e| format!("Chunk {} data: {}", i, e))?;
+                stream
+                    .write_all(&sig)
+                    .await
+                    .map_err(|e| format!("Chunk {} sig: {}", i, e))?;
+                stream
+                    .write_u32(chunk.len() as u32)
+                    .await
+                    .map_err(|e| format!("Chunk {} len: {}", i, e))?;
+                stream
+                    .write_all(chunk)
+                    .await
+                    .map_err(|e| format!("Chunk {} data: {}", i, e))?;
 
                 // Wait for per-chunk ACK (backpressure: receiver controls pace)
-                let ack = stream.read_u8().await.map_err(|e| format!("Chunk {} ack: {}", i, e))?;
+                let ack = stream
+                    .read_u8()
+                    .await
+                    .map_err(|e| format!("Chunk {} ack: {}", i, e))?;
                 if ack != 1 {
                     return Err(format!("Chunk {} rejected by receiver (HMAC mismatch)", i));
                 }
@@ -1193,19 +1312,28 @@ fn receive_tensor_chunked(
         let rt = shared_runtime();
         rt.block_on(async move {
             let addr = format!("0.0.0.0:{}", port);
-            let listener = tokio::net::TcpListener::bind(&addr).await
+            let listener = tokio::net::TcpListener::bind(&addr)
+                .await
                 .map_err(|e| format!("Bind {}: {}", port, e))?;
             let _semaphore = Arc::new(Semaphore::new(max_conn));
 
-            let (mut socket, _) = listener.accept().await
+            let (mut socket, _) = listener
+                .accept()
+                .await
                 .map_err(|e| format!("Accept: {}", e))?;
 
-            let total_len = tokio::time::timeout(NET_IO_TIMEOUT, socket.read_u64()).await
-                .map_err(|_| "Timeout Header total_len".to_string())?.map_err(|e| format!("Header: {}", e))?;
-            let num_chunks = tokio::time::timeout(NET_IO_TIMEOUT, socket.read_u32()).await
-                .map_err(|_| "Timeout Header num_chunks".to_string())?.map_err(|e| format!("Header: {}", e))?;
-            let _chunk_size = tokio::time::timeout(NET_IO_TIMEOUT, socket.read_u32()).await
-                .map_err(|_| "Timeout Header chunk_size".to_string())?.map_err(|e| format!("Header: {}", e))?;
+            let total_len = tokio::time::timeout(NET_IO_TIMEOUT, socket.read_u64())
+                .await
+                .map_err(|_| "Timeout Header total_len".to_string())?
+                .map_err(|e| format!("Header: {}", e))?;
+            let num_chunks = tokio::time::timeout(NET_IO_TIMEOUT, socket.read_u32())
+                .await
+                .map_err(|_| "Timeout Header num_chunks".to_string())?
+                .map_err(|e| format!("Header: {}", e))?;
+            let _chunk_size = tokio::time::timeout(NET_IO_TIMEOUT, socket.read_u32())
+                .await
+                .map_err(|_| "Timeout Header chunk_size".to_string())?
+                .map_err(|e| format!("Header: {}", e))?;
 
             // Borne anti-OOM sur la pré-allocation totale.
             let mut payload = Vec::with_capacity(check_payload_len(total_len)?);
@@ -1213,20 +1341,26 @@ fn receive_tensor_chunked(
             for i in 0..num_chunks {
                 // Read per-chunk signature
                 let mut sig = vec![0u8; 32];
-                tokio::time::timeout(NET_IO_TIMEOUT, socket.read_exact(&mut sig)).await
-                    .map_err(|_| format!("Timeout chunk {} sig", i))?.map_err(|e| format!("Chunk {} sig: {}", i, e))?;
+                tokio::time::timeout(NET_IO_TIMEOUT, socket.read_exact(&mut sig))
+                    .await
+                    .map_err(|_| format!("Timeout chunk {} sig", i))?
+                    .map_err(|e| format!("Chunk {} sig: {}", i, e))?;
 
                 let chunk_len = check_payload_len(
-                    tokio::time::timeout(NET_IO_TIMEOUT, socket.read_u32()).await
+                    tokio::time::timeout(NET_IO_TIMEOUT, socket.read_u32())
+                        .await
                         .map_err(|_| format!("Timeout chunk {} len", i))?
-                        .map_err(|e| format!("Chunk {} len: {}", i, e))? as u64
+                        .map_err(|e| format!("Chunk {} len: {}", i, e))? as u64,
                 )?;
                 let mut chunk = vec![0u8; chunk_len];
-                tokio::time::timeout(NET_IO_TIMEOUT, socket.read_exact(&mut chunk)).await
-                    .map_err(|_| format!("Timeout chunk {} data", i))?.map_err(|e| format!("Chunk {} data: {}", i, e))?;
+                tokio::time::timeout(NET_IO_TIMEOUT, socket.read_exact(&mut chunk))
+                    .await
+                    .map_err(|_| format!("Timeout chunk {} data", i))?
+                    .map_err(|e| format!("Chunk {} data: {}", i, e))?;
 
                 // Verify HMAC
-                let mut mac = HmacSha256::new_from_slice(&secret_vec).map_err(|e| format!("Clé HMAC invalide: {}", e))?;
+                let mut mac = HmacSha256::new_from_slice(&secret_vec)
+                    .map_err(|e| format!("Clé HMAC invalide: {}", e))?;
                 mac.update(&chunk);
                 if mac.verify_slice(&sig).is_err() {
                     // Send NACK
@@ -1236,7 +1370,10 @@ fn receive_tensor_chunked(
 
                 payload.extend_from_slice(&chunk);
                 // Send ACK
-                socket.write_u8(1).await.map_err(|e| format!("ACK {}: {}", i, e))?;
+                socket
+                    .write_u8(1)
+                    .await
+                    .map_err(|e| format!("ACK {}: {}", i, e))?;
             }
 
             Ok(payload)
@@ -1256,15 +1393,22 @@ fn receive_tensor_chunked(
 /// Verify multiple HMAC-SHA256 signatures in a single Rust call.
 /// Takes a list of (payload, signature) tuples and returns a list of booleans.
 #[pyfunction]
-fn verify_hmac_batch(_py: Python, secret: &[u8], items: Vec<(&[u8], &[u8])>) -> PyResult<Vec<bool>> {
-    let results: Vec<bool> = items.iter().map(|(payload, signature)| {
-        let mut mac = match HmacSha256::new_from_slice(secret) {
-            Ok(m) => m,
-            Err(_) => return false,
-        };
-        mac.update(payload);
-        mac.verify_slice(signature).is_ok()
-    }).collect();
+fn verify_hmac_batch(
+    _py: Python,
+    secret: &[u8],
+    items: Vec<(&[u8], &[u8])>,
+) -> PyResult<Vec<bool>> {
+    let results: Vec<bool> = items
+        .iter()
+        .map(|(payload, signature)| {
+            let mut mac = match HmacSha256::new_from_slice(secret) {
+                Ok(m) => m,
+                Err(_) => return false,
+            };
+            mac.update(payload);
+            mac.verify_slice(signature).is_ok()
+        })
+        .collect();
     Ok(results)
 }
 
@@ -1276,14 +1420,19 @@ fn direct_vram_copy(py: Python, src_ptr: u64, dst_ptr: u64, size_bytes: usize) -
         // Try direct DtoD first (works if P2P enabled, fails otherwise)
         match cuda_ffi::memcpy_dtod(dst_ptr, src_ptr, size_bytes) {
             Ok(()) => Ok(true),
-            Err(e) => Err(PyValueError::new_err(format!("CUDA DtoD copy failed: {e}")))
+            Err(e) => Err(PyValueError::new_err(format!("CUDA DtoD copy failed: {e}"))),
         }
     })
 }
 
 #[pyfunction]
 #[cfg(not(feature = "cuda"))]
-fn direct_vram_copy(_py: Python, _src_ptr: u64, _dst_ptr: u64, _size_bytes: usize) -> PyResult<bool> {
+fn direct_vram_copy(
+    _py: Python,
+    _src_ptr: u64,
+    _dst_ptr: u64,
+    _size_bytes: usize,
+) -> PyResult<bool> {
     Err(PyValueError::new_err("Compilé sans feature CUDA."))
 }
 
@@ -1293,21 +1442,31 @@ fn direct_vram_copy(_py: Python, _src_ptr: u64, _dst_ptr: u64, _size_bytes: usiz
 /// stream. Gate behind VRM_TRANSFER_ASYNC=1 in transfer_manager.py.
 #[cfg(feature = "cuda")]
 #[pyfunction]
-fn direct_vram_copy_async(py: Python, src_ptr: u64, dst_ptr: u64, size_bytes: usize) -> PyResult<bool> {
+fn direct_vram_copy_async(
+    py: Python,
+    src_ptr: u64,
+    dst_ptr: u64,
+    size_bytes: usize,
+) -> PyResult<bool> {
     py.allow_threads(|| {
         // Enqueue async DtoD on stream=0 (null/default stream).
         // The host returns immediately; GPU operations on this device that
         // follow will implicitly wait for this copy to complete.
         match cuda_ffi::memcpy_dtod_async(dst_ptr, src_ptr, size_bytes, 0) {
             Ok(()) => Ok(true),
-            Err(e) => Err(PyValueError::new_err(format!("CUDA DtoDAsync failed: {e}")))
+            Err(e) => Err(PyValueError::new_err(format!("CUDA DtoDAsync failed: {e}"))),
         }
     })
 }
 
 #[pyfunction]
 #[cfg(not(feature = "cuda"))]
-fn direct_vram_copy_async(_py: Python, _src_ptr: u64, _dst_ptr: u64, _size_bytes: usize) -> PyResult<bool> {
+fn direct_vram_copy_async(
+    _py: Python,
+    _src_ptr: u64,
+    _dst_ptr: u64,
+    _size_bytes: usize,
+) -> PyResult<bool> {
     Err(PyValueError::new_err("Compilé sans feature CUDA."))
 }
 
@@ -1338,19 +1497,22 @@ fn staged_gpu_transfer(
 ) -> PyResult<bool> {
     let chunk = chunk_bytes.unwrap_or(4 * 1024 * 1024); // 4 MiB default
     py.allow_threads(move || {
-        cuda_ffi::staged_copy_double_buffered(
-            src_ptr, dst_ptr, size_bytes, src_gpu, dst_gpu, chunk,
-        )
-        .map(|()| true)
-        .map_err(|e| PyValueError::new_err(format!("Staged transfer failed: {e}")))
+        cuda_ffi::staged_copy_double_buffered(src_ptr, dst_ptr, size_bytes, src_gpu, dst_gpu, chunk)
+            .map(|()| true)
+            .map_err(|e| PyValueError::new_err(format!("Staged transfer failed: {e}")))
     })
 }
 
 #[cfg(not(feature = "cuda"))]
 #[pyfunction]
 fn staged_gpu_transfer(
-    _py: Python, _src_ptr: u64, _dst_ptr: u64, _size_bytes: usize,
-    _src_gpu: i32, _dst_gpu: i32, _chunk_bytes: Option<usize>,
+    _py: Python,
+    _src_ptr: u64,
+    _dst_ptr: u64,
+    _size_bytes: usize,
+    _src_gpu: i32,
+    _dst_gpu: i32,
+    _chunk_bytes: Option<usize>,
 ) -> PyResult<bool> {
     Err(PyValueError::new_err("Compilé sans feature CUDA."))
 }
@@ -1382,19 +1544,22 @@ fn async_gpu_transfer(
 ) -> PyResult<bool> {
     let chunk = chunk_bytes.unwrap_or(16 * 1024 * 1024); // 16 MiB default
     py.allow_threads(move || {
-        cuda_ffi::async_staged_transfer(
-            src_ptr, dst_ptr, size_bytes, src_gpu, dst_gpu, chunk,
-        )
-        .map(|()| true)
-        .map_err(|e| PyValueError::new_err(format!("Async staged transfer failed: {e}")))
+        cuda_ffi::async_staged_transfer(src_ptr, dst_ptr, size_bytes, src_gpu, dst_gpu, chunk)
+            .map(|()| true)
+            .map_err(|e| PyValueError::new_err(format!("Async staged transfer failed: {e}")))
     })
 }
 
 #[cfg(not(feature = "cuda"))]
 #[pyfunction]
 fn async_gpu_transfer(
-    _py: Python, _src_ptr: u64, _dst_ptr: u64, _size_bytes: usize,
-    _src_gpu: i32, _dst_gpu: i32, _chunk_bytes: Option<usize>,
+    _py: Python,
+    _src_ptr: u64,
+    _dst_ptr: u64,
+    _size_bytes: usize,
+    _src_gpu: i32,
+    _dst_gpu: i32,
+    _chunk_bytes: Option<usize>,
 ) -> PyResult<bool> {
     Err(PyValueError::new_err("Compilé sans feature CUDA."))
 }
@@ -1434,13 +1599,15 @@ fn bench_gpu_transfer(
     let pipe = GpuPipeline::new(src_gpu, dst_gpu, Some(chunk))?;
 
     // Allocate GPU memory via cuMemAlloc
-    let (src_ptr, dst_ptr) = py.allow_threads(|| -> Result<(u64, u64), String> {
-        cuda_ffi::ctx_set_current(pipe.src_ctx)?;
-        let src = cuda_ffi::mem_alloc_device(size)?;
-        cuda_ffi::ctx_set_current(pipe.dst_ctx)?;
-        let dst = cuda_ffi::mem_alloc_device(size)?;
-        Ok((src, dst))
-    }).map_err(|e| PyValueError::new_err(format!("GPU alloc: {e}")))?;
+    let (src_ptr, dst_ptr) = py
+        .allow_threads(|| -> Result<(u64, u64), String> {
+            cuda_ffi::ctx_set_current(pipe.src_ctx)?;
+            let src = cuda_ffi::mem_alloc_device(size)?;
+            cuda_ffi::ctx_set_current(pipe.dst_ctx)?;
+            let dst = cuda_ffi::mem_alloc_device(size)?;
+            Ok((src, dst))
+        })
+        .map_err(|e| PyValueError::new_err(format!("GPU alloc: {e}")))?;
 
     // Warmup
     for _ in 0..n_warmup {
@@ -1471,7 +1638,10 @@ fn bench_gpu_transfer(
     m.insert("dst_gpu".into(), dst_gpu.to_string());
     m.insert("size_mb".into(), (size / (1024 * 1024)).to_string());
     m.insert("chunk_mb".into(), chunk.to_string());
-    m.insert("method".into(), if pipe.p2p_enabled { "p2p" } else { "staged" }.into());
+    m.insert(
+        "method".into(),
+        if pipe.p2p_enabled { "p2p" } else { "staged" }.into(),
+    );
     m.insert("n_buffers".into(), pipe.host_bufs.len().to_string());
     m.insert("avg_ms".into(), format!("{:.3}", avg_s * 1000.0));
     // Noms historiques (ambigus : "gbps" est en giga-BITS, "gbs" en giga-OCTETS).
@@ -1487,9 +1657,13 @@ fn bench_gpu_transfer(
 #[cfg(not(feature = "cuda"))]
 #[pyfunction]
 fn bench_gpu_transfer(
-    _py: Python, _src_gpu: i32, _dst_gpu: i32,
-    _size_mb: Option<usize>, _chunk_mb: Option<usize>,
-    _warmup: Option<usize>, _iterations: Option<usize>,
+    _py: Python,
+    _src_gpu: i32,
+    _dst_gpu: i32,
+    _size_mb: Option<usize>,
+    _chunk_mb: Option<usize>,
+    _warmup: Option<usize>,
+    _iterations: Option<usize>,
 ) -> PyResult<std::collections::HashMap<String, String>> {
     Err(PyValueError::new_err("Compilé sans feature CUDA."))
 }
@@ -1512,7 +1686,8 @@ fn tokenize_one(text: &str) -> Vec<u32> {
         return vec![];
     }
     // Split on whitespace and common punctuation boundaries
-    let tokens: Vec<&str> = trimmed.split(|c: char| c.is_whitespace())
+    let tokens: Vec<&str> = trimmed
+        .split(|c: char| c.is_whitespace())
         .filter(|s| !s.is_empty())
         .collect();
 
@@ -1540,9 +1715,7 @@ fn tokenize_one(text: &str) -> Vec<u32> {
 /// The entire tokenization runs in Rust with py.allow_threads().
 #[pyfunction]
 fn batch_tokenize_fast(py: Python, prompts: Vec<String>) -> PyResult<Vec<Vec<u32>>> {
-    py.allow_threads(|| {
-        Ok(prompts.iter().map(|p| tokenize_one(p)).collect())
-    })
+    py.allow_threads(|| Ok(prompts.iter().map(|p| tokenize_one(p)).collect()))
 }
 
 /// Single prompt tokenize with GIL released.
@@ -1584,10 +1757,10 @@ fn tokenizer_vocab_size(_py: Python) -> PyResult<u32> {
 struct GpuNetBridge {
     gpu_id: i32,
     ctx: u64,
-    stream_out: u64,     // CUDA stream for DtoH (GPU → pinned)
-    stream_in: u64,      // CUDA stream for HtoD (pinned → GPU)
-    send_buf: *mut u8,   // Pinned host memory for outgoing tensor data
-    recv_buf: *mut u8,   // Pinned host memory for incoming tensor data
+    stream_out: u64,   // CUDA stream for DtoH (GPU → pinned)
+    stream_in: u64,    // CUDA stream for HtoD (pinned → GPU)
+    send_buf: *mut u8, // Pinned host memory for outgoing tensor data
+    recv_buf: *mut u8, // Pinned host memory for incoming tensor data
     buf_size: usize,
     tcp: Mutex<Option<std::net::TcpStream>>,
 }
@@ -1606,8 +1779,7 @@ impl GpuNetBridge {
     #[new]
     fn new(gpu_id: i32, buf_size_mb: Option<usize>) -> PyResult<Self> {
         // Initialize CUDA driver (safe to call multiple times)
-        cuda_ffi::init()
-            .map_err(|e| PyValueError::new_err(format!("CUDA init: {e}")))?;
+        cuda_ffi::init().map_err(|e| PyValueError::new_err(format!("CUDA init: {e}")))?;
 
         let buf_size = buf_size_mb.unwrap_or(64) * 1024 * 1024;
 
@@ -1622,14 +1794,27 @@ impl GpuNetBridge {
         let stream_in = cuda_ffi::stream_create()
             .map_err(|e| PyValueError::new_err(format!("stream_in: {e}")))?;
 
-        let send_buf = cuda_ffi::mem_alloc_host(buf_size)
-            .map_err(|e| PyValueError::new_err(format!("pinned send_buf ({} MB): {e}", buf_size / (1024*1024))))?;
-        let recv_buf = cuda_ffi::mem_alloc_host(buf_size)
-            .map_err(|e| PyValueError::new_err(format!("pinned recv_buf ({} MB): {e}", buf_size / (1024*1024))))?;
+        let send_buf = cuda_ffi::mem_alloc_host(buf_size).map_err(|e| {
+            PyValueError::new_err(format!(
+                "pinned send_buf ({} MB): {e}",
+                buf_size / (1024 * 1024)
+            ))
+        })?;
+        let recv_buf = cuda_ffi::mem_alloc_host(buf_size).map_err(|e| {
+            PyValueError::new_err(format!(
+                "pinned recv_buf ({} MB): {e}",
+                buf_size / (1024 * 1024)
+            ))
+        })?;
 
         Ok(GpuNetBridge {
-            gpu_id, ctx, stream_out, stream_in,
-            send_buf, recv_buf, buf_size,
+            gpu_id,
+            ctx,
+            stream_out,
+            stream_in,
+            send_buf,
+            recv_buf,
+            buf_size,
             tcp: Mutex::new(None),
         })
     }
@@ -1642,14 +1827,20 @@ impl GpuNetBridge {
         let addr = format!("{}:{}", host, port);
         // Try parsing as SocketAddr (IP), fallback to DNS resolve via connect()
         let stream = match addr.parse::<std::net::SocketAddr>() {
-            Ok(sock_addr) => TcpStream::connect_timeout(
-                &sock_addr, std::time::Duration::from_secs(30)),
-            Err(_) => TcpStream::connect(&addr),  // hostname: DNS resolve
-        }.map_err(|e| PyConnectionError::new_err(format!("connect {addr}: {e}")))?;
+            Ok(sock_addr) => {
+                TcpStream::connect_timeout(&sock_addr, std::time::Duration::from_secs(30))
+            }
+            Err(_) => TcpStream::connect(&addr), // hostname: DNS resolve
+        }
+        .map_err(|e| PyConnectionError::new_err(format!("connect {addr}: {e}")))?;
 
         stream.set_nodelay(true).ok();
-        stream.set_read_timeout(Some(std::time::Duration::from_secs(120))).ok();
-        stream.set_write_timeout(Some(std::time::Duration::from_secs(120))).ok();
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(120)))
+            .ok();
+        stream
+            .set_write_timeout(Some(std::time::Duration::from_secs(120)))
+            .ok();
 
         // Large socket buffers for tensor payloads
         #[cfg(target_os = "linux")]
@@ -1658,10 +1849,20 @@ impl GpuNetBridge {
             let fd = stream.as_raw_fd();
             unsafe {
                 let buf_sz: libc::c_int = 4 * 1024 * 1024;
-                libc::setsockopt(fd, libc::SOL_SOCKET, libc::SO_RCVBUF,
-                    &buf_sz as *const _ as *const libc::c_void, 4);
-                libc::setsockopt(fd, libc::SOL_SOCKET, libc::SO_SNDBUF,
-                    &buf_sz as *const _ as *const libc::c_void, 4);
+                libc::setsockopt(
+                    fd,
+                    libc::SOL_SOCKET,
+                    libc::SO_RCVBUF,
+                    &buf_sz as *const _ as *const libc::c_void,
+                    4,
+                );
+                libc::setsockopt(
+                    fd,
+                    libc::SOL_SOCKET,
+                    libc::SO_SNDBUF,
+                    &buf_sz as *const _ as *const libc::c_void,
+                    4,
+                );
             }
         }
 
@@ -1699,13 +1900,18 @@ impl GpuNetBridge {
     ) -> PyResult<(u8, Vec<u32>, usize)> {
         if in_bytes > self.buf_size {
             return Err(PyValueError::new_err(format!(
-                "tensor {} bytes > pinned buffer {} bytes", in_bytes, self.buf_size)));
+                "tensor {} bytes > pinned buffer {} bytes",
+                in_bytes, self.buf_size
+            )));
         }
 
         // Grab TCP connection (Mutex) and extract raw pointer for use in allow_threads
-        let mut tcp_guard = self.tcp.lock()
+        let mut tcp_guard = self
+            .tcp
+            .lock()
             .map_err(|_| PyValueError::new_err("bridge mutex poisoned"))?;
-        let tcp = tcp_guard.as_mut()
+        let tcp = tcp_guard
+            .as_mut()
             .ok_or_else(|| PyConnectionError::new_err("GpuNetBridge not connected"))?;
         let tcp_addr = tcp as *mut std::net::TcpStream as usize;
 
@@ -1769,7 +1975,9 @@ impl GpuNetBridge {
                 .map_err(|e| PyConnectionError::new_err(format!("recv magic: {e}")))?;
             if &resp_magic != b"VTP1" {
                 return Err(PyConnectionError::new_err(format!(
-                    "bad VTP response magic: {:?}", resp_magic)));
+                    "bad VTP response magic: {:?}",
+                    resp_magic
+                )));
             }
 
             let mut meta = [0u8; 2];
@@ -1781,7 +1989,8 @@ impl GpuNetBridge {
             let mut shape_buf = vec![0u8; out_ndim * 4];
             tcp.read_exact(&mut shape_buf)
                 .map_err(|e| PyConnectionError::new_err(format!("recv shape: {e}")))?;
-            let out_shape: Vec<u32> = shape_buf.chunks_exact(4)
+            let out_shape: Vec<u32> = shape_buf
+                .chunks_exact(4)
                 .map(|c| u32::from_be_bytes([c[0], c[1], c[2], c[3]]))
                 .collect();
 
@@ -1792,7 +2001,9 @@ impl GpuNetBridge {
 
             if out_bytes > buf_size {
                 return Err(PyValueError::new_err(format!(
-                    "response {} bytes > pinned buffer {} bytes", out_bytes, buf_size)));
+                    "response {} bytes > pinned buffer {} bytes",
+                    out_bytes, buf_size
+                )));
             }
 
             // Read payload directly into pinned memory
@@ -1832,7 +2043,10 @@ impl GpuNetBridge {
     fn info(&self) -> std::collections::HashMap<String, String> {
         let mut m = std::collections::HashMap::new();
         m.insert("gpu_id".into(), self.gpu_id.to_string());
-        m.insert("buf_size_mb".into(), (self.buf_size / (1024 * 1024)).to_string());
+        m.insert(
+            "buf_size_mb".into(),
+            (self.buf_size / (1024 * 1024)).to_string(),
+        );
         m.insert("connected".into(), self.is_connected().to_string());
         m
     }
@@ -1893,10 +2107,14 @@ fn _vtp_server_handle_conn_gpu(
             Ok(()) => {}
             Err(_) => break,
         }
-        if &magic != b"VTP1" { break; }
+        if &magic != b"VTP1" {
+            break;
+        }
 
         let mut hdr = [0u8; 10];
-        if stream.read_exact(&mut hdr).is_err() { break; }
+        if stream.read_exact(&mut hdr).is_err() {
+            break;
+        }
         let start = u16::from_be_bytes([hdr[0], hdr[1]]);
         let end = u16::from_be_bytes([hdr[2], hdr[3]]);
         let seq_len = u32::from_be_bytes([hdr[4], hdr[5], hdr[6], hdr[7]]);
@@ -1904,23 +2122,34 @@ fn _vtp_server_handle_conn_gpu(
         let dtype = hdr[9];
 
         let mut shape_buf = vec![0u8; ndim * 4];
-        if stream.read_exact(&mut shape_buf).is_err() { break; }
-        let shape: Vec<u32> = shape_buf.chunks_exact(4)
+        if stream.read_exact(&mut shape_buf).is_err() {
+            break;
+        }
+        let shape: Vec<u32> = shape_buf
+            .chunks_exact(4)
             .map(|c| u32::from_be_bytes([c[0], c[1], c[2], c[3]]))
             .collect();
 
         let mut len_buf = [0u8; 4];
-        if stream.read_exact(&mut len_buf).is_err() { break; }
+        if stream.read_exact(&mut len_buf).is_err() {
+            break;
+        }
         let payload_len = u32::from_be_bytes(len_buf) as usize;
-        if payload_len > buf_size { break; }
+        if payload_len > buf_size {
+            break;
+        }
 
         // ── Read payload into pinned memory (no GIL) ─────────────
         let recv_buf = recv_pinned as *mut u8;
         let recv_slice = unsafe { std::slice::from_raw_parts_mut(recv_buf, payload_len) };
-        if stream.read_exact(recv_slice).is_err() { break; }
+        if stream.read_exact(recv_slice).is_err() {
+            break;
+        }
 
         // ── DMA: pinned → GPU input buffer (no GIL) ─────────────
-        if cuda_ffi::ctx_set_current(ctx).is_err() { break; }
+        if cuda_ffi::ctx_set_current(ctx).is_err() {
+            break;
+        }
         if cuda_ffi::memcpy_htod(gpu_in_addr, recv_buf as *const u8, payload_len).is_err() {
             break;
         }
@@ -1930,14 +2159,17 @@ fn _vtp_server_handle_conn_gpu(
         //   → (out_ptr: int, out_bytes: int, out_dtype: int, out_shape: list[int])
         // DtoH done inside GIL to keep output tensor alive.
         let result: Result<(usize, u8, Vec<u32>), PyErr> = Python::with_gil(|py| {
-            let ret = forward_fn.call1(py, (
-                payload_len as u64,
-                dtype as u32,
-                shape.clone(),
-                start as u32,
-                end as u32,
-                seq_len,
-            ))?;
+            let ret = forward_fn.call1(
+                py,
+                (
+                    payload_len as u64,
+                    dtype as u32,
+                    shape.clone(),
+                    start as u32,
+                    end as u32,
+                    seq_len,
+                ),
+            )?;
 
             let bound = ret.as_ref(py);
             let out_ptr: u64 = bound.get_item(0)?.extract()?;
@@ -1947,7 +2179,9 @@ fn _vtp_server_handle_conn_gpu(
 
             if out_bytes > buf_size {
                 return Err(PyValueError::new_err(format!(
-                    "output {} > buffer {}", out_bytes, buf_size)));
+                    "output {} > buffer {}",
+                    out_bytes, buf_size
+                )));
             }
 
             // DtoH: GPU output → pinned send buffer (tensor alive in Python)
@@ -1976,11 +2210,13 @@ fn _vtp_server_handle_conn_gpu(
         }
         resp_hdr.extend_from_slice(&(out_bytes as u32).to_be_bytes());
 
-        if stream.write_all(&resp_hdr).is_err() { break; }
-        let send_slice = unsafe {
-            std::slice::from_raw_parts(send_pinned as *const u8, out_bytes)
-        };
-        if stream.write_all(send_slice).is_err() { break; }
+        if stream.write_all(&resp_hdr).is_err() {
+            break;
+        }
+        let send_slice = unsafe { std::slice::from_raw_parts(send_pinned as *const u8, out_bytes) };
+        if stream.write_all(send_slice).is_err() {
+            break;
+        }
     }
 }
 
@@ -1990,9 +2226,9 @@ struct RustVTPServer {
     running: Arc<std::sync::atomic::AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
     ctx: u64,
-    recv_pinned: usize,  // CUDA pinned host memory (as usize for Send)
+    recv_pinned: usize, // CUDA pinned host memory (as usize for Send)
     send_pinned: usize,
-    gpu_in_addr: u64,    // GPU input buffer address (Python-owned torch tensor)
+    gpu_in_addr: u64, // GPU input buffer address (Python-owned torch tensor)
     buf_size: usize,
 }
 
@@ -2003,17 +2239,18 @@ impl RustVTPServer {
     /// gpu_in_ptr: data_ptr() of a pre-allocated GPU tensor (Python keeps it alive).
     #[new]
     fn new(gpu_id: i32, buf_size_mb: usize, gpu_in_ptr: u64) -> PyResult<Self> {
-        cuda_ffi::init()
-            .map_err(|e| PyValueError::new_err(format!("cuda init: {e}")))?;
+        cuda_ffi::init().map_err(|e| PyValueError::new_err(format!("cuda init: {e}")))?;
         let ctx = cuda_ffi::device_primary_ctx_retain(gpu_id)
             .map_err(|e| PyValueError::new_err(format!("ctx GPU {gpu_id}: {e}")))?;
         cuda_ffi::ctx_set_current(ctx)
             .map_err(|e| PyValueError::new_err(format!("ctx set: {e}")))?;
         let buf_size = buf_size_mb * 1024 * 1024;
         let recv_pinned = cuda_ffi::mem_alloc_host(buf_size)
-            .map_err(|e| PyValueError::new_err(format!("alloc recv pinned: {e}")))? as usize;
+            .map_err(|e| PyValueError::new_err(format!("alloc recv pinned: {e}")))?
+            as usize;
         let send_pinned = cuda_ffi::mem_alloc_host(buf_size)
-            .map_err(|e| PyValueError::new_err(format!("alloc send pinned: {e}")))? as usize;
+            .map_err(|e| PyValueError::new_err(format!("alloc send pinned: {e}")))?
+            as usize;
 
         Ok(RustVTPServer {
             running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -2057,10 +2294,12 @@ impl RustVTPServer {
                     match listener.accept() {
                         Ok((stream, _addr)) => {
                             stream.set_nodelay(true).ok();
-                            stream.set_read_timeout(
-                                Some(std::time::Duration::from_secs(120))).ok();
-                            stream.set_write_timeout(
-                                Some(std::time::Duration::from_secs(120))).ok();
+                            stream
+                                .set_read_timeout(Some(std::time::Duration::from_secs(120)))
+                                .ok();
+                            stream
+                                .set_write_timeout(Some(std::time::Duration::from_secs(120)))
+                                .ok();
 
                             #[cfg(target_os = "linux")]
                             {
@@ -2068,19 +2307,33 @@ impl RustVTPServer {
                                 let fd = stream.as_raw_fd();
                                 let buf_sz: libc::c_int = 4 * 1024 * 1024;
                                 unsafe {
-                                    libc::setsockopt(fd, libc::SOL_SOCKET, libc::SO_RCVBUF,
+                                    libc::setsockopt(
+                                        fd,
+                                        libc::SOL_SOCKET,
+                                        libc::SO_RCVBUF,
                                         &buf_sz as *const _ as *const libc::c_void,
-                                        std::mem::size_of::<libc::c_int>() as libc::socklen_t);
-                                    libc::setsockopt(fd, libc::SOL_SOCKET, libc::SO_SNDBUF,
+                                        std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+                                    );
+                                    libc::setsockopt(
+                                        fd,
+                                        libc::SOL_SOCKET,
+                                        libc::SO_SNDBUF,
                                         &buf_sz as *const _ as *const libc::c_void,
-                                        std::mem::size_of::<libc::c_int>() as libc::socklen_t);
+                                        std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+                                    );
                                 }
                             }
 
                             // Handle connection in-line (one at a time, shares pinned buffers)
                             _vtp_server_handle_conn_gpu(
-                                stream, running.clone(), forward_fn.clone(),
-                                ctx, recv_pinned, send_pinned, gpu_in_addr, buf_size,
+                                stream,
+                                running.clone(),
+                                forward_fn.clone(),
+                                ctx,
+                                recv_pinned,
+                                send_pinned,
+                                gpu_in_addr,
+                                buf_size,
                             );
                         }
                         Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
@@ -2101,7 +2354,8 @@ impl RustVTPServer {
     }
 
     fn stop(&mut self) -> PyResult<()> {
-        self.running.store(false, std::sync::atomic::Ordering::Release);
+        self.running
+            .store(false, std::sync::atomic::Ordering::Release);
         if let Some(t) = self.thread.take() {
             t.join().ok();
         }
@@ -2116,7 +2370,8 @@ impl RustVTPServer {
 #[cfg(feature = "cuda")]
 impl Drop for RustVTPServer {
     fn drop(&mut self) {
-        self.running.store(false, std::sync::atomic::Ordering::Release);
+        self.running
+            .store(false, std::sync::atomic::Ordering::Release);
         if let Some(t) = self.thread.take() {
             t.join().ok();
         }
@@ -2186,9 +2441,13 @@ fn vramancer_rust(_py: Python, m: &PyModule) -> PyResult<()> {
 #[pyfunction]
 fn cuda_available() -> bool {
     #[cfg(feature = "cuda")]
-    { cuda_ffi::cuda_available() }
+    {
+        cuda_ffi::cuda_available()
+    }
     #[cfg(not(feature = "cuda"))]
-    { false }
+    {
+        false
+    }
 }
 
 /// Injecte un buffer CPU directement dans la VRAM via cuMemcpyHtoD (GIL released)
