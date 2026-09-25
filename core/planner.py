@@ -74,12 +74,12 @@ class ModelProfile:
 
 
 def _shards(path: str) -> List[str]:
-    p = Path(path)
-    m = re.match(r"(.*)-(\d{5})-of-(\d{5})\.gguf$", p.name)
+    # Sur la chaîne telle quelle : Path() convertirait les « / » en « \ » sous Windows.
+    m = re.match(r"(.*)-(\d{5})-of-(\d{5})\.gguf$", str(path))
     if not m:
-        return [str(p)]
+        return [str(path)]
     n = int(m.group(3))
-    return [str(p.with_name(f"{m.group(1)}-{i:05d}-of-{n:05d}.gguf")) for i in range(1, n + 1)]
+    return [f"{m.group(1)}-{i:05d}-of-{n:05d}.gguf" for i in range(1, n + 1)]
 
 
 def profile_model(path: str) -> ModelProfile:

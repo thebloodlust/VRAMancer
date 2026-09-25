@@ -37,9 +37,10 @@ def _fake_bench(fast_idx=0, per_gb_fast=0.30, per_gb_slow=1.00, model_gb=27.3, c
 def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(st, "CACHE_FILE", tmp_path / "splits.json")
     model = tmp_path / "m.gguf"
-    with open(model, "wb") as f:
-        f.seek(int(27.3 * GIB) - 1)
-        f.write(b"\0")                      # fichier creux de 27.3 GiB
+    model.write_bytes(b"\0")
+    # 27.3 GiB simulés : un fichier creux de cette taille est réellement écrit sous
+    # Windows (NTFS) et remplissait le disque de la CI.
+    monkeypatch.setattr(st, "_model_size", lambda p: int(27.3 * GIB))
     binary = tmp_path / "llama-server"
     binary.write_text("")
     (tmp_path / "llama-bench").write_text("")

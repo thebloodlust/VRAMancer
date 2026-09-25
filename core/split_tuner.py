@@ -35,10 +35,16 @@ CACHE_FILE = Path.home() / ".cache" / "vramancer" / "splits.json"
 
 # ── Cache ─────────────────────────────────────────────────────────────────────
 
+def _model_size(model_path: str) -> int:
+    """Taille du fichier en octets (0 s'il n'existe pas)."""
+    p = Path(model_path)
+    return p.stat().st_size if p.exists() else 0
+
+
 def _key(model_path: str, devices: List[dict], n_ctx: int) -> str:
     """Clé = modèle (nom + taille, pas de hash de 27 GB) + GPU dans l'ordre + contexte."""
     p = Path(model_path)
-    size = p.stat().st_size if p.exists() else 0
+    size = _model_size(model_path)
     names = "+".join(d["name"] for d in devices)
     return f"{p.name}|{size}|{names}|ctx{n_ctx}"
 
@@ -167,7 +173,7 @@ def tune(model_path: str, server_binary, n_ctx: int = 16384,
         return None
 
     env = _runtime_env(server_binary)
-    size = Path(model_path).stat().st_size
+    size = _model_size(model_path)
     report(f"{len(devices)} GPU : " + ", ".join(d['name'] for d in devices))
     report(f"Modèle {size / 2**30:.1f} GiB, contexte {n_ctx}")
 
