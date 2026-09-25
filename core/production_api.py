@@ -3,6 +3,7 @@
 VRAMancer API — Production Server
 OpenAI-compatible REST API: health, monitoring, inference (generate/completions/chat).
 """
+from __future__ import annotations  # annotations « X | None » en Python 3.9
 import os
 import sys
 import time

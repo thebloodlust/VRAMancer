@@ -85,8 +85,12 @@ def test_runtime_estimator_install_and_effect():
 def test_multicast_endpoint():
     c = _client()
     r = c.get("/api/telemetry/multicast", headers={"X-API-TOKEN": SECRET})
-    assert r.status_code == 200
     js = r.get_json()
+    if r.status_code == 503:
+        # Machine sans route multicast (runner macOS de la CI) : réponse explicite, pas un 500.
+        assert js.get('ok') is False and 'multicast' in js.get('error', '')
+        return
+    assert r.status_code == 200
     assert js.get('ok') is True
     assert js.get('bytes') > 0
 

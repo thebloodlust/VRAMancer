@@ -121,8 +121,10 @@ def test_amd_detection_delegates_to_sysfs_module(tmp_path, monkeypatch):
     (dev / "mem_info_vram_used").write_text("0\n")
     (dev / "uevent").write_text("DRIVER=amdgpu\nPCI_ID=1002:744C\n")
     monkeypatch.setattr(amd.glob, "glob", lambda pat: [] if "hwmon" in pat else [str(dev)])
+    monkeypatch.setattr(mod.platform, "system", lambda: "Linux")   # la CI tourne aussi sur macOS
+    monkeypatch.setattr(mod, "_has_nvidia", lambda: False)
     assert mod._has_amd_gpu() is True
-    assert mod._platform_key() in ("linux-cuda", "linux-vulkan")  # cuda gagne si nvidia-smi répond
+    assert mod._platform_key() == "linux-vulkan"
 
 
 def test_compat_flags_adapt_to_binary_help(monkeypatch):

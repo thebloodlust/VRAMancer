@@ -242,7 +242,10 @@ def system_info():
         import platform
         mem = psutil.virtual_memory()
         disk = psutil.disk_usage('/')
-        freq = psutil.cpu_freq()
+        try:
+            freq = psutil.cpu_freq()        # lève sur macOS Apple Silicon (CI macos-latest)
+        except Exception:
+            freq = None
         return jsonify({
             'platform': platform.system(),
             'architecture': platform.machine(),

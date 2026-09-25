@@ -9,6 +9,7 @@ Si une connexion subit des latences ou des erreurs, son score de force diminue.
 Le PlacementEngine utilise ce score pour délaisser organiquement les noeuds malades,
 sans nécessiter d'intervention humaine.
 """
+from __future__ import annotations  # annotations « X | None » en Python 3.9
 
 import time
 import math

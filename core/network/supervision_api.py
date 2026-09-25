@@ -521,6 +521,10 @@ def telemetry_multicast():
         ttl = 1
         sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, ttl)
         sock.sendto(payload, (group, port))
+    except OSError as e:
+        # Pas de route multicast (ex. runner macOS : errno 65) : dire pourquoi, pas un 500.
+        return jsonify({'ok': False, 'error': f'multicast indisponible : {e}',
+                        'group': group, 'port': port}), 503
     finally:
         sock.close()
     TELEMETRY_PACKETS.labels('out').inc()

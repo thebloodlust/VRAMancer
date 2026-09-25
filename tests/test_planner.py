@@ -27,7 +27,7 @@ def test_expert_args_places_top_layers_on_primary_then_secondary_then_ram():
     assert a[:4] == ["-ngl", "99", "-ts", "99/1"]      # 2e GPU gardé déclaré (piège -sm none)
     rules = a[a.index("-ot") + 1].split(";")
     assert rules[0].startswith(r"blk\.(24|25|26|27|28|29|30|31|32|33)\.") and rules[0].endswith("=Vulkan1")
-    assert rules[1].startswith(r"blk\.(0|1|") and rules[1].endswith("|23)\.ffn_(gate|up|down)_exps\.weight=CPU")
+    assert rules[1].startswith(r"blk\.(0|1|") and rules[1].endswith(r"|23)\.ffn_(gate|up|down)_exps\.weight=CPU")
 
 
 def test_expert_args_all_on_primary_has_no_override():
