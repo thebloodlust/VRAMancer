@@ -675,7 +675,8 @@ def dump_flags() -> str:
         lines.append("| Flag | Description |")
         lines.append("|------|-------------|")
         for name, desc in rows:
-            lines.append(f"| `{name}` | {desc.replace('|', '\\|')} |")
+            cell = desc.replace("|", "\\|")      # pas d'antislash dans une f-string avant 3.12
+            lines.append(f"| `{name}` | {cell} |")
         lines.append("")
     return "\n".join(lines)
 

@@ -478,7 +478,8 @@ def print_summary(os_info: dict, gpu_info: dict, mode: str, venv_used: bool):
     activate = ""
     if venv_used:
         if os_info["system"] == "windows":
-            activate = f"  {cyan('.venv\\Scripts\\activate')}"
+            win_activate = ".venv\\Scripts\\activate"   # antislash hors f-string (< 3.12)
+            activate = f"  {cyan(win_activate)}"
         else:
             activate = f"  {cyan('source .venv/bin/activate')}"
 
