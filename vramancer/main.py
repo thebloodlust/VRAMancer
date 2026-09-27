@@ -125,6 +125,8 @@ def main(argv=None):
     p_pl.add_argument("model", help="Chemin du fichier .gguf (1er fragment si découpé)")
     p_pl.add_argument("--no-verify", action="store_true", help="Ne pas vérifier le placement retenu")
     p_pl.add_argument("--depth", type=int, default=512, help="Profondeur de contexte des mesures")
+    p_pl.add_argument("--rpc", type=str, default=None,
+                      help="Nœuds réseau à mesurer (défaut : ceux qui ont rejoint via invite ; 'none' pour aucun)")
 
     # ---- predict (avant téléchargement) ----
     p_pr = sub.add_parser("predict", help="Tient ou pas, où vont les poids, quel débit — AVANT de télécharger (org/depot/fichier.gguf ou chemin local)")
@@ -212,7 +214,15 @@ def main(argv=None):
     elif args.command == "plan":
         from core.llama_server_backend import get_or_download_binary
         from core.planner import plan as _plan
-        res = _plan(args.model, get_or_download_binary(args.model), verify=not args.no_verify, depth=args.depth)
+        if args.rpc == "none":
+            rpc = None
+        elif args.rpc:
+            rpc = [h.strip() for h in args.rpc.split(",") if h.strip()]
+        else:
+            from core.join import joined_rpc_hosts
+            rpc = joined_rpc_hosts() or None
+        res = _plan(args.model, get_or_download_binary(args.model), verify=not args.no_verify,
+                    depth=args.depth, rpc_hosts=rpc)
         if res:
             print("\nArguments llama-server :", " ".join(res.args))
         sys.exit(0 if res else 1)

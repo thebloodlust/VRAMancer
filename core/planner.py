@@ -183,6 +183,7 @@ class Plan:
     measured: Optional[Measure] = None
     detail: Dict = field(default_factory=dict)
     trace: List[str] = field(default_factory=list)
+    rpc: List[str] = field(default_factory=list)     # nœuds réseau retenus (vide = local)
 
 
 def plan_moe_tiers(prof: ModelProfile, devices: List[dict], binary, env: dict,
@@ -264,7 +265,7 @@ def plan_moe_tiers(prof: ModelProfile, devices: List[dict], binary, env: dict,
 
 def plan_layer_split(prof: ModelProfile, devices: List[dict], binary, env: dict,
                      report: Callable = print, depth: int = 512,
-                     reserve_gib: float = 1.0) -> Optional[Plan]:
+                     reserve_gib: float = 1.0, extra: Optional[List[str]] = None) -> Optional[Plan]:
     """t = Σ f_d·T_d : autant de mesures que de GPU pour obtenir les T_d, puis remplissage
     du GPU le moins cher jusqu'à sa capacité, et ainsi de suite."""
     import numpy as np
@@ -280,7 +281,8 @@ def plan_layer_split(prof: ModelProfile, devices: List[dict], binary, env: dict,
         splits.append(s)
     rows, ys = [], []
     for s in splits:
-        m = bench(binary, prof.shards[0], ["-ngl", "99", "-ts", "/".join(f"{x:.4f}" for x in s)],
+        m = bench(binary, prof.shards[0],
+                  ["-ngl", "99", "-ts", "/".join(f"{x:.4f}" for x in s)] + list(extra or []),
                   env, depth=depth, n_gen=64)
         label = " / ".join(f"{x * 100:.0f}%" for x in s)
         if not m.ok:
@@ -302,14 +304,37 @@ def plan_layer_split(prof: ModelProfile, devices: List[dict], binary, env: dict,
     pred = 1 / float(np.dot(f, T))
     report(f"  coût relatif par GPU : " + ", ".join(f"{devices[i]['name'][:18]} {T[i] * 1e3:.2f} ms" for i in range(n)))
     return Plan(model=prof.path, regime="layer-split",
-                args=["-ngl", "99", "-ts", "/".join(f"{x:.4f}" for x in f)],
+                args=["-ngl", "99", "-ts", "/".join(f"{x:.4f}" for x in f)] + list(extra or []),
                 predicted_tg=pred, detail={"split": [round(x, 4) for x in f]})
 
 
 # ── Point d'entrée ────────────────────────────────────────────────────────────
 
+NET_MIN_GAIN = 1.03        # un nœud réseau doit faire gagner au moins 3 % pour être gardé
+
+
+def _plan_local(prof: ModelProfile, devices: List[dict], binary, env, report, depth) -> Optional[Plan]:
+    vram = sum((d.get("free_mib") or d["total_mib"]) for d in devices) / 1024
+    if prof.total_bytes / GIB <= vram - 1.0 * len(devices) and len(devices) > 1:
+        report("Régime : le modèle tient dans la VRAM cumulée → répartition des couches")
+        return plan_layer_split(prof, devices, binary, env, report, depth=depth)
+    if prof.is_moe and prof.hot_bytes / GIB < (devices[0].get("free_mib") or devices[0]["total_mib"]) / 1024 - 1.5:
+        report("Régime : MoE plus gros que la VRAM → chaud sur le GPU principal, experts par étages")
+        return plan_moe_tiers(prof, devices, binary, env, report, depth=depth)
+    if prof.total_bytes / GIB <= vram - 1.0:
+        return Plan(model=prof.path, regime="single-gpu", args=["-ngl", "99"], predicted_tg=None)
+    report("Régime non couvert (dense plus gros que la VRAM, ou partie chaude trop grosse) : "
+           "utiliser le débordement par couches (-ngl) — à venir.")
+    return None
+
+
 def plan(model_path: str, binary, report: Callable = print, verify: bool = True,
-         depth: int = 512) -> Optional[Plan]:
+         depth: int = 512, rpc_hosts: Optional[List[str]] = None) -> Optional[Plan]:
+    """Placement mesuré. Avec des nœuds réseau (`rpc_hosts`), les mesure AUSSI et ne les
+    garde que s'ils font gagner au moins 3 % : mesuré le 2026-09-28, une RTX 5070 Ti sur le
+    réseau vaut une carte locale en répartition par couches (Qwen3.6 : 104.8 tok/s) mais fait
+    PERDRE DeepSeek-V4 (9.4 contre 11.8). Le réseau ne reçoit que des couches entières
+    contiguës — jamais des experts épars (14 allers-retours par token : mesuré plus lent)."""
     from core.llama_server_backend import backend_devices, _runtime_env
     env = _runtime_env(binary)
     report("Lecture de l'en-tête GGUF…")
@@ -322,48 +347,94 @@ def plan(model_path: str, binary, report: Callable = print, verify: bool = True,
     if not devices:
         report("Aucun GPU visible par llama.cpp.")
         return None
-    if prof.total_bytes / GIB <= vram - 1.0 * len(devices) and len(devices) > 1:
-        report("Régime : le modèle tient dans la VRAM cumulée → répartition des couches")
-        p = plan_layer_split(prof, devices, binary, env, report, depth=depth)
-    elif prof.is_moe and prof.hot_bytes / GIB < (devices[0].get("free_mib") or devices[0]["total_mib"]) / 1024 - 1.5:
-        report("Régime : MoE plus gros que la VRAM → chaud sur le GPU principal, experts par étages")
-        p = plan_moe_tiers(prof, devices, binary, env, report, depth=depth)
-    else:
-        report("Régime non couvert (dense plus gros que la VRAM, ou partie chaude trop grosse) : "
-               "utiliser le débordement par couches (-ngl) — à venir.")
-        return None
+    p = _plan_local(prof, devices, binary, env, report, depth)
+    if p is not None and p.predicted_tg:
+        report(f"Placement local retenu, débit prédit {p.predicted_tg:.1f} tok/s")
+    if p is not None and (verify or rpc_hosts):
+        p.measured = bench(binary, prof.shards[0], p.args, env, depth=depth, n_gen=64, reps=2)
+        m = p.measured
+        report((f"Vérification : {m.tg:.2f} tok/s mesurés"
+                + (f" (prédit {p.predicted_tg:.2f}, écart {100 * (m.tg / p.predicted_tg - 1):+.1f} %)"
+                   if p.predicted_tg else "")) if m.ok else "Vérification : ÉCHEC")
+
+    if rpc_hosts:
+        p = _arbitrate_nodes(prof, p, list(rpc_hosts), binary, env, report, depth)
     if p is None:
         report("Aucun placement valide trouvé.")
         return None
-    report(f"Placement retenu, débit prédit {p.predicted_tg:.1f} tok/s")
-    if verify:
-        m = bench(binary, prof.shards[0], p.args, env, depth=depth, n_gen=64, reps=2)
-        p.measured = m
-        report(f"Vérification : {m.tg:.2f} tok/s mesurés (prédit {p.predicted_tg:.2f}, "
-               f"écart {100 * (m.tg / p.predicted_tg - 1):+.1f} %)" if m.ok else "Vérification : ÉCHEC")
-    _save(p)
+    _save(p, rpc_hosts)
     return p
 
 
-def _save(p: Plan) -> None:
+def _arbitrate_nodes(prof, local: Optional[Plan], hosts: List[str], binary, env, report,
+                     depth) -> Optional[Plan]:
+    """Mesure la répartition par couches AVEC les nœuds réseau ; garde le meilleur."""
+    from core.llama_server_backend import backend_devices
+    extra = ["--rpc", ",".join(hosts)]
+    devs = backend_devices(binary, rpc_hosts=hosts)          # nœuds en tête (ordre de -ts)
+    vram = sum((d.get("free_mib") or d["total_mib"]) for d in devs) / 1024
+    local_tg = local.measured.tg if local and local.measured and local.measured.ok else 0.0
+    report(f"Nœuds réseau : {', '.join(hosts)} — VRAM totale avec eux {vram:.1f} GiB")
+    decision = {"hosts": hosts, "local_tg": local_tg or None}
+    if prof.total_bytes / GIB > vram - 1.0 * len(devs):
+        report("  trop gros même avec les nœuds : pas d'essai réseau (experts épars sur le "
+               "réseau mesurés plus lents que la RAM)")
+        net = None
+    else:
+        report("  essai : couches entières réparties avec les nœuds réseau")
+        net = plan_layer_split(prof, devs, binary, env, report, depth=depth, extra=extra)
+        if net is not None:
+            net.measured = bench(binary, prof.shards[0], net.args, env, depth=depth, n_gen=64, reps=2)
+    net_tg = net.measured.tg if net and net.measured and net.measured.ok else 0.0
+    decision["net_tg"] = net_tg or None
+    if net_tg and net_tg > local_tg * NET_MIN_GAIN:
+        report(f"  → nœuds GARDÉS : {net_tg:.2f} tok/s contre {local_tg:.2f} en local"
+               + (f" (+{100 * (net_tg / local_tg - 1):.0f} %)" if local_tg else ""))
+        net.rpc = hosts
+        net.detail["nodes"] = dict(decision, kept=True)
+        return net
+    report(f"  → nœuds ÉCARTÉS pour ce modèle : {net_tg:.2f} tok/s avec eux, "
+           f"{local_tg:.2f} sans" if net_tg else "  → nœuds ÉCARTÉS pour ce modèle")
+    if local is not None:
+        local.detail["nodes"] = dict(decision, kept=False)
+    return local
+
+
+def _key(model_path: str, rpc_hosts: Optional[List[str]] = None) -> str:
+    k = f"{Path(model_path).name}|{Path(model_path).stat().st_size}"
+    return k + (f"|rpc={','.join(sorted(rpc_hosts))}" if rpc_hosts else "")
+
+
+def _save(p: Plan, rpc_hosts: Optional[List[str]] = None) -> None:
     try:
         cache = json.loads(PLAN_CACHE.read_text()) if PLAN_CACHE.exists() else {}
     except Exception:
         cache = {}
-    key = f"{Path(p.model).name}|{Path(p.model).stat().st_size}"
-    cache[key] = {"regime": p.regime, "args": p.args, "predicted_tg": p.predicted_tg,
-                  "measured_tg": p.measured.tg if p.measured else None, "detail": p.detail}
+    cache[_key(p.model, rpc_hosts)] = {
+        "regime": p.regime, "args": p.args, "predicted_tg": p.predicted_tg,
+        "measured_tg": p.measured.tg if p.measured else None, "detail": p.detail,
+        "use_rpc": bool(p.rpc)}
     PLAN_CACHE.parent.mkdir(parents=True, exist_ok=True)
     PLAN_CACHE.write_text(json.dumps(cache, indent=2, ensure_ascii=False))
 
 
-def cached_plan_args(model_path: str) -> Optional[List[str]]:
-    """Arguments llama.cpp d'un plan déjà calculé pour ce modèle (sinon None)."""
+def cached_plan(model_path: str, rpc_hosts: Optional[List[str]] = None) -> Optional[Dict]:
+    """Plan déjà calculé pour ce modèle ET cet ensemble de nœuds réseau (sinon None).
+
+    Avec des nœuds : {"args": …, "use_rpc": True} s'ils ont été gardés, ou
+    {"args": <plan local>, "use_rpc": False} s'ils ont été mesurés plus lents."""
     try:
         cache = json.loads(PLAN_CACHE.read_text())
-        return cache[f"{Path(model_path).name}|{Path(model_path).stat().st_size}"]["args"]
+        return cache[_key(model_path, rpc_hosts)]
     except Exception:
         return None
 
 
-__all__ = ["plan", "profile_model", "expert_args", "cached_plan_args", "ModelProfile", "Plan"]
+def cached_plan_args(model_path: str) -> Optional[List[str]]:
+    """Arguments llama.cpp du plan local déjà calculé pour ce modèle (sinon None)."""
+    e = cached_plan(model_path)
+    return e["args"] if e else None
+
+
+__all__ = ["plan", "profile_model", "expert_args", "cached_plan", "cached_plan_args",
+           "ModelProfile", "Plan"]

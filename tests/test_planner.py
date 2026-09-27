@@ -133,3 +133,52 @@ def test_model_size_counts_every_shard(tmp_path):
     for k in (1, 2):
         (tmp_path / f"m-0000{k}-of-00002.gguf").write_bytes(b"x" * 2 ** 20)
     assert _model_size_gib(tmp_path / "m-00001-of-00002.gguf") == pytest.approx(2 / 1024)
+
+
+# ── nœuds réseau : mesurés, gardés seulement s'ils font gagner ─────────────
+
+NET = [{"id": "RPC0", "name": "192.168.1.15:50052", "total_mib": 16211, "free_mib": 15428, "rpc": True}]
+
+
+def _net_setup(monkeypatch, tmp_path, local_tg, net_tg):
+    import core.llama_server_backend as lsb
+    monkeypatch.setattr(pl, "PLAN_CACHE", tmp_path / "plans.json")
+    monkeypatch.setattr(lsb, "backend_devices",
+                        lambda b, rpc_hosts=None: (NET if rpc_hosts else []) + DEVS[:1])
+    monkeypatch.setattr(lsb, "_runtime_env", lambda b: {})
+    model = tmp_path / "q.gguf"
+    model.write_bytes(b"x")
+    prof = pl.ModelProfile(path=str(model), shards=[str(model)], n_layers=40,
+                           total_bytes=int(27.3 * GIB), expert_bytes_per_layer={i: int(0.6 * GIB) for i in range(40)},
+                           expert_count=256, expert_used=8)
+    monkeypatch.setattr(pl, "profile_model", lambda p: prof)
+
+    def bench(binary, m, args, env, **kw):
+        return pl.Measure(pp=1000.0, tg=net_tg if "--rpc" in args else local_tg)
+    monkeypatch.setattr(pl, "bench", bench)
+    return str(model)
+
+
+def test_network_node_kept_when_measured_faster(monkeypatch, tmp_path):
+    """3090 seule + 5070 Ti réseau sur Qwen3.6 Q6_K : couches réparties > experts en RAM."""
+    m = _net_setup(monkeypatch, tmp_path, local_tg=60.0, net_tg=98.1)
+    p = pl.plan(m, "/b/llama-server", report=lambda *a: None, rpc_hosts=["192.168.1.15:50052"])
+    assert p.rpc == ["192.168.1.15:50052"] and "--rpc" in p.args
+    e = pl.cached_plan(m, ["192.168.1.15:50052"])
+    assert e["use_rpc"] is True
+    assert pl.cached_plan(m) is None                     # clé distincte sans nœud
+
+
+def test_network_node_rejected_when_slower(monkeypatch, tmp_path):
+    """DeepSeek-V4 : 9.4 tok/s avec le nœud, 11.8 sans → écarté, décision mise en cache."""
+    m = _net_setup(monkeypatch, tmp_path, local_tg=11.8, net_tg=9.4)
+    p = pl.plan(m, "/b/llama-server", report=lambda *a: None, rpc_hosts=["192.168.1.15:50052"])
+    assert p.rpc == [] and "--rpc" not in p.args
+    e = pl.cached_plan(m, ["192.168.1.15:50052"])
+    assert e["use_rpc"] is False and e["detail"]["nodes"]["net_tg"] == 9.4
+
+
+def test_small_gain_is_not_worth_a_network_dependency(monkeypatch, tmp_path):
+    m = _net_setup(monkeypatch, tmp_path, local_tg=100.0, net_tg=101.0)   # +1 % < 3 %
+    p = pl.plan(m, "/b/llama-server", report=lambda *a: None, rpc_hosts=["192.168.1.15:50052"])
+    assert p.rpc == []

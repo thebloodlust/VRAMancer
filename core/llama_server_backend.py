@@ -764,28 +764,35 @@ class LlamaServerBackend:
         # (contexte bien plus long que celui des mesures, VRAM prise entre-temps…), on
         # retombe sur la répartition par défaut au lieu d'échouer.
         attempts = [cmd]
-        if not self._rpc_hosts:
-            try:
-                from core.planner import cached_plan_args
-                plan_args = cached_plan_args(model_path)
-            except Exception:
-                plan_args = None
-            if plan_args:
-                base = []
-                skip = 0
-                for a in cmd:
-                    if skip:
-                        skip -= 1
-                        continue
-                    if a in ("--n-gpu-layers", "--tensor-split"):
-                        skip = 1
-                        continue
-                    base.append(a)
-                # llama-bench sépare les règles -ot par « ; », llama-server par « , »
-                plan_args = [a.replace(";", ",") if j and plan_args[j - 1] in ("-ot", "--override-tensor")
-                             else a for j, a in enumerate(plan_args)]
-                attempts = [base + plan_args, cmd]
-                log.info("Placement mesuré (vramancer plan) : %s", " ".join(plan_args)[:160])
+        try:
+            from core.planner import cached_plan
+            entry = cached_plan(model_path, self._rpc_hosts or None)
+        except Exception:
+            entry = None
+        if entry and entry.get("args"):
+            # Nœuds réseau mesurés plus lents pour CE modèle (ex. DeepSeek-V4 : 9.4 contre
+            # 11.8 tok/s) : on les écarte ; gardés, leur --rpc est déjà dans les arguments.
+            drop = {"--n-gpu-layers", "--tensor-split", "--rpc"}
+            base, skip = [], 0
+            for a in cmd:
+                if skip:
+                    skip -= 1
+                    continue
+                if a in drop:
+                    skip = 1
+                    continue
+                base.append(a)
+            plan_args = entry["args"]
+            # llama-bench sépare les règles -ot par « ; », llama-server par « , »
+            plan_args = [a.replace(";", ",") if j and plan_args[j - 1] in ("-ot", "--override-tensor")
+                         else a for j, a in enumerate(plan_args)]
+            attempts = [base + plan_args, cmd]
+            if self._rpc_hosts and not entry.get("use_rpc"):
+                nd = (entry.get("detail") or {}).get("nodes", {})
+                log.warning("Nœuds %s écartés pour ce modèle : mesurés plus lents (%s tok/s "
+                            "avec, %s sans)", ", ".join(self._rpc_hosts),
+                            nd.get("net_tg"), nd.get("local_tg"))
+            log.info("Placement mesuré (vramancer plan) : %s", " ".join(plan_args)[:160])
 
         # MoE : dernier recours tous experts en RAM (le chaud seul tient toujours en VRAM),
         # au lieu d'un -ngl -1 qui ne rentre pas (mesuré : DeepSeek 81 GiB → OOM).

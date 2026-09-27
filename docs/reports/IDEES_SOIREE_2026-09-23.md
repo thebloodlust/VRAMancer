@@ -142,3 +142,12 @@ réservée de PowerShell). Latence TCP VM → PC : 0.43 ms en médiane.
   (attention compressée, indexeur) mal prises en charge par le RPC de llama.cpp b11112.
 - Règle qui en découle : un nœud réseau reçoit des **couches entières contiguës**, jamais des
   experts épars, et on **mesure** avant de le garder (ce que fait `tune-split --rpc`).
+
+**`vramancer plan` arbitre maintenant les nœuds réseau lui-même** (28/09) : il mesure le
+meilleur placement local, puis une répartition par couches entières AVEC les nœuds qui ont
+rejoint, et ne garde le réseau que s'il fait gagner au moins 3 % ; la décision est mise en
+cache par modèle ET par ensemble de nœuds, et `serve` l'applique (nœud utilisé, ou écarté
+pour ce modèle avec un message). Mesuré, Qwen3.6 Q6_K, 3090 seule en local + 5070 Ti de
+Jérémie sur le réseau : local (experts en RAM) 52.6 tok/s → avec le nœud 104.1 tok/s,
+**gardé, +98 %**, `-ts 0.17/0.83 --rpc 192.168.1.15:50052`. DeepSeek-V4 (81 Go > 60 Go de
+VRAM cumulée) : pas d'essai réseau, placement local conservé.
