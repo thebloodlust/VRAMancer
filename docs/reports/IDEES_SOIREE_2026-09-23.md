@@ -80,6 +80,15 @@ ensuite les nœuds joignables. Testé de bout en bout sur la machine : nœud « 
 ajouté par `curl | sh`, Qwen3.6 Q6_K (29 Go, trop gros pour la 3090) servi sur 3090 + nœud
 RPC à **78 tok/s** ; mauvais jeton → 403. Script PowerShell non testé (pas de Windows ici).
 
+**Nœud qui arrive ou part pendant que `serve` tourne** (27/09) : un fil relit le registre
+toutes les 30 s (`VRM_REPLAN_INTERVAL`) et relance llama-server avec la nouvelle liste
+(llama.cpp n'ajoute pas de machine RPC à chaud) ; les requêtes attendent pendant le
+rechargement, et si la nouvelle répartition ne démarre pas on revient à l'ancienne.
+Vérifié de bout en bout, Qwen3.6 Q4_K_M : serve sur la 3090 seule → nœud 7900 XT ajouté
+par `curl | sh` → rechargement automatique ~30 s plus tard (10.3 Go sur la 7900 XT), l'API
+répond ; nœud coupé → retour à la 3090 seule en 8 s, l'API répond. `VRM_AUTO_REPLAN=0`
+pour désactiver.
+
 ## 5. `vramancer predict` : prédire avant de télécharger — intégré
 
 Lit l'en-tête d'un GGUF distant par requêtes HTTP partielles (**11 Mo lus sur 34 Go**, 4-6 s,
