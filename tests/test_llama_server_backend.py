@@ -133,7 +133,11 @@ def test_compat_flags_adapt_to_binary_help(monkeypatch):
 
     monkeypatch.setattr(mod, "_server_help",
                         lambda b: "-fa, --flash-attn [on|off|auto]\n-lm, --load-mode MODE\n--log-disable")
+    monkeypatch.setattr(mod.platform, "system", lambda: "Linux")   # la CI tourne aussi sur macOS
     assert mod._compat_flags("x") == ["--flash-attn", "on", "--load-mode", "none", "--log-disable"]
+    monkeypatch.setattr(mod.platform, "system", lambda: "Darwin")  # mémoire unifiée : mmap
+    assert mod._compat_flags("x") == ["--flash-attn", "on", "--load-mode", "mmap", "--log-disable"]
+    monkeypatch.setattr(mod.platform, "system", lambda: "Linux")
 
     monkeypatch.setattr(mod, "_server_help", lambda b: "--flash-attn\n--no-mmap\n--log-disable")
     assert mod._compat_flags("x") == ["--flash-attn", "--no-mmap", "--log-disable"]
@@ -456,6 +460,7 @@ def test_model_bigger_than_ram_is_mmapped_not_loaded(monkeypatch):
     import core.llama_server_backend as mod
     monkeypatch.setattr(mod, "_server_help", lambda b: "-lm, --load-mode MODE")
     monkeypatch.setattr(mod, "_spec_flags", lambda h, m: [])
+    monkeypatch.setattr(mod.platform, "system", lambda: "Linux")
     monkeypatch.setattr(mod, "_too_big_for_ram", lambda p: True)
     assert mod._compat_flags("x", "/m.gguf") == ["--load-mode", "mmap"]
     monkeypatch.setattr(mod, "_too_big_for_ram", lambda p: False)
