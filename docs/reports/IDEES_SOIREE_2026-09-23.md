@@ -118,3 +118,27 @@ RAM +8.7 %. Une architecture jamais mesurée reste affichée en borne haute.
   préchargeables depuis RAM/NVMe — exactement l'idée des étages. Mais seulement dans vLLM
   et pour DeepSeek-V4.1 ; rien à tester ici (et 33 Go de disque libre).
 - **WebNPU / WebNN** : non (Chrome seul, expérimental, NPU faits pour petits modèles).
+
+## 7. Vrai nœud distant : le PC Windows de Jérémie (RTX 5070 Ti), 28/09
+
+Ajouté par `irm …/join.ps1 | iex` depuis Windows (build Vulkan, 16 Go vus, 15.4 libres) :
+premier essai réel du script PowerShell, **réussi** (après correction de `$Args`, variable
+réservée de PowerShell). Latence TCP VM → PC : 0.43 ms en médiane.
+
+| Modèle, étages | tg | prefill |
+|---|---:|---:|
+| Qwen3.6 Q6_K (29 Go), 3090 + 5070 Ti distante, 40/60 | **104.8** | 1975 |
+| idem, `tune-split --rpc` à 8K de contexte → 25 % 5070 Ti / 75 % 3090 | **98.1** (+6 % vs prorata) | 1349 |
+| DeepSeek-V4-Flash, 3090 + 7900 XT + RAM (référence) | 11.8 | 38.9 |
+| + experts de 7 couches sur la 5070 Ti distante | 9.0 | 40.0 |
+| + 7 couches ENTIÈRES contiguës sur la 5070 Ti distante | 9.4 | 27.2 |
+
+- **Répartition par couches (Qwen) : le nœud réseau vaut une carte locale** — 104.8 tok/s,
+  comme la paire 3090 + 7900 XT dans la même machine (106), sur un modèle qu'aucune des deux
+  cartes ne tient seule.
+- **DeepSeek-V4 : le nœud distant fait PERDRE du débit**, en experts épars (14 allers-retours
+  par token, ~4.7 ms par couche contre ~1 ms en RAM) comme en couches contiguës. La latence
+  n'explique pas l'écart (≈1 ms) : probablement des opérations propres à DeepSeek-V4
+  (attention compressée, indexeur) mal prises en charge par le RPC de llama.cpp b11112.
+- Règle qui en découle : un nœud réseau reçoit des **couches entières contiguës**, jamais des
+  experts épars, et on **mesure** avant de le garder (ce que fait `tune-split --rpc`).
