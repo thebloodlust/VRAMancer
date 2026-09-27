@@ -27,7 +27,7 @@ class TestMonitoringFiles:
         dashboard_path = os.path.join(
             os.path.dirname(__file__), "..", "monitoring", "grafana_dashboard.json"
         )
-        with open(dashboard_path, "r") as f:
+        with open(dashboard_path, "r", encoding="utf-8") as f:
             dash = json.load(f)
 
         assert dash["uid"] == "vramancer-main"
@@ -40,7 +40,7 @@ class TestMonitoringFiles:
         dashboard_path = os.path.join(
             os.path.dirname(__file__), "..", "monitoring", "grafana_dashboard.json"
         )
-        with open(dashboard_path, "r") as f:
+        with open(dashboard_path, "r", encoding="utf-8") as f:
             dash = json.load(f)
 
         all_exprs = []
@@ -75,7 +75,7 @@ class TestMonitoringFiles:
         dashboard_path = os.path.join(
             os.path.dirname(__file__), "..", "monitoring", "grafana_dashboard.json"
         )
-        with open(dashboard_path, "r") as f:
+        with open(dashboard_path, "r", encoding="utf-8") as f:
             dash = json.load(f)
 
         tpl_list = dash.get("templating", {}).get("list", [])
@@ -88,7 +88,7 @@ class TestMonitoringFiles:
         rules_path = os.path.join(
             os.path.dirname(__file__), "..", "monitoring", "alerting_rules.yml"
         )
-        with open(rules_path, "r") as f:
+        with open(rules_path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f)
 
         assert "groups" in data
@@ -101,7 +101,7 @@ class TestMonitoringFiles:
         rules_path = os.path.join(
             os.path.dirname(__file__), "..", "monitoring", "alerting_rules.yml"
         )
-        with open(rules_path, "r") as f:
+        with open(rules_path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f)
 
         all_alerts = []
@@ -126,7 +126,7 @@ class TestMonitoringFiles:
         rules_path = os.path.join(
             os.path.dirname(__file__), "..", "monitoring", "alerting_rules.yml"
         )
-        with open(rules_path, "r") as f:
+        with open(rules_path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f)
 
         for group in data["groups"]:
@@ -143,7 +143,7 @@ class TestMonitoringFiles:
         prom_path = os.path.join(
             os.path.dirname(__file__), "..", "monitoring", "prometheus.yml"
         )
-        with open(prom_path, "r") as f:
+        with open(prom_path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f)
 
         assert "scrape_configs" in data
@@ -157,7 +157,7 @@ class TestMonitoringFiles:
             os.path.dirname(__file__), "..",
             "monitoring", "grafana_provisioning", "datasources", "prometheus.yml"
         )
-        with open(ds_path, "r") as f:
+        with open(ds_path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f)
 
         ds = data["datasources"][0]
@@ -171,7 +171,7 @@ class TestMonitoringFiles:
             os.path.dirname(__file__), "..",
             "monitoring", "grafana_provisioning", "dashboards", "dashboards.yml"
         )
-        with open(dp_path, "r") as f:
+        with open(dp_path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f)
 
         providers = data["providers"]
@@ -383,7 +383,7 @@ class TestDockerCompose:
         dc_path = os.path.join(
             os.path.dirname(__file__), "..", "docker-compose.yml"
         )
-        with open(dc_path, "r") as f:
+        with open(dc_path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f)
 
         services = data.get("services", {})
@@ -395,7 +395,7 @@ class TestDockerCompose:
         dc_path = os.path.join(
             os.path.dirname(__file__), "..", "docker-compose.yml"
         )
-        with open(dc_path, "r") as f:
+        with open(dc_path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f)
 
         services = data.get("services", {})
@@ -407,7 +407,7 @@ class TestDockerCompose:
         dc_path = os.path.join(
             os.path.dirname(__file__), "..", "docker-compose.yml"
         )
-        with open(dc_path, "r") as f:
+        with open(dc_path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f)
 
         volumes = data.get("volumes", {})

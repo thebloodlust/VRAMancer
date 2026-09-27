@@ -15,7 +15,7 @@ Schema versioning:
 Objectif: fournir un socle simple sans engager une ORM lourde.
 """
 from __future__ import annotations
-import os, json, sqlite3, threading, time
+import contextlib, os, json, sqlite3, threading, time
 from typing import Any, Dict, List
 
 _lock = threading.Lock()
@@ -23,11 +23,22 @@ _DB_PATH = os.environ.get("VRM_SQLITE_PATH")
 
 CURRENT_SCHEMA_VERSION = 2
 
+@contextlib.contextmanager
 def _conn():  # pragma: no cover - I/O simple
+    """Connexion validée (commit/rollback) PUIS fermée.
+
+    `with sqlite3.connect(...) as c` valide mais ne ferme pas : la connexion restait
+    ouverte jusqu'au ramasse-miettes — fuite de descripteur, et fichier verrouillé sous
+    Windows (WinError 32 à la suppression, CI windows-latest).
+    """
     if not _DB_PATH:
         raise RuntimeError("VRM_SQLITE_PATH non défini")
     c = sqlite3.connect(_DB_PATH)
-    return c
+    try:
+        with c:
+            yield c
+    finally:
+        c.close()
 
 
 def _get_schema_version(c) -> int:
