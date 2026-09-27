@@ -333,6 +333,11 @@ def _compat_flags(binary, model_path=None) -> List[str]:
             flags += ["--load-mode", "mmap"]
         log.warning("Modèle plus gros que la RAM disponible : chargement en mmap, les "
                     "poids hors VRAM seront relus depuis le disque (lent, mais sans planter)")
+    elif platform.system() == "Darwin":
+        # Mémoire unifiée : avec mmap, Metal lit les poids directement dans les pages du
+        # fichier (pas de copie) ; « none » doublerait l'empreinte mémoire au chargement.
+        if "--load-mode" in h:
+            flags += ["--load-mode", "mmap"]
     elif "--load-mode" in h:
         flags += ["--load-mode", "none"]
     elif "--no-mmap" in h or not h:
@@ -401,6 +406,12 @@ def ram_available_gib() -> Optional[float]:
                 break
     except (OSError, ValueError):
         pass
+    if avail is None:                          # macOS, Windows : pas de /proc/meminfo
+        try:
+            import psutil
+            avail = psutil.virtual_memory().available / 2 ** 30
+        except Exception:
+            pass
     room = _cgroup_headroom_bytes()
     if room is not None:
         room_gib = max(0.0, room / 2 ** 30)

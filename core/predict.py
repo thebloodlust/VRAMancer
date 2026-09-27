@@ -31,6 +31,14 @@ GPU_PARAMS: Dict[str, Tuple[float, float]] = {
     "RTX 3090": (925.0, 122e-6),
     "7900 XT": (928.0, 248e-6),
 }
+# Apple Silicon : bande passante NOMINALE de la mémoire unifiée × 0.7 (llama.cpp Metal en
+# tire typiquement 60-75 %), coût par couche supposé — NON MESURÉ, à calibrer sur un Mac.
+_APPLE_NOMINAL = {"M1 Ultra": 800, "M1 Max": 400, "M1 Pro": 200, "M1": 68,
+                  "M2 Ultra": 800, "M2 Max": 400, "M2 Pro": 200, "M2": 100,
+                  "M3 Ultra": 819, "M3 Max": 400, "M3 Pro": 150, "M3": 100,
+                  "M4 Max": 546, "M4 Pro": 273, "M4": 120, "M5": 153}
+APPLE_PARAMS: Dict[str, Tuple[float, float]] = {
+    f"Apple {k}": (v * 1e9 / GIB * 0.7, 150e-6) for k, v in _APPLE_NOMINAL.items()}
 UNKNOWN_GPU = (500.0, 200e-6)          # prudent, faute de mieux : à calibrer
 RAM_GIBS = 58.0                        # EPYC 7402 AVX2, 16 vCPU, experts en RAM
 DISK_GIBS = 1.8 * 1e9 / GIB            # lectures aléatoires de 4 Mo (experts dispersés)
@@ -199,12 +207,16 @@ def machine_tiers(devices: List[dict], ram_avail_gib: Optional[float] = None) ->
     for d in devices:
         if d.get("rpc"):
             continue
-        bw, c = next((v for k, v in GPU_PARAMS.items() if k in d["name"]), UNKNOWN_GPU)
+        # clés les plus longues d'abord : « Apple M2 Max » avant « Apple M2 »
+        known = sorted({**GPU_PARAMS, **APPLE_PARAMS}.items(), key=lambda kv: -len(kv[0]))
+        bw, c = next((v for k, v in known if k in d["name"]), UNKNOWN_GPU)
         free = (d.get("free_mib") or d["total_mib"]) / 1024
         tiers.append(Tier(d["name"], max(0.0, free - MARGIN_GIB), bw, c, True))
     if ram_avail_gib is None:
         ram_avail_gib = _mem_available_gib()
-    tiers.append(Tier("RAM", max(0.0, ram_avail_gib - 4.0), RAM_GIBS))
+    # Mémoire unifiée (Apple) : ce que le GPU utilise est pris sur la même RAM.
+    unified = sum(t.capacity for t in tiers if t.name.startswith("Apple"))
+    tiers.append(Tier("RAM", max(0.0, ram_avail_gib - 4.0 - unified), RAM_GIBS))
     tiers.append(Tier("disque (mmap)", float("inf"), DISK_GIBS))
     return tiers
 

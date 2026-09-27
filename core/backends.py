@@ -478,8 +478,28 @@ def select_backend(model_name: str, cache_dir: str = None, backend: str = "auto"
     if backend == "huggingface":
         return HuggingFaceBackend(model_name, cache_dir=cache_dir)
 
+    if backend == "mlx":
+        from core.backends_mlx import MlxServerAdapter
+        return MlxServerAdapter(model_name, cache_dir=cache_dir)
+
     # ── Auto-detection ────────────────────────────────────────────────
     if backend == "auto":
+        # 0. GGUF sans le binding llama-cpp-python (cas courant sur Mac) : le sous-processus
+        #    llama-server télécharge le build adapté (Metal, CUDA, Vulkan…) au lieu de
+        #    retomber sur HuggingFace, bien plus lent.
+        if _is_gguf_model(model_name) and not _llamacpp_available():
+            logger.info("GGUF sans llama-cpp-python : sous-processus llama-server")
+            from core.backends_llama_server import LlamaServerAdapter
+            return LlamaServerAdapter(model_name, cache_dir=cache_dir, num_gpus=num_gpus)
+        # 0 bis. Apple Silicon + modèle non-GGUF + mlx_lm installé → MLX, le moteur natif.
+        try:
+            from core.backends_mlx import is_apple_silicon, mlx_available
+            if is_apple_silicon() and mlx_available() and not _is_gguf_model(model_name):
+                logger.info("Apple Silicon : backend MLX (mlx_lm.server) pour %s", model_name)
+                from core.backends_mlx import MlxServerAdapter
+                return MlxServerAdapter(model_name, cache_dir=cache_dir)
+        except Exception:
+            logger.debug("détection MLX impossible", exc_info=True)
         # 1. GGUF models → llama.cpp (17x faster than HF BF16)
         if _is_gguf_model(model_name) and _llamacpp_available():
             # Le binding in-process est compilé pour UN accélérateur. S'il ne sait
