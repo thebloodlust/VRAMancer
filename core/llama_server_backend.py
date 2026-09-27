@@ -343,16 +343,77 @@ def _compat_flags(binary, model_path=None) -> List[str]:
     return flags
 
 
-def _too_big_for_ram(model_path, reserve_gib: float = 8.0) -> bool:
-    """Le modèle dépasse-t-il la RAM disponible (MemAvailable − réserve) ?"""
+def _cgroup_headroom_bytes(root: str = "/sys/fs/cgroup",
+                           self_cgroup: str = "/proc/self/cgroup") -> Optional[int]:
+    """Marge mémoire laissée par les limites cgroup (conteneur, service systemd…).
+
+    MemAvailable ignore ces limites : dans un conteneur à 16 Go sur un hôte à 172 Go, il
+    annonce ~160 Go et le noyau tue le processus bien avant. On prend la plus petite marge
+    (limite − usage) sur tous les cgroups parents ; le cache de fichiers inactif, que le
+    noyau récupère, n'est pas compté comme usage. None = aucune limite.
+    """
+    def rd(path):
+        try:
+            with open(path) as f:
+                return f.read().strip()
+        except OSError:
+            return None
+
+    def inactive_file(d, key):
+        for line in (rd(os.path.join(d, "memory.stat")) or "").splitlines():
+            k, _, v = line.partition(" ")
+            if k == key and v.isdigit():
+                return int(v)
+        return 0
+
+    best = None
+    try:
+        lines = open(self_cgroup).read().splitlines()
+    except OSError:
+        return None
+    for line in lines:
+        hid, ctrls, path = line.split(":", 2)
+        if hid == "0" and ctrls == "":                       # cgroup v2
+            parts = [x for x in path.split("/") if x]
+            for i in range(len(parts), -1, -1):
+                d = os.path.join(root, *parts[:i])
+                lim, cur = rd(os.path.join(d, "memory.max")), rd(os.path.join(d, "memory.current"))
+                if lim and lim != "max" and cur and lim.isdigit() and cur.isdigit():
+                    room = int(lim) - (int(cur) - inactive_file(d, "inactive_file"))
+                    best = room if best is None else min(best, room)
+        elif "memory" in ctrls.split(","):                    # cgroup v1
+            d = os.path.join(root, "memory", path.lstrip("/"))
+            lim = rd(os.path.join(d, "memory.limit_in_bytes"))
+            cur = rd(os.path.join(d, "memory.usage_in_bytes"))
+            if lim and cur and lim.isdigit() and cur.isdigit() and int(lim) < 2 ** 60:
+                room = int(lim) - (int(cur) - inactive_file(d, "total_inactive_file"))
+                best = room if best is None else min(best, room)
+    return best
+
+
+def ram_available_gib() -> Optional[float]:
+    """RAM réellement utilisable : MemAvailable, bornée par les limites cgroup."""
+    avail = None
     try:
         for line in open("/proc/meminfo"):
             if line.startswith("MemAvailable:"):
                 avail = int(line.split()[1]) / 2 ** 20
-                return _model_size_gib(model_path) > avail - reserve_gib
+                break
     except (OSError, ValueError):
         pass
-    return False
+    room = _cgroup_headroom_bytes()
+    if room is not None:
+        room_gib = max(0.0, room / 2 ** 30)
+        avail = room_gib if avail is None else min(avail, room_gib)
+    return avail
+
+
+def _too_big_for_ram(model_path, reserve_gib: float = 8.0) -> bool:
+    """Le modèle dépasse-t-il la RAM utilisable (limites de conteneur comprises) ?"""
+    avail = ram_available_gib()
+    if avail is None:
+        return False
+    return _model_size_gib(model_path) > avail - reserve_gib
 
 
 def _model_size_gib(path) -> float:

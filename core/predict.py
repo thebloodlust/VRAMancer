@@ -38,7 +38,15 @@ MARGIN_GIB = 1.5                       # tampons de calcul + cache KV court, par
 # Architectures sur lesquelles les coûts par couche ont été calibrés et vérifiés
 # (−9 à +16 % sur 5 cas). Ailleurs, l'attention peut coûter bien plus : DeepSeek-V4
 # (attention compressée + indexeur) est surestimé ×2.4 à ×2.8 → borne haute seulement.
-CALIBRATED_ARCHS = {"llama", "qwen2", "qwen3", "qwen3moe", "qwen35", "qwen35moe"}
+CALIBRATED_ARCHS = {"llama", "qwen2", "qwen3", "qwen3moe", "qwen35", "qwen35moe", "deepseek4"}
+# Corrections par architecture, calibrées sur 2 mesures et vérifiées sur 3 autres.
+# DeepSeek-V4-Flash IQ2_XS (2026-09-23, 3090 + RAM) : 0.94 ms gagnée par couche d'experts
+# passée de la RAM au GPU → RAM effective 41.5 Gio/s (quant IQ2, plus coûteux à décoder
+# que les K-quants) ; ordonnée à l'origine → ~1.04 ms par couche, ×8.5 le coût Qwen
+# (attention compressée + indexeur + synchronisation CPU/GPU à chaque couche).
+ARCH_PARAMS: Dict[str, Dict[str, float]] = {
+    "deepseek4": {"layer_mult": 8.5, "ram_gibs": 41.5},
+}
 
 
 # ── Lecture distante ────────────────────────────────────────────────────────
@@ -202,17 +210,19 @@ def machine_tiers(devices: List[dict], ram_avail_gib: Optional[float] = None) ->
 
 
 def _mem_available_gib() -> float:
-    try:
-        for line in open("/proc/meminfo"):
-            if line.startswith("MemAvailable:"):
-                return int(line.split()[1]) / 2 ** 20
-    except OSError:
-        pass
-    return 8.0
+    """RAM utilisable, limites de conteneur (cgroup) comprises ; 8 Gio si inconnue."""
+    from core.llama_server_backend import ram_available_gib
+    avail = ram_available_gib()
+    return 8.0 if avail is None else avail
 
 
 def predict(p: Profile, tiers: List[Tier]) -> Prediction:
     """Remplit les étages du plus rapide au plus lent (le chaud d'abord), prédit tok/s."""
+    from dataclasses import replace
+    ap = ARCH_PARAMS.get(p.arch)
+    if ap:
+        tiers = [replace(t, layer_cost=t.layer_cost * ap["layer_mult"]) if t.is_gpu else
+                 replace(t, gibs=ap["ram_gibs"]) if t.name == "RAM" else t for t in tiers]
     gpus = [t for t in tiers if t.is_gpu]
     L = max(1, p.n_layers)
     placement: List[Tuple[str, float]] = []

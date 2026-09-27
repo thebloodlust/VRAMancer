@@ -33,7 +33,10 @@ def test_moe_spills_experts_after_hot_part():
     names = [n for n, _ in pred.placement]
     assert names[0].endswith("3090") and "RAM" in names
     assert sum(g for _, g in pred.placement) == pytest.approx(81, abs=0.5)
-    assert "non calibrée" in pr.fmt_prediction(p, pred)     # DeepSeek-V4 : borne haute
+    # recalibré sur DeepSeek-V4 : 3090 + 7900 XT + RAM mesuré 11.8 tok/s (+8.7 % prédit)
+    assert 11 < pred.tok_s < 14
+    p.arch = "mystere"                                      # architecture jamais mesurée
+    assert "non calibrée" in pr.fmt_prediction(p, pr.predict(p, pr.machine_tiers(DEVS, 160)))
 
 
 def test_bigger_than_ram_goes_to_disk_instead_of_failing():

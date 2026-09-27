@@ -485,3 +485,33 @@ def test_therock_family_rdna3_rdna4_only():
     assert therock_family(110002) == "gfx110X-all"
     assert therock_family(120001) == "gfx120X-all"     # RX 9070
     assert therock_family(90010) is None                # MI200 : autre famille
+
+
+def test_cgroup_v2_limit_from_any_ancestor(tmp_path):
+    """Limite posée sur un parent (ex. conteneur), cache inactif non compté comme usage."""
+    from core.llama_server_backend import _cgroup_headroom_bytes
+    G = 2 ** 30
+    parent, leaf = tmp_path / "docker", tmp_path / "docker" / "app"
+    leaf.mkdir(parents=True)
+    (parent / "memory.max").write_text(str(16 * G))
+    (parent / "memory.current").write_text(str(10 * G))
+    (parent / "memory.stat").write_text(f"anon {6 * G}\ninactive_file {4 * G}\n")
+    (leaf / "memory.max").write_text("max")
+    (leaf / "memory.current").write_text(str(10 * G))
+    cg = tmp_path / "cgroup"
+    cg.write_text("0::/docker/app\n")
+    assert _cgroup_headroom_bytes(str(tmp_path), str(cg)) == 10 * G   # 16 − (10 − 4)
+
+
+def test_cgroup_v1_and_no_limit(tmp_path):
+    from core.llama_server_backend import _cgroup_headroom_bytes
+    G = 2 ** 30
+    d = tmp_path / "memory" / "svc"
+    d.mkdir(parents=True)
+    (d / "memory.limit_in_bytes").write_text(str(8 * G))
+    (d / "memory.usage_in_bytes").write_text(str(3 * G))
+    cg = tmp_path / "cgroup"
+    cg.write_text("5:memory:/svc\n")
+    assert _cgroup_headroom_bytes(str(tmp_path), str(cg)) == 5 * G
+    (d / "memory.limit_in_bytes").write_text(str(2 ** 63 - 4096))    # « pas de limite » en v1
+    assert _cgroup_headroom_bytes(str(tmp_path), str(cg)) is None

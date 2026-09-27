@@ -94,10 +94,10 @@ if (-not (Test-Path $Dir)) {{
 }}
 $Bin = Get-ChildItem $Dir -Recurse -Include ggml-rpc-server.exe,rpc-server.exe,llama-rpc-server.exe | Select-Object -First 1
 if (-not $Bin) {{ throw "rpc-server introuvable dans l'archive" }}
-$Args = @("-H", $Bind, "-p", "$Port", "-c")
-if ($env:VRM_RPC_DEVICE) {{ $Args += @("-d", $env:VRM_RPC_DEVICE) }}
+$RpcArgs = @("-H", $Bind, "-p", "$Port", "-c")
+if ($env:VRM_RPC_DEVICE) {{ $RpcArgs += @("-d", $env:VRM_RPC_DEVICE) }}
 Write-Host "Lancement de rpc-server sur ${{Bind}}:$Port (réseau local / tunnel uniquement : pas d'authentification)"
-$P = Start-Process -FilePath $Bin.FullName -ArgumentList $Args -WorkingDirectory $Bin.DirectoryName -WindowStyle Hidden -PassThru
+$P = Start-Process -FilePath $Bin.FullName -ArgumentList $RpcArgs -WorkingDirectory $Bin.DirectoryName -WindowStyle Hidden -PassThru
 Start-Sleep 3
 if ($P.HasExited) {{ throw "rpc-server n'a pas démarré" }}
 $Body = @{{ token = "{token}"; port = [int]$Port; os = "Windows-$env:PROCESSOR_ARCHITECTURE"; asset = $A }} | ConvertTo-Json

@@ -97,8 +97,11 @@ PLANIFICATEUR_COUT).
 | DeepSeek-V4-Flash, 3090 + RAM | 27.6 | 11.7 | **+136 %** |
 | DeepSeek-V4-Flash, 3090 + 7900 XT + RAM | 33.4 | 11.8 | **+183 %** |
 
-Bon sur les architectures calibrées ; DeepSeek-V4 (attention compressée + indexeur) est
-surestimé ×2.4-2.8 → la commande l'affiche comme borne haute, « architecture non calibrée ».
+Bon sur les architectures calibrées ; DeepSeek-V4 (attention compressée + indexeur) était
+surestimé ×2.4-2.8. **Recalibré le 27/09** (paramètres par architecture : coût par couche
+×8.5, RAM effective 41.5 Gio/s pour l'IQ2), calé sur 2 mesures (0 et 8 couches d'experts
+sur la 3090), vérifié sur 3 autres : 4 couches −0.8 %, 9 couches +0.8 %, 3090 + 7900 XT +
+RAM +8.7 %. Une architecture jamais mesurée reste affichée en borne haute.
 
 ## 6. Non fait / pas pour nous maintenant
 
